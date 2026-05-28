@@ -1,0 +1,9 @@
+# Development overrides
+# Adds port mappings and debug-friendly settings
+
+services:
+  postgres:
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_LOG_STATEMENT: all

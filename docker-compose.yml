@@ -1,0 +1,28 @@
+# Tadka - Docker Compose
+# Phase 0: PostgreSQL only
+# Day 5: Add PostgreSQL read replica
+# Day 6: Add Redis
+# Day 8: Add Kafka + Zookeeper (first service extraction)
+# Day 13: Add Prometheus + Grafana
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: tadka-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-tadka}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  pgdata:
