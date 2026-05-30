@@ -86,6 +86,33 @@ tadka/
 └── k6/                      # Load test scripts (from Week 7)
 ```
 
+## Releases
+
+Each release is a clean, runnable snapshot of Tadka at the end of that week. You can download a ZIP from GitHub Releases or check out the tag locally.
+
+```bash
+# See all release tags
+git fetch --tags
+git tag -l
+
+# Check out a specific week's state (read-only)
+git checkout v1.0-monolith-crud
+
+# Return to your own work
+git checkout main
+```
+
+| Tag | After | What's in it |
+|-----|-------|-------------|
+| `v0.0-scaffold` | Phase 0 | Empty scaffold, `/health` endpoint, domain folder structure |
+| `v1.0-monolith-crud` | Week 2 | Restaurant + menu + order APIs, ADRs, schema-per-domain |
+| `v2.0-db-and-cache` | Week 3 | PostgreSQL indexes, EXPLAIN ANALYZE, Redis Cache-Aside |
+| `v3.0-modular-monolith` | Week 4 | MediatR domain events, CQRS, Payment service extracted, Kafka introduced |
+| `v4.0-distributed` | Week 5 | Delivery service extracted, YARP gateway, JWT across services, Saga pattern |
+| `v5.0-production-deploy` | Week 6 | Restaurant extracted, Docker multi-stage, ECS Fargate, Terraform, CI/CD |
+| `v6.0-observability` | Week 7 | OpenTelemetry, Grafana dashboards, Tempo tracing, Polly resilience, chaos |
+| `v7.0-final` | Week 8 | k6 load tests, cost optimization, architecture documentation |
+
 ## Architecture Decision Records
 
 We document every significant technical decision as an ADR in `docs/adrs/`. This isn't just for the project. It's a habit every architect should build.
