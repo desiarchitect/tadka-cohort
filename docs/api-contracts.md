@@ -117,6 +117,23 @@ Create a new restaurant.
 
 ---
 
+### PATCH /api/v1/restaurants/{restaurantId}
+
+Update restaurant details (name, address, prep time) or **deactivate** it.
+
+> **Why PATCH — and why no PUT or DELETE?** The update is *partial* (you change the prep time, not re-send the whole resource) → **PATCH**, not PUT. There is **no `DELETE`**: a restaurant with order history is never hard-deleted — you **deactivate** it (`isActive: false`) so past orders and audit trails survive. Deactivation *is* our delete.
+
+**Request Body (any subset of fields):**
+
+```json
+{ "avgPrepTimeMinutes": 30, "isActive": false }
+```
+
+**Response: 204 No Content**
+**Response: 404 Not Found** — Restaurant not found
+
+---
+
 ### GET /api/v1/restaurants/{restaurantId}/menu
 
 Get menu items for a restaurant with optional filters.
@@ -151,9 +168,52 @@ Get menu items for a restaurant with optional filters.
 
 ---
 
+### POST /api/v1/restaurants/{restaurantId}/menu
+
+Add a menu item to a restaurant (the restaurant-partner flow — they manage their own menu).
+
+> **Why POST here (nested)?** A menu item doesn't exist independently of its restaurant — it's created *within* the restaurant resource, so the create lives under `/restaurants/{id}/menu`. Creating a resource → **POST**.
+
+**Request Body:**
+
+```json
+{
+  "name": "Chicken 65",
+  "description": "Spicy Hyderabadi fried chicken",
+  "price": { "amount": 229.00, "currency": "INR" },
+  "category": "Starters",
+  "isVeg": false
+}
+```
+
+**Response: 201 Created** — the created menu item
+**Response: 404 Not Found** — Restaurant not found
+**Response: 400 Bad Request** — Validation error
+
+---
+
+### PATCH /api/v1/restaurants/{restaurantId}/menu/{menuItemId}
+
+Edit a menu item — **change its price**, description, category, veg flag, or availability.
+
+> **Why this exists (the gap the contract review caught):** the product brief says restaurants manage *prices*. A restaurant raising biryani from ₹280→₹320 needs this. The edit is partial → **PATCH** (not PUT). To "remove" an item we set `isAvailable: false` (soft-hide) — no `DELETE`, because past orders snapshot the item and we keep the catalog for audit.
+
+**Request Body (any subset):**
+
+```json
+{ "price": { "amount": 320.00, "currency": "INR" }, "isAvailable": false }
+```
+
+**Response: 204 No Content**
+**Response: 404 Not Found** — Restaurant or menu item not found
+
+---
+
 ### PATCH /api/v1/restaurants/{restaurantId}/menu/{menuItemId}/availability
 
 Toggle menu item availability (e.g., out of stock during dinner rush).
+
+> **Why a dedicated sub-route when the PATCH above can also set `isAvailable`?** This is the single most frequent kitchen action during dinner rush — a one-tap "86 this dish." A purpose-built, idempotent endpoint keeps the hot path simple and auditable, and lets us rate-limit/cache it independently later. The general menu PATCH covers everything else.
 
 **Request Body:**
 

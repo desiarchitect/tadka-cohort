@@ -56,9 +56,10 @@ Standards and conventions for all Tadka API endpoints. Follow these when buildin
 
 **POST is NOT idempotent.** Calling `POST /api/orders` twice creates two orders. Design accordingly.
 
-**PATCH vs PUT:**
-- PATCH updates specific fields (we use this for status updates, availability toggles)
-- PUT replaces the entire resource (not used in Day 3)
+**PATCH vs PUT vs DELETE in Tadka — and why (we always state the why):**
+- **PATCH** — every update we have is *partial* (order status, menu price/availability, restaurant details). We never make the client re-send the whole resource → PATCH, not PUT.
+- **PUT** — not used. There is no "full replace" operation in v1; adding it speculatively would violate "earned, not assumed."
+- **DELETE** — **not used at all.** A system with orders, money, and history never hard-deletes: a restaurant is **deactivated** (`isActive=false`), a menu item is made **unavailable** (soft-hide), an order is **cancelled** (a state transition). Hard delete destroys the audit trail and orphans historical references. **Removal is always a state change, never a `DELETE`.**
 
 ---
 
