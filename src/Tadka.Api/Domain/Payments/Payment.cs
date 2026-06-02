@@ -2,16 +2,6 @@ using Tadka.Api.Domain.ValueObjects;
 
 namespace Tadka.Api.Domain.Payments;
 
-public enum PaymentStatus
-{
-    Pending,
-    Completed,
-    Failed,
-    Refunded
-}
-
-// Aggregate Root. Tracks a single financial transaction against one order
-// (by OrderId — no cross-domain FK).
 public class Payment
 {
     public Guid Id { get; set; }
@@ -22,4 +12,12 @@ public class Payment
     public string? GatewayReference { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
+}
+
+public enum PaymentStatus
+{
+    Pending,
+    Completed,
+    Failed,
+    Refunded
 }

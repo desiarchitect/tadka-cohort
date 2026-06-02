@@ -61,3 +61,5 @@ terraform/*.tfplan
 
 # k6
 k6/results/
+
+*.log

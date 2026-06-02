@@ -2,7 +2,6 @@ using Tadka.Api.Domain.ValueObjects;
 
 namespace Tadka.Api.Domain.Restaurants;
 
-// Entity inside the Restaurant aggregate.
 public class MenuItem
 {
     public Guid Id { get; set; }

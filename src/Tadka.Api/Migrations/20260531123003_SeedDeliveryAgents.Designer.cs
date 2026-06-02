@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Tadka.Api.Data;
@@ -11,9 +12,11 @@ using Tadka.Api.Data;
 namespace Tadka.Api.Migrations
 {
     [DbContext(typeof(TadkaDbContext))]
-    partial class TadkaDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260531123003_SeedDeliveryAgents")]
+    partial class SeedDeliveryAgents
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -526,18 +529,6 @@ namespace Tadka.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("users", "identity");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = new Guid("c1b2c3d4-0001-4000-8000-000000000001"),
-                            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Email = "priya@tadka.test",
-                            Name = "Priya Sharma",
-                            PasswordHash = "seed-not-a-real-hash",
-                            Phone = "+919876500001",
-                            Role = "Customer"
-                        });
                 });
 
             modelBuilder.Entity("Tadka.Api.Domain.Users.UserAddress", b =>

@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using Tadka.Api.Data;
@@ -11,9 +12,11 @@ using Tadka.Api.Data;
 namespace Tadka.Api.Migrations
 {
     [DbContext(typeof(TadkaDbContext))]
-    partial class TadkaDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260530124618_SeedRestaurantsAndMenus")]
+    partial class SeedRestaurantsAndMenus
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -50,22 +53,6 @@ namespace Tadka.Api.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("agents", "delivery");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = new Guid("d1b2c3d4-0001-4000-8000-000000000001"),
-                            Name = "Ramesh Kumar",
-                            Phone = "+919876543210",
-                            Status = "Available"
-                        },
-                        new
-                        {
-                            Id = new Guid("d1b2c3d4-0002-4000-8000-000000000002"),
-                            Name = "Suresh Patel",
-                            Phone = "+919876543211",
-                            Status = "Available"
-                        });
                 });
 
             modelBuilder.Entity("Tadka.Api.Domain.Delivery.DeliveryAssignment", b =>
@@ -526,18 +513,6 @@ namespace Tadka.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("users", "identity");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = new Guid("c1b2c3d4-0001-4000-8000-000000000001"),
-                            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Email = "priya@tadka.test",
-                            Name = "Priya Sharma",
-                            PasswordHash = "seed-not-a-real-hash",
-                            Phone = "+919876500001",
-                            Role = "Customer"
-                        });
                 });
 
             modelBuilder.Entity("Tadka.Api.Domain.Users.UserAddress", b =>
@@ -588,20 +563,6 @@ namespace Tadka.Api.Migrations
 
                             b1.WithOwner()
                                 .HasForeignKey("DeliveryAgentId");
-
-                            b1.HasData(
-                                new
-                                {
-                                    DeliveryAgentId = new Guid("d1b2c3d4-0001-4000-8000-000000000001"),
-                                    Latitude = 12.9352,
-                                    Longitude = 77.624499999999998
-                                },
-                                new
-                                {
-                                    DeliveryAgentId = new Guid("d1b2c3d4-0002-4000-8000-000000000002"),
-                                    Latitude = 12.978400000000001,
-                                    Longitude = 77.640799999999999
-                                });
                         });
 
                     b.Navigation("CurrentLocation");

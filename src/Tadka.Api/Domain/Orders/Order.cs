@@ -1,23 +1,50 @@
 using Tadka.Api.Domain.ValueObjects;
+using Tadka.Api.Domain.Common;
 
 namespace Tadka.Api.Domain.Orders;
 
-// Aggregate Root. An Order is a consistency boundary: its items, total, and
-// delivery address are always valid together. You never create an OrderItem
-// outside of an Order.
 public class Order
 {
     public Guid Id { get; set; }
-
-    // Cross-domain references are by ID only — no FK to identity.users or
-    // restaurant.restaurants (see ADR-008). Names are snapshotted at order time.
     public Guid CustomerId { get; set; }
     public Guid RestaurantId { get; set; }
-
     public OrderStatus Status { get; set; }
     public List<OrderItem> Items { get; set; } = [];
     public Money TotalAmount { get; set; } = null!;
     public Address DeliveryAddress { get; set; } = null!;
     public DateTime CreatedAt { get; set; }
+    public DateTime? ConfirmedAt { get; set; }
     public DateTime? DeliveredAt { get; set; }
+    public DateTime? CancelledAt { get; set; }
+    public string? CancellationReason { get; set; }
+    
+    // DDD: Encapsulate state transitions in the aggregate root
+    public Result Transition(OrderStatus nextStatus)
+    {
+        if (!OrderStateMachine.CanTransition(Status, nextStatus))
+        {
+            var allowed = OrderStateMachine.GetAllowedTransitions(Status);
+            return Result.Failure($"Cannot transition from '{Status}' to '{nextStatus}'. Allowed transitions: {string.Join(", ", allowed)}");
+        }
+
+        Status = nextStatus;
+
+        if (nextStatus == OrderStatus.Confirmed)
+            ConfirmedAt = DateTime.UtcNow;
+        else if (nextStatus == OrderStatus.Delivered)
+            DeliveredAt = DateTime.UtcNow;
+
+        return Result.Success();
+    }
+
+    public Result Cancel(string reason)
+    {
+        var result = Transition(OrderStatus.Cancelled);
+        if (result.IsFailure)
+            return result;
+
+        CancelledAt = DateTime.UtcNow;
+        CancellationReason = reason;
+        return Result.Success();
+    }
 }
