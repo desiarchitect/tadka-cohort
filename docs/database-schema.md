@@ -1,8 +1,10 @@
 # Tadka Database Schema
 
-One PostgreSQL database, five schemas. Each schema maps to a domain boundary.
+One PostgreSQL database, five schemas. Each schema maps to a domain boundary. When we extract services later, each service takes its schema: schema → separate database → separate service.
 
-When we extract services later, each service takes its schema. The migration path: schema → separate database → separate service.
+> **This doc follows the EF model** (`Data/Configurations/*`), regenerated from the live database. If it disagrees with the code, the code wins — fix the doc.
+>
+> **Naming note:** column casing is mixed — scalar properties keep EF's PascalCase (`Id`, `Status`, `CreatedAt`), while **value objects mapped via `OwnsOne`** use explicit snake_case (`total_amount`, `delivery_address_*`). A known minor inconsistency; the boundaries and types are what matter for teaching.
 
 ---
 
@@ -12,9 +14,9 @@ When we extract services later, each service takes its schema. The migration pat
 |--------|--------|---------|
 | `ordering` | orders, order_items | Order lifecycle |
 | `restaurant` | restaurants, menu_items | Restaurant catalog and menus |
-| `delivery` | delivery_agents, delivery_assignments | Delivery agent management |
+| `delivery` | agents, assignments | Delivery agent management |
 | `identity` | users, user_addresses | User accounts and saved addresses |
-| `payment` | payments | Payment processing |
+| `payment` | payments | Payment records (no processing yet — Day 7) |
 
 **Total: 9 tables across 5 schemas.**
 
@@ -23,199 +25,158 @@ When we extract services later, each service takes its schema. The migration pat
 ## Schema: ordering
 
 ### orders
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| customer_id | UUID | NOT NULL | No FK to identity.users (cross-schema) |
-| customer_name | VARCHAR | nullable | Snapshot at order time |
-| customer_phone | VARCHAR | nullable | Snapshot at order time |
-| restaurant_id | UUID | NOT NULL | No FK to restaurant.restaurants (cross-schema) |
-| restaurant_name | VARCHAR | nullable | Snapshot at order time |
-| status | VARCHAR | NOT NULL | Created, Confirmed, Preparing, ReadyForPickup, PickedUp, Delivered, Cancelled, Refunded |
-| total_amount_amount | DECIMAL(10,2) | NOT NULL | Money value object (OwnsOne) |
-| total_amount_currency | VARCHAR | NOT NULL, default 'INR' | |
-| delivery_address_line1 | VARCHAR | | Address value object (OwnsOne) |
-| delivery_address_line2 | VARCHAR | | |
-| delivery_address_city | VARCHAR | | |
-| delivery_address_pincode | VARCHAR | | |
-| delivery_address_latitude | DOUBLE | | |
-| delivery_address_longitude | DOUBLE | | |
-| created_at | TIMESTAMPTZ | NOT NULL | |
-| confirmed_at | TIMESTAMPTZ | nullable | Set when status → Confirmed |
-| delivered_at | TIMESTAMPTZ | nullable | Set when status → Delivered |
-| cancelled_at | TIMESTAMPTZ | nullable | Set when status → Cancelled |
-| cancellation_reason | VARCHAR | nullable | |
-
-### order_status_history
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| order_id | UUID | FK → orders(id), CASCADE | Within-schema FK |
-| from_status | VARCHAR | nullable | |
-| to_status | VARCHAR | NOT NULL | |
-| actor | VARCHAR | NOT NULL | System, Customer, Restaurant, DeliveryAgent |
-| actor_id | UUID | nullable | |
-| notes | VARCHAR | nullable | |
-| created_at | TIMESTAMPTZ | NOT NULL | |
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | `gen_random_uuid()` default |
+| CustomerId | uuid | No FK to `identity.users` (cross-schema) |
+| RestaurantId | uuid | No FK to `restaurant.restaurants` (cross-schema) |
+| Status | varchar(20) | Created, Confirmed, Preparing, ReadyForPickup, PickedUp, Delivered, Cancelled, Refunded |
+| total_amount | numeric(10,2) | Money value object (`OwnsOne`) |
+| currency | varchar(3) | default `INR` |
+| delivery_address_line1/line2/city/pincode | varchar | Address value object (`OwnsOne`) |
+| delivery_latitude / delivery_longitude | double | |
+| CreatedAt | timestamptz | |
+| ConfirmedAt / DeliveredAt / CancelledAt | timestamptz nullable | set on transition |
+| CancellationReason | varchar nullable | |
 
 ### order_items
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| order_id | UUID | FK → orders(id), CASCADE | Within-schema FK is fine |
-| menu_item_id | UUID | NOT NULL | No FK to restaurant.menu_items |
-| name | VARCHAR | NOT NULL | Denormalized: snapshot at order time |
-| quantity | INT | NOT NULL | |
-| unit_price_amount | DECIMAL(10,2) | NOT NULL | Snapshot at order time |
-| unit_price_currency | VARCHAR | NOT NULL, default 'INR' | |
-| special_instructions | VARCHAR | nullable | |
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | |
+| OrderId | uuid | FK → `ordering.orders(Id)`, CASCADE (within-schema FK is fine) |
+| MenuItemId | uuid | No FK to `restaurant.menu_items` |
+| Name | varchar | **Snapshot** at order time |
+| Quantity | int | |
+| unit_price | numeric(10,2) | **Snapshot** Money (`OwnsOne`) |
+| currency | varchar(3) | |
+| SpecialInstructions | varchar nullable | |
 
 ---
 
 ## Schema: restaurant
 
 ### restaurants
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| name | VARCHAR | NOT NULL | |
-| address_line1 | VARCHAR | | Address value object (OwnsOne) |
-| address_line2 | VARCHAR | | |
-| address_city | VARCHAR | | |
-| address_pincode | VARCHAR | | |
-| address_latitude | DOUBLE | | |
-| address_longitude | DOUBLE | | |
-| is_active | BOOLEAN | NOT NULL | |
-| avg_prep_time_minutes | INT | NOT NULL, default 30 | |
-| created_at | TIMESTAMPTZ | NOT NULL | |
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | |
+| Name | varchar | |
+| address_line1/line2/city/pincode | varchar | Address value object (`OwnsOne`) |
+| latitude / longitude | double | |
+| IsActive | boolean | deactivate = our "delete" (no hard DELETE) |
+| AvgPrepTimeMinutes | int | default 30 |
+| CreatedAt | timestamptz | |
 
 ### menu_items
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| restaurant_id | UUID | FK → restaurants(id), CASCADE | Within-schema FK |
-| name | VARCHAR | NOT NULL | |
-| description | VARCHAR | nullable | |
-| price_amount | DECIMAL(10,2) | NOT NULL | Money value object (OwnsOne) |
-| price_currency | VARCHAR | NOT NULL, default 'INR' | |
-| category | VARCHAR | NOT NULL | Main Course, Starters, Rice, etc. |
-| is_available | BOOLEAN | NOT NULL | |
-| is_veg | BOOLEAN | NOT NULL | |
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | |
+| RestaurantId | uuid | FK → `restaurant.restaurants(Id)`, CASCADE (within-schema) |
+| Name | varchar | |
+| Description | varchar nullable | |
+| price | numeric(10,2) | Money value object (`OwnsOne`) |
+| currency | varchar(3) | |
+| Category | varchar | |
+| IsAvailable | boolean | "unavailable" = soft-hide (no hard DELETE) |
+| IsVeg | boolean | |
 
 ---
 
 ## Schema: delivery
 
-### delivery_agents
+### agents
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | |
+| Name / Phone | varchar | |
+| Status | varchar(20) | Offline, Available, OnDelivery |
+| current_latitude / current_longitude | double | GeoLocation value object (`OwnsOne`) |
 
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| name | VARCHAR | NOT NULL | |
-| phone | VARCHAR | NOT NULL | |
-| status | VARCHAR | NOT NULL | Available, OnDelivery, Offline |
-| current_location_latitude | DOUBLE | | GeoLocation value object (OwnsOne) |
-| current_location_longitude | DOUBLE | | |
-
-### delivery_assignments
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| order_id | UUID | NOT NULL | No FK to ordering.orders |
-| agent_id | UUID | FK → delivery_agents(id), RESTRICT | Within-schema FK |
-| status | VARCHAR | NOT NULL | Assigned, PickedUp, Delivered, Cancelled |
-| assigned_at | TIMESTAMPTZ | NOT NULL | |
-| picked_up_at | TIMESTAMPTZ | nullable | |
-| delivered_at | TIMESTAMPTZ | nullable | |
+### assignments
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | |
+| OrderId | uuid | No FK to `ordering.orders` (cross-schema) |
+| AgentId | uuid | FK → `delivery.agents(Id)` (within-schema) |
+| Status | varchar(20) | Assigned, PickedUp, Delivered, Cancelled |
+| AssignedAt | timestamptz | |
+| PickedUpAt / DeliveredAt | timestamptz nullable | |
 
 ---
 
 ## Schema: identity
 
 ### users
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| name | VARCHAR | NOT NULL | |
-| email | VARCHAR | NOT NULL, UNIQUE INDEX | |
-| phone | VARCHAR | nullable | |
-| password_hash | VARCHAR | NOT NULL | |
-| role | VARCHAR | NOT NULL | Customer, RestaurantOwner, DeliveryAgent, Admin |
-| created_at | TIMESTAMPTZ | NOT NULL | |
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | |
+| Name | varchar | |
+| Email | varchar | UNIQUE index |
+| Phone | varchar | |
+| PasswordHash | varchar | (auth wired later) |
+| Role | varchar(20) | Customer, RestaurantOwner, DeliveryAgent, Admin |
+| CreatedAt | timestamptz | |
 
 ### user_addresses
-
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| user_id | UUID | FK → users(id), CASCADE | Within-schema FK |
-| label | VARCHAR | nullable | "Home", "Office", etc. |
-| address_line1 | VARCHAR | | Address value object (OwnsOne) |
-| address_line2 | VARCHAR | | |
-| address_city | VARCHAR | | |
-| address_pincode | VARCHAR | | |
-| address_latitude | DOUBLE | | |
-| address_longitude | DOUBLE | | |
-| is_default | BOOLEAN | NOT NULL | |
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | |
+| UserId | uuid | FK → `identity.users(Id)`, CASCADE (within-schema) |
+| Label | varchar nullable | |
+| line1/line2/city/pincode | varchar | Address value object (`OwnsOne`) |
+| latitude / longitude | double | |
+| IsDefault | boolean | |
 
 ---
 
 ## Schema: payment
 
 ### payments
+| Column | Type | Notes |
+|--------|------|-------|
+| Id | uuid PK | |
+| OrderId | uuid | No FK to `ordering.orders` |
+| amount | numeric(10,2) | Money value object (`OwnsOne`) |
+| currency | varchar(3) | |
+| Method | varchar | |
+| Status | varchar(20) | Pending, Completed, Failed, Refunded |
+| GatewayReference | varchar nullable | |
+| CreatedAt | timestamptz | |
+| CompletedAt | timestamptz nullable | |
 
-| Column | Type | Constraints | Notes |
-|--------|------|-------------|-------|
-| id | UUID | PK | |
-| order_id | UUID | NOT NULL | No FK to ordering.orders |
-| amount_amount | DECIMAL(10,2) | NOT NULL | Money value object (OwnsOne) |
-| amount_currency | VARCHAR | NOT NULL, default 'INR' | |
-| method | VARCHAR | NOT NULL | |
-| status | VARCHAR | NOT NULL | Pending, Completed, Failed, Refunded |
-| gateway_reference | VARCHAR | nullable | |
-| gateway_response | JSONB | nullable | Raw provider response |
-| created_at | TIMESTAMPTZ | NOT NULL | |
-| completed_at | TIMESTAMPTZ | nullable | |
+> The `payments` table exists (schema-per-domain shows every domain), but **payment processing is not wired until Day 7** — there is no payment endpoint or service on this branch.
 
 ---
 
 ## Key Design Rules
 
-### No cross-schema foreign keys
+### No cross-schema foreign keys (ADR-008)
+`ordering.orders.CustomerId` has NO FK to `identity.users`. `order_items.MenuItemId` has NO FK to `restaurant.menu_items`. Cross-schema references are plain UUIDs validated in the application layer. This is what makes service extraction (Week 4+) a clean schema move, not a query rewrite.
 
-`ordering.orders.customer_id` has NO FK to `identity.users.id`. This is intentional. When we extract services, each service owns its schema. Cross-schema FKs would create an unmovable dependency.
+### FKs within a schema are fine
+`order_items → orders`, `menu_items → restaurants`, `user_addresses → users`, `assignments → agents`. These entities always live together.
 
-### FKs within schema are fine
+### Denormalized snapshots (ADR-009)
+`order_items.Name` and `unit_price` are captured at order time. If a restaurant renames a dish or changes the price tomorrow, existing orders are unchanged — historical accuracy, not duplication.
 
-`order_items → orders`, `menu_items → restaurants`, `user_addresses → users`, `delivery_assignments → delivery_agents`. These entities always live together.
+### VARCHAR for status, not PostgreSQL ENUM
+ENUMs are immutable once created; adding a status (`PartiallyRefunded`) needs `ALTER TYPE … ADD VALUE` which can't run in a transaction. VARCHAR + C# enum validation (`HasConversion<string>()`) is more flexible.
 
-### Denormalized data where needed
+### Value objects via EF Core `OwnsOne`
+`Money(Amount, Currency)`, `Address(...)`, `GeoLocation(...)` are owned types — no separate tables; columns live on the parent row.
 
-`order_items.name` and `order_items.unit_price` are snapshots captured at order creation time. If the restaurant renames "Chicken Biryani" to "Hyderabadi Dum Biryani" next week, existing orders still show what the customer originally ordered.
-
-### VARCHAR for status fields, not PostgreSQL ENUM
-
-PostgreSQL ENUMs are immutable once created. Adding a new status like `PartiallyRefunded` requires `ALTER TYPE... ADD VALUE` which can't run inside a transaction. VARCHAR with C# enum validation is more flexible.
-
-### Value objects via EF Core OwnsOne
-
-`Money(Amount, Currency)`, `Address(Line1, Line2, City, Pincode, Latitude, Longitude)`, and `GeoLocation(Latitude, Longitude)` are mapped as owned types. No separate tables, no JOINs. The value object columns live on the parent table.
+### Removal is a state change, never a hard DELETE
+Restaurant → `IsActive=false`; menu item → `IsAvailable=false`; order → `Cancelled`. A system with order history never loses rows.
 
 ---
 
-## Seed Data
+## Seed Data (migrations)
 
-3 restaurants seeded via EF Core `HasData()`:
+3 restaurants + 16 menu items + 1 customer, via EF `HasData`:
 
-| Restaurant | Location | Prep Time | Menu Items |
-|-----------|----------|-----------|------------|
-| Meghana Foods | Koramangala, Bangalore | 25 min | 6 items (Biryani, South Indian) |
-| Truffles | Indiranagar, Bangalore | 30 min | 5 items (Burgers, Continental) |
-| Vidyarthi Bhavan | Basavanagudi, Bangalore | 20 min | 5 items (South Indian, Breakfast) |
+| Restaurant | GUID | Items |
+|-----------|------|-------|
+| Meghana Foods | `a1b2c3d4-0001-…0001` | 6 (Biryani, South Indian) |
+| Truffles | `a1b2c3d4-0002-…0002` | 5 (Burgers, Continental) |
+| Vidyarthi Bhavan | `a1b2c3d4-0003-…0003` | 5 (Dosa, Breakfast) |
+
+Seed customer (for `POST /api/v1/orders`): `c1b2c3d4-0001-4000-8000-000000000001` (Priya Sharma, Customer).

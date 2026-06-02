@@ -2,153 +2,122 @@
 
 ## Entity Relationship Diagram
 
-All tables in one PostgreSQL database, separated by schema. No cross-schema foreign keys.
+All tables in one PostgreSQL database, separated by schema. **No cross-schema foreign keys** — cross-domain links are plain UUIDs. (Mirrors the live EF model; column casing is mixed because owned value objects use snake_case.)
 
 ```mermaid
 erDiagram
-    %% ===== RESTAURANT SCHEMA (green) =====
+    %% ===== restaurant schema =====
     restaurants {
-        uuid id PK
-        varchar name
+        uuid Id PK
+        varchar Name
         varchar address_line1
         varchar address_line2
         varchar address_city
         varchar address_pincode
-        decimal address_latitude
-        decimal address_longitude
-        boolean is_active
-        int avg_prep_time_minutes
-        timestamptz created_at
-        timestamptz updated_at
+        double latitude
+        double longitude
+        boolean IsActive
+        int AvgPrepTimeMinutes
+        timestamptz CreatedAt
     }
-
     menu_items {
-        uuid id PK
-        uuid restaurant_id FK
-        varchar name
-        varchar description
-        decimal price_amount
-        varchar price_currency
-        varchar category
-        boolean is_available
-        boolean is_veg
-        timestamptz created_at
-        timestamptz updated_at
+        uuid Id PK
+        uuid RestaurantId FK
+        varchar Name
+        varchar Description
+        numeric price
+        varchar currency
+        varchar Category
+        boolean IsAvailable
+        boolean IsVeg
     }
-
     restaurants ||--o{ menu_items : "has"
 
-    %% ===== ORDERING SCHEMA (blue) =====
+    %% ===== ordering schema =====
     orders {
-        uuid id PK
-        uuid customer_id
-        varchar customer_name
-        varchar customer_phone
-        uuid restaurant_id
-        varchar restaurant_name
-        varchar status
-        decimal total_amount
-        varchar total_currency
-        varchar delivery_line1
-        varchar delivery_line2
-        varchar delivery_city
-        varchar delivery_pincode
-        decimal delivery_latitude
-        decimal delivery_longitude
-        varchar cancellation_reason
-        timestamptz created_at
-        timestamptz updated_at
+        uuid Id PK
+        uuid CustomerId
+        uuid RestaurantId
+        varchar Status
+        numeric total_amount
+        varchar currency
+        varchar delivery_address_line1
+        varchar delivery_address_city
+        varchar delivery_address_pincode
+        double delivery_latitude
+        double delivery_longitude
+        timestamptz CreatedAt
+        timestamptz ConfirmedAt
+        timestamptz DeliveredAt
+        timestamptz CancelledAt
+        varchar CancellationReason
     }
-
-    order_status_history {
-        uuid id PK
-        uuid order_id FK
-        varchar from_status
-        varchar to_status
-        varchar actor
-        uuid actor_id
-        varchar notes
-        timestamptz created_at
-    }
-
-    orders ||--o{ order_status_history : "tracks"
-
     order_items {
-        uuid id PK
-        uuid order_id FK
-        uuid menu_item_id
-        varchar name
-        int quantity
-        decimal unit_price_amount
-        varchar unit_price_currency
-        varchar special_instructions
+        uuid Id PK
+        uuid OrderId FK
+        uuid MenuItemId
+        varchar Name
+        int Quantity
+        numeric unit_price
+        varchar currency
+        varchar SpecialInstructions
     }
-
     orders ||--o{ order_items : "contains"
 
-    %% ===== IDENTITY SCHEMA =====
+    %% ===== identity schema =====
     users {
-        uuid id PK
-        varchar email
-        varchar password_hash
-        varchar name
-        varchar phone
-        varchar role
-        timestamptz created_at
+        uuid Id PK
+        varchar Name
+        varchar Email
+        varchar Phone
+        varchar PasswordHash
+        varchar Role
+        timestamptz CreatedAt
     }
-
     user_addresses {
-        uuid id PK
-        uuid user_id FK
-        varchar label
+        uuid Id PK
+        uuid UserId FK
+        varchar Label
         varchar line1
-        varchar line2
         varchar city
         varchar pincode
-        decimal latitude
-        decimal longitude
-        boolean is_default
+        double latitude
+        double longitude
+        boolean IsDefault
     }
-
     users ||--o{ user_addresses : "has"
 
-    %% ===== DELIVERY SCHEMA =====
-    delivery_agents {
-        uuid id PK
-        varchar name
-        varchar phone
-        varchar status
-        decimal current_latitude
-        decimal current_longitude
-        boolean is_available
+    %% ===== delivery schema =====
+    agents {
+        uuid Id PK
+        varchar Name
+        varchar Phone
+        varchar Status
+        double current_latitude
+        double current_longitude
     }
-
-    deliveries {
-        uuid id PK
-        uuid order_id
-        uuid agent_id
-        varchar status
-        decimal pickup_latitude
-        decimal pickup_longitude
-        decimal dropoff_latitude
-        decimal dropoff_longitude
-        timestamptz picked_up_at
-        timestamptz delivered_at
+    assignments {
+        uuid Id PK
+        uuid OrderId
+        uuid AgentId FK
+        varchar Status
+        timestamptz AssignedAt
+        timestamptz PickedUpAt
+        timestamptz DeliveredAt
     }
+    agents ||--o{ assignments : "assigned"
 
-    delivery_agents ||--o{ deliveries : "assigned"
-
-    %% ===== PAYMENT SCHEMA =====
+    %% ===== payment schema =====
     payments {
-        uuid id PK
-        uuid order_id
-        decimal amount
+        uuid Id PK
+        uuid OrderId
+        numeric amount
         varchar currency
-        varchar method
-        varchar status
-        varchar gateway_txn_id
-        jsonb gateway_response
-        timestamptz created_at
+        varchar Method
+        varchar Status
+        varchar GatewayReference
+        timestamptz CreatedAt
+        timestamptz CompletedAt
     }
 ```
 
@@ -156,18 +125,17 @@ erDiagram
 
 | Schema | Tables | Status |
 |--------|--------|--------|
-| `restaurant` | restaurants, menu_items | ✅ Implemented (Day 2-3) |
-| `ordering` | orders, order_items | ✅ Implemented (Day 2-3) |
-| `identity` | users, user_addresses | 🔲 Planned (Day 6) |
-| `delivery` | delivery_agents, deliveries | 🔲 Planned (Day 4) |
-| `payment` | payments | 🔲 Planned (Day 7) |
+| `restaurant` | restaurants, menu_items | ✅ live + seeded |
+| `ordering` | orders, order_items | ✅ live |
+| `identity` | users, user_addresses | ✅ live (1 customer seeded; auth wired later) |
+| `delivery` | agents, assignments | ✅ schema present (delivery endpoints come Day 4+) |
+| `payment` | payments | ✅ schema present (processing comes Day 7) |
 
 ## Design Rules
 
-1. **No cross-schema foreign keys.** `orders.restaurant_id` is NOT a FK to `restaurant.restaurants`. It's a plain UUID. This makes future service extraction possible.
-
-2. **Denormalized order_items.** `order_items.name` and `unit_price_amount` are copied from menu_items at order time. If the restaurant changes the price later, existing orders aren't affected.
-
-3. **VARCHAR for status fields.** Not enums. Adding a new status doesn't require a migration.
-
-4. **Value objects stored as owned entities.** `Address`, `Money` are flattened into parent table columns via EF Core's `OwnsOne`.
+1. **No cross-schema foreign keys** (ADR-008). `orders.RestaurantId`, `order_items.MenuItemId`, `assignments.OrderId`, `payments.OrderId` are plain UUIDs, validated in the application layer. This keeps each schema independently extractable.
+2. **Within-schema FKs only**: `menu_items → restaurants`, `order_items → orders`, `user_addresses → users`, `assignments → agents`.
+3. **Denormalized snapshots** (ADR-009): `order_items.Name` + `unit_price` are copied from the menu at order time — historical accuracy.
+4. **VARCHAR status, not ENUM** — flexible to add new states without an `ALTER TYPE` migration.
+5. **Value objects via `OwnsOne`** — `Money`, `Address`, `GeoLocation` flatten into parent columns (the snake_case ones).
+6. **No hard DELETE** — `IsActive` / `IsAvailable` / `Cancelled` instead.
