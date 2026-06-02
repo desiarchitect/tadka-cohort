@@ -53,7 +53,11 @@ public class OrdersController(
 
         var orderResult = _orderFactory.Create(request.CustomerId, restaurant, itemsRequest, address);
         if (orderResult.IsFailure)
-            return Problem(detail: orderResult.Error, statusCode: StatusCodes.Status400BadRequest, title: "Invalid Order Creation");
+            // An unavailable item, or an item not on this restaurant's menu, is a
+            // domain-rule violation (valid request, breaks a business rule) → 422,
+            // consistent with illegal state transitions. Malformed input is 400,
+            // already handled by validation above.
+            return Problem(detail: orderResult.Error, statusCode: StatusCodes.Status422UnprocessableEntity, title: "Order Cannot Be Placed");
 
         var order = orderResult.Value;
 

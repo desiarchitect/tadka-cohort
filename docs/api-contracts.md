@@ -320,8 +320,9 @@ Create a new order. Server calculates prices from menu items (client does NOT se
 }
 ```
 
-**Response: 400 Bad Request** — Validation error  
-**Response: 404 Not Found** — Restaurant or menu item not found
+**Response: 400 Bad Request** — Validation error (empty items, quantity ≤ 0, bad pincode)  
+**Response: 404 Not Found** — Restaurant not found  
+**Response: 422 Unprocessable Entity** — Domain rule violation: menu item not on this restaurant's menu, or item unavailable
 
 ---
 
