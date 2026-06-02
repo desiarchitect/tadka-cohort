@@ -22,12 +22,15 @@ public record UpdateRestaurantRequest(
     int? AvgPrepTimeMinutes,
     bool? IsActive);
 
-// Add a menu item to a restaurant (restaurant-partner flow). Price is a plain
-// decimal here; the server wraps it in Money(amount, "INR").
+// Money is always structured ({amount, currency}), never a naked decimal
+// (API design guide §9) — same shape as MoneyResponse.
+public record MoneyRequest(decimal Amount, string Currency = "INR");
+
+// Add a menu item to a restaurant (restaurant-partner flow).
 public record CreateMenuItemRequest(
     string Name,
     string? Description,
-    decimal Price,
+    MoneyRequest Price,
     string Category,
     bool IsVeg);
 
@@ -35,7 +38,7 @@ public record CreateMenuItemRequest(
 public record UpdateMenuItemRequest(
     string? Name,
     string? Description,
-    decimal? Price,
+    MoneyRequest? Price,
     string? Category,
     bool? IsVeg,
     bool? IsAvailable);

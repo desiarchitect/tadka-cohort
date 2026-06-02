@@ -172,10 +172,12 @@ public class RestaurantsController : ControllerBase
 
         var item = new MenuItem
         {
-            Id = Guid.NewGuid(),
+            // Id is store-generated (gen_random_uuid). Leave it unset so EF marks this
+            // as an INSERT when added to the already-tracked restaurant's Menu collection
+            // — setting a non-empty key makes EF think it's an existing row (→ UPDATE → 500).
             Name = request.Name,
             Description = request.Description,
-            Price = new Money(request.Price),
+            Price = new Money(request.Price.Amount, request.Price.Currency),
             Category = request.Category,
             IsAvailable = true,
             IsVeg = request.IsVeg
@@ -205,7 +207,7 @@ public class RestaurantsController : ControllerBase
 
         if (request.Name is not null) item.Name = request.Name;
         if (request.Description is not null) item.Description = request.Description;
-        if (request.Price.HasValue) item.Price = new Money(request.Price.Value);
+        if (request.Price is not null) item.Price = new Money(request.Price.Amount, request.Price.Currency);
         if (request.Category is not null) item.Category = request.Category;
         if (request.IsVeg.HasValue) item.IsVeg = request.IsVeg.Value;
         if (request.IsAvailable.HasValue) item.IsAvailable = request.IsAvailable.Value;
