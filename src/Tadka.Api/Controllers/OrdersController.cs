@@ -19,10 +19,14 @@ namespace Tadka.Api.Controllers;
 public class OrdersController(
     IOrderRepository orderRepository,
     OrderFactory orderFactory,
+    IIdempotencyStore idempotencyStore,
+    IDomainEventDispatcher eventDispatcher,
     TadkaDbContext db) : ControllerBase
 {
     private readonly IOrderRepository _orderRepository = orderRepository;
     private readonly OrderFactory _orderFactory = orderFactory;
+    private readonly IIdempotencyStore _idempotencyStore = idempotencyStore;
+    private readonly IDomainEventDispatcher _eventDispatcher = eventDispatcher;
     private readonly TadkaDbContext _db = db; // monolith-phase lookup of restaurant + menu for server-side pricing
 
     [HttpPost]
@@ -33,6 +37,19 @@ public class OrdersController(
         var result = await validator.ValidateAsync(request);
         if (!result.IsValid)
             throw new ValidationException(result.Errors);
+
+        // Idempotency (ADR-011): if the client sends an Idempotency-Key and we have already seen it,
+        // return the order that key created — a double-tap / retry must never place a second order.
+        var idempotencyKey = Request.Headers["Idempotency-Key"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            var existingOrderId = await _idempotencyStore.FindOrderIdAsync(idempotencyKey);
+            if (existingOrderId is not null)
+            {
+                var existing = await _orderRepository.GetByIdAsync(existingOrderId.Value);
+                return Ok(MapToResponse(existing!)); // replay → 200 with the original order
+            }
+        }
 
         // Load restaurant with menu to do server-side pricing (the client never sends a price).
         var restaurant = await _db.Restaurants.AsNoTracking()
@@ -62,7 +79,18 @@ public class OrdersController(
         var order = orderResult.Value;
 
         _orderRepository.Add(order);
+
+        // The key→order mapping is staged on the SAME DbContext, so it commits in the SAME
+        // transaction as the order: either both land or neither does.
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            _idempotencyStore.Record(idempotencyKey, order.Id);
+
         await _orderRepository.SaveChangesAsync();
+
+        // Dispatch domain events AFTER the state is committed (ADR-013): a failed side-effect
+        // (e.g. notification) must not roll back a persisted order.
+        await _eventDispatcher.DispatchAsync(order.DomainEvents);
+        order.ClearDomainEvents();
 
         // Payment is intentionally NOT processed here yet (see Day 7). Doing it
         // synchronously inside order creation would couple ordering to a slow
@@ -117,7 +145,12 @@ public class OrdersController(
         if (result.IsFailure)
             return Problem(detail: result.Error, statusCode: StatusCodes.Status422UnprocessableEntity, title: "Invalid State Transition");
 
+        // A concurrent PATCH may have moved the order since we read it — SaveChanges then throws
+        // DbUpdateConcurrencyException (xmin mismatch) → 409 via the middleware (ADR-012).
         await _orderRepository.SaveChangesAsync();
+
+        await _eventDispatcher.DispatchAsync(order.DomainEvents);
+        order.ClearDomainEvents();
         return NoContent();
     }
 

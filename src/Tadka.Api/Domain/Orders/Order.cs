@@ -1,5 +1,7 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using Tadka.Api.Domain.ValueObjects;
 using Tadka.Api.Domain.Common;
+using Tadka.Api.Domain.Orders.Events;
 
 namespace Tadka.Api.Domain.Orders;
 
@@ -17,7 +19,19 @@ public class Order
     public DateTime? DeliveredAt { get; set; }
     public DateTime? CancelledAt { get; set; }
     public string? CancellationReason { get; set; }
-    
+
+    // Domain events raised by this aggregate, dispatched AFTER persistence (see ADR-013).
+    // [NotMapped] — these never go to a column; they are in-memory until the controller dispatches them.
+    private readonly List<IDomainEvent> _domainEvents = [];
+
+    [NotMapped]
+    public IReadOnlyList<IDomainEvent> DomainEvents => _domainEvents;
+
+    public void ClearDomainEvents() => _domainEvents.Clear();
+
+    // internal: only the aggregate and its factory (same assembly) decide what gets raised.
+    internal void Raise(IDomainEvent domainEvent) => _domainEvents.Add(domainEvent);
+
     // DDD: Encapsulate state transitions in the aggregate root
     public Result Transition(OrderStatus nextStatus)
     {
@@ -30,7 +44,10 @@ public class Order
         Status = nextStatus;
 
         if (nextStatus == OrderStatus.Confirmed)
+        {
             ConfirmedAt = DateTime.UtcNow;
+            Raise(new OrderConfirmedEvent(Id, CustomerId));
+        }
         else if (nextStatus == OrderStatus.Delivered)
             DeliveredAt = DateTime.UtcNow;
 

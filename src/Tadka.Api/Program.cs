@@ -15,7 +15,14 @@ builder.Services.AddDbContext<TadkaDbContext>(options =>
 
 // Repositories & Factories
 builder.Services.AddScoped<Tadka.Api.Data.Repositories.IOrderRepository, Tadka.Api.Data.Repositories.OrderRepository>();
+builder.Services.AddScoped<Tadka.Api.Data.Repositories.IIdempotencyStore, Tadka.Api.Data.Repositories.IdempotencyStore>();
 builder.Services.AddScoped<Tadka.Api.Domain.Orders.OrderFactory>();
+
+// In-process domain events (ADR-013): dispatcher + handlers. Register one handler per (event, subscriber).
+builder.Services.AddScoped<Tadka.Api.Domain.Common.IDomainEventDispatcher, Tadka.Api.Domain.Common.DomainEventDispatcher>();
+builder.Services.AddScoped<
+    Tadka.Api.Domain.Common.IDomainEventHandler<Tadka.Api.Domain.Orders.Events.OrderConfirmedEvent>,
+    Tadka.Api.Domain.Orders.Events.Handlers.OrderConfirmedNotificationHandler>();
 
 var app = builder.Build();
 
@@ -43,3 +50,6 @@ app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
+
+// Exposed so the integration test project can boot the real app via WebApplicationFactory<Program>.
+public partial class Program { }

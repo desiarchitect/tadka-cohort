@@ -100,6 +100,26 @@ Triggered when the request is syntactically valid but violates a business rule. 
 
 ---
 
+### 409 Conflict — Concurrent Update
+
+Triggered when an order was modified by another request between your read and your write — an
+optimistic-concurrency conflict (ADR-012). The request was **legal**; you simply lost a race.
+This is distinct from `422`: a `422` means *the request itself broke a rule*; a `409` means
+*you raced someone and lost — reload and retry*. Detected via EF Core's `DbUpdateConcurrencyException`.
+
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.10",
+  "title": "Concurrent Update Conflict",
+  "status": 409,
+  "detail": "This order was modified by another request. Reload the order and try again."
+}
+```
+
+> **Client guidance:** on `409`, re-fetch the order, re-evaluate, and retry if the action still applies.
+
+---
+
 ### 500 Internal Server Error
 
 Unhandled exceptions. Never exposes stack traces or implementation details to the client.
@@ -126,6 +146,7 @@ The `ExceptionHandlingMiddleware` in `Tadka.Api/Middleware/ExceptionHandlingMidd
 | `FluentValidation.ValidationException` | 400 | Validation Failed |
 | `NotFoundException` | 404 | Not Found |
 | `DomainException` | 422 | Domain Rule Violation |
+| `DbUpdateConcurrencyException` | 409 | Concurrent Update Conflict |
 | Everything else | 500 | Internal Server Error |
 
 ```

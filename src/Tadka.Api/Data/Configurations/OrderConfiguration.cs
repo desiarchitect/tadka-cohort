@@ -41,5 +41,16 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(o => o.CancellationReason).HasMaxLength(500);
 
         builder.HasMany(o => o.Items).WithOne().HasForeignKey("OrderId").OnDelete(DeleteBehavior.Cascade);
+
+        // Optimistic concurrency via PostgreSQL's xmin system column (ADR-012).
+        // No extra column — Postgres already stamps every row with the id of the transaction that
+        // last wrote it. We map that system column as a shadow concurrency token: if the row changed
+        // between our read and our write, EF throws DbUpdateConcurrencyException → 409. This is what
+        // prevents the "two concurrent status updates → lost update" break.
+        builder.Property<uint>("xmin")
+            .HasColumnName("xmin")
+            .HasColumnType("xid")
+            .ValueGeneratedOnAddOrUpdate()
+            .IsConcurrencyToken();
     }
 }
