@@ -20,10 +20,10 @@ curl http://localhost:5224/health          # http 5224, https 7036
 `src/Tadka.Api/Domain/{Orders,Restaurants,Delivery,Users,Payments}` — folders are future service boundaries. Postgres schemas: `ordering, restaurant, delivery, identity, payment`. **No cross-schema FKs** (ADR-008); cross-domain refs by ID only. Value objects (Money, Address, GeoLocation) as C# records via EF `OwnsOne`.
 
 ## Branches / tags → days
-`day-01` ✅ = scaffold + `/health` + ADR-001/002. `day-02` (to create) = domain model + DbContext + schema. Tags: `v0.0-scaffold`(D0) → `v0.1.1-day01-fix`(D1) → `v1.0/v1.1-monolith-*`(D3–4) → `v2.x`(D5–6). `week-3` holds WIP spine (growth-story, break-kits, k6). Keep `main`/`week-*` intact.
+`day-01` ✅ = scaffold + `/health` + ADR-001/002. `day-02` ✅ = domain model + DbContext + schema-per-domain. `day-03` ✅ = full REST API `/api/v1` (14 endpoints) + order state machine. `day-04` ✅ = order-flow hardening (idempotency, optimistic concurrency `xmin`→409, in-process domain events, Testcontainers tests; 19/19 green). Each `day-NN` branches from the previous. Legacy tags `v1.0/v1.1-monolith-*` predate the rebuild. `week-3` holds WIP spine (growth-story, break-kits, k6). Keep `main`/`week-*` intact.
 
 ## ADRs (canonical, authoritative numbers)
-`docs/adrs/`: 001 .NET10 · 002 monolith-first · 003 schema-per-domain · 004 ef-core · 005 rest-api · 006 rfc7807-errors · 007 two-layer-validation · 008 no-cross-schema-fks · 009 denormalize-order-items. Template: `docs/templates/adr-template.md` (Nygard: Context/Decision/Consequences[+Risks]/Alternatives/References) — must also answer the 7 teaching fields (Topic, Options, Choice, Why, Trade-off, **Failure mode**, **Revisit when**).
+`docs/adrs/`: 001 .NET10 · 002 monolith-first · 003 schema-per-domain · 004 ef-core · 005 rest-api · 006 rfc7807-errors · 007 two-layer-validation · 008 no-cross-schema-fks · 009 denormalize-order-items · 010 api-versioning · 011 idempotency-for-unsafe-writes · 012 optimistic-concurrency-orders · 013 in-process-domain-events. Template: `docs/templates/adr-template.md` (Nygard: Context/Decision/Consequences[+Risks]/Alternatives/References) — must also answer the 7 teaching fields (Topic, Options, Choice, Why, Trade-off, **Failure mode**, **Revisit when**).
 
 ## Gotchas
 - **Auto-commit hook** commits with terse messages ("fixed"). Commit explicitly with a real message first.
