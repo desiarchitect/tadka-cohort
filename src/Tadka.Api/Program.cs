@@ -13,6 +13,14 @@ builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 builder.Services.AddDbContext<TadkaDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("TadkaDb")));
 
+// Read-replica context (ADR-016): NoTracking, pointed at the replica. Falls back to the primary
+// connection when no replica is configured, so single-Postgres dev and the test suite still work.
+builder.Services.AddDbContext<TadkaReadDbContext>(options =>
+    options.UseNpgsql(
+            builder.Configuration.GetConnectionString("TadkaDbReplica")
+            ?? builder.Configuration.GetConnectionString("TadkaDb"))
+        .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking));
+
 // Repositories & Factories
 builder.Services.AddScoped<Tadka.Api.Data.Repositories.IOrderRepository, Tadka.Api.Data.Repositories.OrderRepository>();
 builder.Services.AddScoped<Tadka.Api.Data.Repositories.IIdempotencyStore, Tadka.Api.Data.Repositories.IdempotencyStore>();

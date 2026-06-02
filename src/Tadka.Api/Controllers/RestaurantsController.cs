@@ -14,9 +14,14 @@ namespace Tadka.Api.Controllers;
 [Route("api/v1/restaurants")]
 public class RestaurantsController : ControllerBase
 {
-    private readonly TadkaDbContext _db;
+    private readonly TadkaDbContext _db;        // primary — writes
+    private readonly TadkaReadDbContext _read;  // replica — read-heavy GETs (ADR-016)
 
-    public RestaurantsController(TadkaDbContext db) => _db = db;
+    public RestaurantsController(TadkaDbContext db, TadkaReadDbContext read)
+    {
+        _db = db;
+        _read = read;
+    }
 
     [HttpGet]
     public async Task<ActionResult<PagedResponse<RestaurantResponse>>> GetAll(
@@ -27,7 +32,7 @@ public class RestaurantsController : ControllerBase
         pageSize = Math.Clamp(pageSize, 1, 50);
         page = Math.Max(1, page);
 
-        var query = _db.Restaurants.AsNoTracking().AsQueryable();
+        var query = _read.Restaurants.AsQueryable(); // replica read
 
         if (!string.IsNullOrWhiteSpace(city))
             query = query.Where(r => r.Address.City.ToLower() == city.ToLower());
@@ -47,7 +52,7 @@ public class RestaurantsController : ControllerBase
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<RestaurantResponse>> GetById(Guid id)
     {
-        var restaurant = await _db.Restaurants.AsNoTracking()
+        var restaurant = await _read.Restaurants
             .FirstOrDefaultAsync(r => r.Id == id);
 
         if (restaurant is null)
@@ -93,7 +98,7 @@ public class RestaurantsController : ControllerBase
         [FromQuery] string? category,
         [FromQuery] bool? vegOnly)
     {
-        var restaurant = await _db.Restaurants.AsNoTracking()
+        var restaurant = await _read.Restaurants
             .Include(r => r.Menu)
             .FirstOrDefaultAsync(r => r.Id == id);
 

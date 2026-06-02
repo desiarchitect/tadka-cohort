@@ -21,12 +21,14 @@ public class OrdersController(
     OrderFactory orderFactory,
     IIdempotencyStore idempotencyStore,
     IDomainEventDispatcher eventDispatcher,
+    TadkaReadDbContext readDb,
     TadkaDbContext db) : ControllerBase
 {
     private readonly IOrderRepository _orderRepository = orderRepository;
     private readonly OrderFactory _orderFactory = orderFactory;
     private readonly IIdempotencyStore _idempotencyStore = idempotencyStore;
     private readonly IDomainEventDispatcher _eventDispatcher = eventDispatcher;
+    private readonly TadkaReadDbContext _read = readDb; // replica — order history (ADR-016)
     private readonly TadkaDbContext _db = db; // monolith-phase lookup of restaurant + menu for server-side pricing
 
     [HttpPost]
@@ -117,13 +119,20 @@ public class OrdersController(
         pageSize = Math.Clamp(pageSize, 1, 50);
         page = Math.Max(1, page);
 
-        var totalCount = customerId.HasValue
-            ? await _orderRepository.CountByCustomerIdAsync(customerId.Value)
-            : await _orderRepository.CountAllAsync();
+        // Order *history* is read-heavy and tolerates slight replication lag, so it reads from the
+        // replica (ADR-016). The (customer_id, created_at DESC) index (ADR-014) keeps it fast on a
+        // large orders table. Contrast GET /orders/{id} below, which stays on the primary so a
+        // customer always sees the order they just placed (read-your-writes).
+        var query = _read.Orders.Include(o => o.Items).AsQueryable();
+        if (customerId.HasValue)
+            query = query.Where(o => o.CustomerId == customerId.Value);
 
-        var orders = customerId.HasValue
-            ? await _orderRepository.GetByCustomerIdAsync(customerId.Value, page, pageSize)
-            : await _orderRepository.GetAllAsync(page, pageSize);
+        var totalCount = await query.CountAsync();
+        var orders = await query
+            .OrderByDescending(o => o.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
 
         var response = orders.Select(MapToResponse).ToList();
         return Ok(new PagedResponse<OrderResponse>(response, page, pageSize, totalCount));

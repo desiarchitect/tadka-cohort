@@ -13,6 +13,12 @@ public class TadkaDbContext : DbContext
     {
     }
 
+    // Lets TadkaReadDbContext (the read-replica context, ADR-016) reuse this exact model
+    // by passing its own DbContextOptions<TadkaReadDbContext> through to the base.
+    protected TadkaDbContext(DbContextOptions options) : base(options)
+    {
+    }
+
     // Ordering domain
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();

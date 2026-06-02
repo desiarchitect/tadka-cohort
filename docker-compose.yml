@@ -1,11 +1,12 @@
 # Tadka - Docker Compose
 # Phase 0: PostgreSQL only
-# Day 5: Add PostgreSQL read replica
+# Day 5: + PostgreSQL streaming read replica (ADR-016)
 # Day 6: Add Redis
 # Day 8: Add Kafka + Zookeeper (first service extraction)
 # Day 13: Add Prometheus + Grafana
 
 services:
+  # Primary — all writes, plus reads that must be fresh (read-your-writes).
   postgres:
     image: postgres:16
     container_name: tadka-postgres
@@ -15,14 +16,52 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-tadka}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tadka_local}
       POSTGRES_DB: ${POSTGRES_DB:-tadka}
+      REPLICATOR_PASSWORD: ${REPLICATOR_PASSWORD:-replicator_pass}
+    # Enable streaming replication (WAL senders + a slot) so the replica can follow.
+    command:
+      - "postgres"
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "hot_standby=on"
     volumes:
       - pgdata:/var/lib/postgresql/data
+      # Runs only on a fresh cluster: creates the replication role + pg_hba entry.
+      - ./docker/primary-init.sh:/docker-entrypoint-initdb.d/10-replication.sh
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U tadka"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tadka}"]
       interval: 10s
       timeout: 5s
       retries: 5
     restart: unless-stopped
 
+  # Read replica (Day 5) — clones the primary via pg_basebackup on first boot, then streams.
+  # The API routes read-heavy GETs here (restaurant list, menu, order history).
+  postgres-replica:
+    image: postgres:16
+    container_name: tadka-postgres-replica
+    ports:
+      - "5433:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${REPLICATOR_PASSWORD:-replicator_pass}
+    entrypoint: ["bash", "/replica-entrypoint.sh"]
+    volumes:
+      - pgdata_replica:/var/lib/postgresql/data
+      - ./docker/replica-entrypoint.sh:/replica-entrypoint.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tadka}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  pgdata_replica:

@@ -42,6 +42,22 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
 
         builder.HasMany(o => o.Items).WithOne().HasForeignKey("OrderId").OnDelete(DeleteBehavior.Cascade);
 
+        // Performance indexes (ADR-014). Added only where a real query pattern justifies them —
+        // adding one per column "just in case" is the zombie-index anti-pattern (every index taxes
+        // every write). EF already creates the FK index on order_items(OrderId); customer_id and
+        // created_at are bare Guids/timestamps (no FK, ADR-008), so they get no automatic index.
+        //
+        //  - GET /orders?customerId=… ORDER BY created_at DESC  → composite (customer_id, created_at DESC)
+        //  - GET /orders            ORDER BY created_at DESC    → (created_at DESC)
+        // Deliberately NOT indexed: orders(status), orders(restaurant_id) — no endpoint filters on
+        // them yet, so an index would only slow writes. Add them the day a query needs them.
+        builder.HasIndex(o => new { o.CustomerId, o.CreatedAt })
+            .HasDatabaseName("ix_orders_customer_id_created_at")
+            .IsDescending(false, true);
+        builder.HasIndex(o => o.CreatedAt)
+            .HasDatabaseName("ix_orders_created_at")
+            .IsDescending(true);
+
         // Optimistic concurrency via PostgreSQL's xmin system column (ADR-012).
         // No extra column — Postgres already stamps every row with the id of the transaction that
         // last wrote it. We map that system column as a shadow concurrency token: if the row changed

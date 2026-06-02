@@ -18,7 +18,10 @@ public class TadkaApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Point the app at the throwaway container instead of the developer's local DB.
+        // Both the primary and the read-replica connection resolve to the same container —
+        // tests don't run real streaming replication, so reads and writes share one DB here.
         builder.UseSetting("ConnectionStrings:TadkaDb", _postgres.GetConnectionString());
+        builder.UseSetting("ConnectionStrings:TadkaDbReplica", _postgres.GetConnectionString());
         builder.UseEnvironment("Development");
     }
 
