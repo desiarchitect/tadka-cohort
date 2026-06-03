@@ -51,6 +51,9 @@ public class Order
         else if (nextStatus == OrderStatus.Delivered)
             DeliveredAt = DateTime.UtcNow;
 
+        // Every transition feeds live tracking (ADR-020), dispatched after persistence (ADR-013).
+        Raise(new OrderStatusChangedEvent(Id, nextStatus));
+
         return Result.Success();
     }
 

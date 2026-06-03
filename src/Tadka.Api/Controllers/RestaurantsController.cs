@@ -7,6 +7,7 @@ using Tadka.Api.Data;
 using Tadka.Api.Domain.Restaurants;
 using Tadka.Api.Domain.ValueObjects;
 using Tadka.Api.Exceptions;
+using Tadka.Api.Infrastructure.Caching;
 
 namespace Tadka.Api.Controllers;
 
@@ -16,12 +17,17 @@ public class RestaurantsController : ControllerBase
 {
     private readonly TadkaDbContext _db;        // primary — writes
     private readonly TadkaReadDbContext _read;  // replica — read-heavy GETs (ADR-016)
+    private readonly ICacheService _cache;      // Redis menu cache (ADR-018/019)
+    private static readonly TimeSpan MenuTtl = TimeSpan.FromSeconds(60);
 
-    public RestaurantsController(TadkaDbContext db, TadkaReadDbContext read)
+    public RestaurantsController(TadkaDbContext db, TadkaReadDbContext read, ICacheService cache)
     {
         _db = db;
         _read = read;
+        _cache = cache;
     }
+
+    private static string MenuCacheKey(Guid restaurantId) => $"restaurant:{restaurantId}:menu";
 
     [HttpGet]
     public async Task<ActionResult<PagedResponse<RestaurantResponse>>> GetAll(
@@ -98,14 +104,24 @@ public class RestaurantsController : ControllerBase
         [FromQuery] string? category,
         [FromQuery] bool? vegOnly)
     {
-        var restaurant = await _read.Restaurants
-            .Include(r => r.Menu)
-            .FirstOrDefaultAsync(r => r.Id == id);
+        // Cache-aside (ADR-018): the full menu is a hot, rarely-changing read. Cache the whole list
+        // (replica-backed on a miss), then apply category/vegOnly filters in-memory so one cached
+        // entry serves every filter combo. Stampede-protected by a single-flight lock (ADR-019).
+        var allItems = await _cache.GetOrSetAsync(
+            MenuCacheKey(id),
+            async () =>
+            {
+                var restaurant = await _read.Restaurants
+                    .Include(r => r.Menu)
+                    .FirstOrDefaultAsync(r => r.Id == id);
+                return restaurant?.Menu.Select(MapMenuItemToResponse).ToList();
+            },
+            MenuTtl);
 
-        if (restaurant is null)
+        if (allItems is null)
             throw new NotFoundException(nameof(Restaurant), id);
 
-        var items = restaurant.Menu.AsEnumerable();
+        IEnumerable<MenuItemResponse> items = allItems;
 
         if (!string.IsNullOrWhiteSpace(category))
             items = items.Where(i => i.Category.Equals(category, StringComparison.OrdinalIgnoreCase));
@@ -113,8 +129,7 @@ public class RestaurantsController : ControllerBase
         if (vegOnly == true)
             items = items.Where(i => i.IsVeg);
 
-        var response = items.Select(MapMenuItemToResponse).ToList();
-        return Ok(response);
+        return Ok(items.ToList());
     }
 
     [HttpPatch("{id:guid}/menu/{itemId:guid}/availability")]
@@ -136,6 +151,7 @@ public class RestaurantsController : ControllerBase
 
         menuItem.IsAvailable = request.IsAvailable;
         await _db.SaveChangesAsync();
+        await _cache.RemoveAsync(MenuCacheKey(id)); // delete-on-write (ADR-018)
 
         return NoContent();
     }
@@ -189,6 +205,7 @@ public class RestaurantsController : ControllerBase
         };
         restaurant.Menu.Add(item);
         await _db.SaveChangesAsync();
+        await _cache.RemoveAsync(MenuCacheKey(id)); // delete-on-write (ADR-018)
 
         return CreatedAtAction(nameof(GetMenu), new { id = restaurant.Id }, MapMenuItemToResponse(item));
     }
@@ -218,6 +235,7 @@ public class RestaurantsController : ControllerBase
         if (request.IsAvailable.HasValue) item.IsAvailable = request.IsAvailable.Value;
 
         await _db.SaveChangesAsync();
+        await _cache.RemoveAsync(MenuCacheKey(id)); // delete-on-write (ADR-018)
         return NoContent();
     }
 

@@ -32,6 +32,28 @@ builder.Services.AddScoped<
     Tadka.Api.Domain.Common.IDomainEventHandler<Tadka.Api.Domain.Orders.Events.OrderConfirmedEvent>,
     Tadka.Api.Domain.Orders.Events.Handlers.OrderConfirmedNotificationHandler>();
 
+// Live tracking (ADR-020): every status change is published to the backplane.
+builder.Services.AddScoped<
+    Tadka.Api.Domain.Common.IDomainEventHandler<Tadka.Api.Domain.Orders.Events.OrderStatusChangedEvent>,
+    Tadka.Api.Domain.Orders.Events.Handlers.OrderStatusChangedTrackingHandler>();
+
+// Redis (ADR-018/019/020): cache-aside + single-flight lock + live-tracking pub/sub.
+// Optional — if no "Redis" connection string is configured, the cache is a no-op and live
+// tracking returns 503, so single-Postgres dev and the test suite run unchanged.
+var redisConnection = builder.Configuration.GetConnectionString("Redis");
+if (!string.IsNullOrWhiteSpace(redisConnection))
+{
+    builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(
+        _ => StackExchange.Redis.ConnectionMultiplexer.Connect(redisConnection));
+    builder.Services.AddSingleton<Tadka.Api.Infrastructure.Caching.ICacheService, Tadka.Api.Infrastructure.Caching.RedisCacheService>();
+    builder.Services.AddSingleton<Tadka.Api.Infrastructure.Realtime.IOrderTrackingBus, Tadka.Api.Infrastructure.Realtime.RedisOrderTrackingBus>();
+}
+else
+{
+    builder.Services.AddSingleton<Tadka.Api.Infrastructure.Caching.ICacheService, Tadka.Api.Infrastructure.Caching.NullCacheService>();
+    builder.Services.AddSingleton<Tadka.Api.Infrastructure.Realtime.IOrderTrackingBus, Tadka.Api.Infrastructure.Realtime.NullOrderTrackingBus>();
+}
+
 var app = builder.Build();
 
 // Automatically apply migrations on startup (great for cohort local dev)

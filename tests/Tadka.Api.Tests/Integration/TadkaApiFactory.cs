@@ -22,6 +22,9 @@ public class TadkaApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         // tests don't run real streaming replication, so reads and writes share one DB here.
         builder.UseSetting("ConnectionStrings:TadkaDb", _postgres.GetConnectionString());
         builder.UseSetting("ConnectionStrings:TadkaDbReplica", _postgres.GetConnectionString());
+        // No Redis in tests → the app uses the no-op cache (ADR-018) and live tracking returns 503.
+        // Keeps the suite Redis-free and deterministic; cache/SSE are exercised by the live demo.
+        builder.UseSetting("ConnectionStrings:Redis", "");
         builder.UseEnvironment("Development");
     }
 

@@ -1,7 +1,7 @@
 # Tadka - Docker Compose
 # Phase 0: PostgreSQL only
 # Day 5: + PostgreSQL streaming read replica (ADR-016)
-# Day 6: Add Redis
+# Day 6: + Redis (cache-aside + stampede lock + live-tracking pub/sub backplane — ADR-018/019/020)
 # Day 8: Add Kafka + Zookeeper (first service extraction)
 # Day 13: Add Prometheus + Grafana
 
@@ -60,6 +60,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    restart: unless-stopped
+
+  # Redis (Day 6) — menu cache (cache-aside + single-flight lock) and the live-tracking
+  # pub/sub backplane. Cache is disposable, so no persistent volume.
+  redis:
+    image: redis:7-alpine
+    container_name: tadka-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
     restart: unless-stopped
 
 volumes:
