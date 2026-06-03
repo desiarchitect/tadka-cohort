@@ -25,6 +25,11 @@ public class TadkaApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         // No Redis in tests → the app uses the no-op cache (ADR-018) and live tracking returns 503.
         // Keeps the suite Redis-free and deterministic; cache/SSE are exercised by the live demo.
         builder.UseSetting("ConnectionStrings:Redis", "");
+        // Payment OFF for the order-flow suite: these tests pin Day-4 order semantics (idempotency,
+        // xmin concurrency, the state machine). Async payment would auto-confirm orders in the
+        // background and race those assertions. The Payment module has its OWN tests
+        // (PaymentModuleIntegrationTests) that drive PaymentService deterministically.
+        builder.UseSetting("Payment:Mode", "Off");
         builder.UseEnvironment("Development");
     }
 

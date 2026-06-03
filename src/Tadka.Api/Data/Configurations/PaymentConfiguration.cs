@@ -14,8 +14,13 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.Property(p => p.Id).HasDefaultValueSql("gen_random_uuid()");
 
         builder.Property(p => p.OrderId).IsRequired();
+        // One payment per order — the hard guard behind the idempotent processor (ADR-023):
+        // a redelivered OrderPlaced cannot insert a second payment row, so it cannot double-charge.
+        builder.HasIndex(p => p.OrderId).IsUnique();
+
         builder.Property(p => p.Method).IsRequired().HasMaxLength(20);
         builder.Property(p => p.GatewayReference).HasMaxLength(200);
+        builder.Property(p => p.FailureReason).HasMaxLength(500);
 
         builder.Property(p => p.Status)
             .HasConversion<string>()

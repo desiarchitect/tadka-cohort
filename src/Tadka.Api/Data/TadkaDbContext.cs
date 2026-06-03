@@ -1,7 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Tadka.Api.Data.Configurations;
 using Tadka.Api.Domain.Delivery;
 using Tadka.Api.Domain.Orders;
-using Tadka.Api.Domain.Payments;
 using Tadka.Api.Domain.Restaurants;
 using Tadka.Api.Domain.Users;
 
@@ -36,12 +36,17 @@ public class TadkaDbContext : DbContext
     public DbSet<User> Users => Set<User>();
     public DbSet<UserAddress> UserAddresses => Set<UserAddress>();
 
-    // Payment domain
-    public DbSet<Payment> Payments => Set<Payment>();
+    // NOTE: Payment is NOT here. As of Day 7 (ADR-022) it lives in its own module behind
+    // PaymentDbContext (the `payment` schema, its own migration history). The core context has zero
+    // knowledge of payments — that decoupling is what Day 8 extracts into a separate service.
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema("ordering");
-        modelBuilder.ApplyConfigurationsFromAssembly(typeof(TadkaDbContext).Assembly);
+        // Apply every configuration in the assembly EXCEPT the Payment module's — that one belongs to
+        // PaymentDbContext alone, so the core model never re-acquires the Payment entity (ADR-022).
+        modelBuilder.ApplyConfigurationsFromAssembly(
+            typeof(TadkaDbContext).Assembly,
+            t => t != typeof(PaymentConfiguration));
     }
 }

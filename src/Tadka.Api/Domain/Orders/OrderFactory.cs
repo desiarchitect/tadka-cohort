@@ -48,7 +48,9 @@ public class OrderFactory
             CreatedAt = DateTime.UtcNow
         };
 
-        order.Raise(new OrderPlacedEvent(order.Id, order.CustomerId, order.RestaurantId));
+        order.Raise(new OrderPlacedEvent(
+            order.Id, order.CustomerId, order.RestaurantId,
+            order.TotalAmount.Amount, order.TotalAmount.Currency));
 
         return Result.Success(order);
     }

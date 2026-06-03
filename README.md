@@ -6,7 +6,7 @@ Tadka starts as a .NET 10 monolith and evolves into **4 services + an API gatewa
 
 ## 🏃 Run it yourself — Student Runbooks
 
-**New here? Start with [`docs/runbooks/`](docs/runbooks/README.md)** — a copy-paste guide **per day (Day 1 → Day 6)**: how to start the app and infra, every command to run, the API requests to try (with expected responses), and how to verify that day's demo and code actually work. Each day is a git branch (`git checkout day-0N`); the runbooks live on the latest branch (`day-06`).
+**New here? Start with [`docs/runbooks/`](docs/runbooks/README.md)** — a copy-paste guide **per day (Day 1 → Day 7)**: how to start the app and infra, every command to run, the API requests to try (with expected responses), and how to verify that day's demo and code actually work. Each day is a git branch (`git checkout day-0N`); the runbooks live on the latest branch (`day-07`).
 
 ## Architecture Evolution
 
@@ -31,7 +31,9 @@ Tadka starts as a .NET 10 monolith and evolves into **4 services + an API gatewa
 - **Apache Kafka** — Event streaming (from Week 5)
 - **YARP** — API Gateway (from Week 5)
 - **Docker** — Local infrastructure (Postgres; + read replica from Week 3; + Redis from Week 3)
-- **EF Core** — ORM with code-first migrations
+- **EF Core** — ORM with code-first migrations (per-module DbContext from Week 4)
+- **MediatR** — in-process events / CQRS-lite (from Week 4)
+- **Polly** — resilience: timeout + bulkhead now (Week 4), retries + circuit breaker in Week 7
 - **xUnit + Testcontainers** — Unit + integration tests (real PostgreSQL)
 - **k6** — Load testing (from Week 3; capstone load test in Week 8)
 - **OpenTelemetry + Grafana/Tempo** — Tracing, metrics, logs (from Week 7)
@@ -98,8 +100,8 @@ tadka/
 Each teaching day is a **branch** — check it out and follow its runbook in [`docs/runbooks/`](docs/runbooks/README.md):
 
 ```bash
-git checkout day-06      # the latest state (also where the runbooks live)
-git checkout day-03      # …or any earlier day: day-01 … day-06
+git checkout day-07      # the latest state (also where the runbooks live)
+git checkout day-03      # …or any earlier day: day-01 … day-07
 ```
 
 | Branch | Day | State |
@@ -110,8 +112,9 @@ git checkout day-03      # …or any earlier day: day-01 … day-06
 | `day-04` | 4 | Hardening: idempotency, optimistic concurrency (409), domain events, integration tests |
 | `day-05` | 5 | Indexes + connection pool + streaming read replica (read/write split) |
 | `day-06` | 6 | Redis cache-aside + stampede lock + SSE live-tracking backplane |
+| `day-07` | 7 | Payment brownout → Polly (timeout + bulkhead), modular monolith + MediatR, async payment (CQRS-lite) |
 
-Days 7–16 (modular monolith → first extraction → **4 services + gateway** → production) land as the cohort progresses. Early **legacy** snapshot tags (`v0.0-scaffold`, `v1.x-monolith-*`, `v2.x-db-and-cache` / `-read-replicas`) predate the day-by-day rebuild and are kept only for reference.
+Days 8–16 (first extraction → **4 services + gateway** → production) land as the cohort progresses. Early **legacy** snapshot tags (`v0.0-scaffold`, `v1.x-monolith-*`, `v2.x-db-and-cache` / `-read-replicas`) predate the day-by-day rebuild and are kept only for reference.
 
 ## Architecture Decision Records
 

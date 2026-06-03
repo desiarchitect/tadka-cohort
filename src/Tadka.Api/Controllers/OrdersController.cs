@@ -1,4 +1,5 @@
 using FluentValidation;
+using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Tadka.Api.Contracts;
@@ -20,14 +21,14 @@ public class OrdersController(
     IOrderRepository orderRepository,
     OrderFactory orderFactory,
     IIdempotencyStore idempotencyStore,
-    IDomainEventDispatcher eventDispatcher,
+    IMediator mediator,
     TadkaReadDbContext readDb,
     TadkaDbContext db) : ControllerBase
 {
     private readonly IOrderRepository _orderRepository = orderRepository;
     private readonly OrderFactory _orderFactory = orderFactory;
     private readonly IIdempotencyStore _idempotencyStore = idempotencyStore;
-    private readonly IDomainEventDispatcher _eventDispatcher = eventDispatcher;
+    private readonly IMediator _mediator = mediator; // ADR-022: publishes domain events; Payment reacts to OrderPlaced
     private readonly TadkaReadDbContext _read = readDb; // replica — order history (ADR-016)
     private readonly TadkaDbContext _db = db; // monolith-phase lookup of restaurant + menu for server-side pricing
 
@@ -89,14 +90,13 @@ public class OrdersController(
 
         await _orderRepository.SaveChangesAsync();
 
-        // Dispatch domain events AFTER the state is committed (ADR-013): a failed side-effect
-        // (e.g. notification) must not roll back a persisted order.
-        await _eventDispatcher.DispatchAsync(order.DomainEvents);
-        order.ClearDomainEvents();
+        // Publish domain events AFTER the state is committed (ADR-013): a failed side-effect must
+        // not roll back a persisted order. OrderPlaced fans out via MediatR (ADR-022) — the Payment
+        // module reacts to it and charges the card OFF the request path (ADR-023). Ordering does not
+        // know Payment exists; it just announces "an order was placed." That decoupling is the whole
+        // Week-4 lesson: a slow payment gateway can no longer stall order creation.
+        await PublishEventsAsync(order);
 
-        // Payment is intentionally NOT processed here yet (see Day 7). Doing it
-        // synchronously inside order creation would couple ordering to a slow
-        // external gateway — the exact failure we study and fix in Week 4.
         return CreatedAtAction(nameof(GetById), new { id = order.Id }, MapToResponse(order));
     }
 
@@ -158,8 +158,7 @@ public class OrdersController(
         // DbUpdateConcurrencyException (xmin mismatch) → 409 via the middleware (ADR-012).
         await _orderRepository.SaveChangesAsync();
 
-        await _eventDispatcher.DispatchAsync(order.DomainEvents);
-        order.ClearDomainEvents();
+        await PublishEventsAsync(order);
         return NoContent();
     }
 
@@ -178,6 +177,18 @@ public class OrdersController(
 
         await _orderRepository.SaveChangesAsync();
         return NoContent();
+    }
+
+    // Publish each domain event the aggregate raised, then clear them. MediatR fans each out to
+    // every INotificationHandler<T> (ADR-022). Called only AFTER SaveChanges (ADR-013).
+    // Snapshot-then-clear BEFORE publishing: a handler may (synchronously, ADR-023 sync mode) trigger a
+    // chain that mutates this same aggregate's event list — iterating a live collection would throw.
+    private async Task PublishEventsAsync(Order order)
+    {
+        var events = order.DomainEvents.ToList();
+        order.ClearDomainEvents();
+        foreach (var domainEvent in events)
+            await _mediator.Publish(domainEvent);
     }
 
     private static OrderResponse MapToResponse(Order o) => new(
