@@ -77,9 +77,11 @@ export default function () {
     //    the write path; otherwise this block is skipped (see Break Kit doc).
     const customerId = __ENV.ORDER_CUSTOMER_ID;
     if (customerId) {
+      // Order against Meghana specifically — its menu item id below must belong to the
+      // restaurant we order from (server-side pricing rejects an item not on the menu → 422).
       const payload = JSON.stringify({
         customerId,
-        restaurantId,
+        restaurantId: 'a1b2c3d4-0001-4000-8000-000000000001',
         items: [{ menuItemId: 'b1b2c3d4-0001-4000-8000-000000000001', quantity: 2 }],
         deliveryAddress: {
           line1: 'Flat 402, Green Apartments',
