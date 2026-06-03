@@ -10,31 +10,32 @@ Tadka starts as a .NET 10 monolith and evolves into **4 services + an API gatewa
 
 ## Architecture Evolution
 
-| Week | Architecture | What Changes |
-|------|-------------|-------------|
-| 1 | Monolith | Single API + PostgreSQL. CRUD, health check, domain folders. |
-| 2 | Monolith + Caching | Redis for menu/restaurant caching. Read replicas for PostgreSQL. |
-| 3 | Monolith + Async | Kafka for order events. Async processing for non-critical paths. |
-| 4 | Modular Monolith → First Extraction | CQRS pattern. Order service extracted as first microservice. |
-| 5 | 2 Services | API Gateway (YARP). Distributed transactions (Saga). |
-| 6 | 3 Services | Observability (OpenTelemetry). Circuit breakers. Chaos engineering. |
-| 7 | 4 Services | CDN. Rate limiting. Capacity planning with k6 load tests. |
-| 8 | 5 Services | Final architecture. Real-world teardowns. Production readiness. |
+| Week | Phase / architecture | What changes |
+|------|----------------------|--------------|
+| 1 | Monolith — foundation & domain modeling | One API + PostgreSQL, schema-per-domain, `/health`, the domain model, first ADRs (monolith-first). |
+| 2 | Monolith — API, state machine & hardening | Full REST API (`/api/v1`), server-side pricing, the order state machine, RFC 7807 errors; idempotency, optimistic concurrency, in-process domain events. |
+| 3 | Monolith — architect for scale | Indexes + `EXPLAIN`, connection pooling, a streaming **read replica** (read/write split); **Redis** cache-aside + stampede lock + CAP; SSE live tracking over a Redis backplane. |
+| 4 | Modular monolith → first extraction | Payment-gateway brownout → modular monolith, bulkhead/timeouts, CQRS; **extract Payment** (HTTP bridge — why HTTP before Kafka). |
+| 5 | Distributed patterns + edge | **Kafka** events, Saga, idempotency, Outbox, DLQ; **API gateway** (YARP), auth (JWT/OAuth2), authz (RBAC/ABAC), OWASP. |
+| 6 | 4 services + gateway, on the cloud | Extract **Delivery** + **Restaurant** → the final **4 services + an API gateway**; Docker, AWS ECS, Terraform, CI/CD. |
+| 7 | Production — observability & resilience | OpenTelemetry logs/metrics/traces + SLOs; circuit breakers (Polly), retries/backoff, bulkhead, load shedding, chaos. |
+| 8 | Production — case studies & portfolio | Swiggy/Zomato/Razorpay teardowns; k6 load test + cost modeling; partitioning → sharding; final architecture doc + interview pack. |
+
+> **End state: 4 services — Payment, Delivery, Restaurant, and the Ordering/Identity core — plus an API gateway. Never "5 microservices."** The whole point is that you can name the exact failure that earned each one.
 
 ## Tech Stack
 
 - **.NET 10** — Web API with Controllers
 - **PostgreSQL 16** — Primary database
-- **Redis 7** — Caching (from Week 2)
-- **Apache Kafka** — Event streaming (from Week 3)
+- **Redis 7** — Caching + live-tracking pub/sub backplane (from Week 3)
+- **Apache Kafka** — Event streaming (from Week 5)
 - **YARP** — API Gateway (from Week 5)
-- **Docker** — Local infrastructure
+- **Docker** — Local infrastructure (Postgres; + read replica from Week 3; + Redis from Week 3)
 - **EF Core** — ORM with code-first migrations
-- **xUnit + FluentAssertions + NSubstitute** — Testing
-- **Testcontainers** — Integration tests
-- **OpenTelemetry** — Distributed tracing and metrics (from Week 6)
-- **k6** — Load testing (from Week 7)
-- **Terraform** — Infrastructure as Code (from Week 8)
+- **xUnit + Testcontainers** — Unit + integration tests (real PostgreSQL)
+- **k6** — Load testing (from Week 3; capstone load test in Week 8)
+- **OpenTelemetry + Grafana/Tempo** — Tracing, metrics, logs (from Week 7)
+- **Terraform + AWS ECS** — Infrastructure as Code + deployment (from Week 6)
 
 ## Getting Started
 
@@ -56,9 +57,11 @@ docker compose ps
 # Run the API
 dotnet run --project src/Tadka.Api
 
-# Check health
-curl http://localhost:5000/health
+# Check health (http 5224, https 7036; API docs at https://localhost:7036/scalar/v2)
+curl http://localhost:5224/health
 ```
+
+> For a full, day-by-day walkthrough (every command + API request + how to verify the demo), follow [`docs/runbooks/`](docs/runbooks/README.md).
 
 ### Running Tests
 
@@ -90,32 +93,25 @@ tadka/
 └── k6/                      # Load test scripts (from Week 7)
 ```
 
-## Releases
+## Per-day code states
 
-Each release is a clean, runnable snapshot of Tadka at the end of that week. You can download a ZIP from GitHub Releases or check out the tag locally.
+Each teaching day is a **branch** — check it out and follow its runbook in [`docs/runbooks/`](docs/runbooks/README.md):
 
 ```bash
-# See all release tags
-git fetch --tags
-git tag -l
-
-# Check out a specific week's state (read-only)
-git checkout v1.0-monolith-crud
-
-# Return to your own work
-git checkout main
+git checkout day-06      # the latest state (also where the runbooks live)
+git checkout day-03      # …or any earlier day: day-01 … day-06
 ```
 
-| Tag | After | What's in it |
-|-----|-------|-------------|
-| `v0.0-scaffold` | Phase 0 | Empty scaffold, `/health` endpoint, domain folder structure |
-| `v1.0-monolith-crud` | Week 2 | Restaurant + menu + order APIs, ADRs, schema-per-domain |
-| `v2.0-db-and-cache` | Week 3 | PostgreSQL indexes, EXPLAIN ANALYZE, Redis Cache-Aside |
-| `v3.0-modular-monolith` | Week 4 | MediatR domain events, CQRS, Payment service extracted, Kafka introduced |
-| `v4.0-distributed` | Week 5 | Delivery service extracted, YARP gateway, JWT across services, Saga pattern |
-| `v5.0-production-deploy` | Week 6 | Restaurant extracted, Docker multi-stage, ECS Fargate, Terraform, CI/CD |
-| `v6.0-observability` | Week 7 | OpenTelemetry, Grafana dashboards, Tempo tracing, Polly resilience, chaos |
-| `v7.0-final` | Week 8 | k6 load tests, cost optimization, architecture documentation |
+| Branch | Day | State |
+|--------|-----|-------|
+| `day-01` | 1 | Scaffold + `/health` |
+| `day-02` | 2 | Domain model + schema-per-domain (5 schemas) |
+| `day-03` | 3 | Full REST API `/api/v1` (14 endpoints) + order state machine |
+| `day-04` | 4 | Hardening: idempotency, optimistic concurrency (409), domain events, integration tests |
+| `day-05` | 5 | Indexes + connection pool + streaming read replica (read/write split) |
+| `day-06` | 6 | Redis cache-aside + stampede lock + SSE live-tracking backplane |
+
+Days 7–16 (modular monolith → first extraction → **4 services + gateway** → production) land as the cohort progresses. Early **legacy** snapshot tags (`v0.0-scaffold`, `v1.x-monolith-*`, `v2.x-db-and-cache` / `-read-replicas`) predate the day-by-day rebuild and are kept only for reference.
 
 ## Architecture Decision Records
 
