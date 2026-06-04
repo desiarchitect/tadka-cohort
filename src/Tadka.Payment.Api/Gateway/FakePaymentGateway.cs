@@ -1,13 +1,13 @@
 using Microsoft.Extensions.Options;
-using Tadka.Api.Domain.ValueObjects;
+using Tadka.Payment.Api.Domain;
 
-namespace Tadka.Api.Modules.Payments;
+namespace Tadka.Payment.Api.Gateway;
 
 /// <summary>
-/// A stand-in for a real payment provider whose behaviour we can dial from config — the instrument
-/// that lets the cohort *cause* the brownout on demand. <c>Fast</c> ≈ a healthy provider; <c>Slow</c>
-/// ≈ a provider having an incident (8 s); <c>Failing</c> ≈ a decline. The delays honour the
-/// cancellation token, so Polly's timeout (ADR-021) can actually abandon a slow charge.
+/// A stand-in for a real payment provider whose behaviour we dial from config — the instrument that lets
+/// the cohort *cause* a slow/declining provider on demand. <c>Fast</c> ≈ healthy; <c>Slow</c> ≈ an incident
+/// (8 s); <c>Failing</c> ≈ a decline. Delays honour the cancellation token so Polly's timeout (ADR-021) can
+/// abandon a slow charge.
 /// </summary>
 public sealed class FakePaymentGateway(IOptionsMonitor<PaymentOptions> options, ILogger<FakePaymentGateway> logger)
     : IPaymentGateway

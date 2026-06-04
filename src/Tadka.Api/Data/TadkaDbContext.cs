@@ -43,10 +43,8 @@ public class TadkaDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema("ordering");
-        // Apply every configuration in the assembly EXCEPT the Payment module's — that one belongs to
-        // PaymentDbContext alone, so the core model never re-acquires the Payment entity (ADR-022).
-        modelBuilder.ApplyConfigurationsFromAssembly(
-            typeof(TadkaDbContext).Assembly,
-            t => t != typeof(PaymentConfiguration));
+        // The core context owns orders/restaurants/delivery/identity. Payment was extracted into its own
+        // service on Day 8 (ADR-024) — there is no Payment configuration left in this assembly to exclude.
+        modelBuilder.ApplyConfigurationsFromAssembly(typeof(TadkaDbContext).Assembly);
     }
 }

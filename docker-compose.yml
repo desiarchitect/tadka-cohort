@@ -76,6 +76,28 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Payment service database (Day 8) — database-per-service (ADR-026). The extracted Tadka.Payment.Api
+  # owns this PostgreSQL; nothing else connects to it. Kill it and the monolith (its own DB) is unaffected.
+  # The apps still run via `dotnet run` (no Dockerfile); compose only provides the infrastructure.
+  payment-db:
+    image: postgres:16
+    container_name: tadka-payment-db
+    ports:
+      - "5434:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tadka}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tadka_local}
+      POSTGRES_DB: ${PAYMENT_DB:-tadka_payment}
+    volumes:
+      - pgdata_payment:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tadka}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
 volumes:
   pgdata:
   pgdata_replica:
+  pgdata_payment:

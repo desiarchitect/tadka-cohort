@@ -1,8 +1,10 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/Tadka.Api/Tadka.Api.csproj" />
+    <Project Path="src/Tadka.Payment.Api/Tadka.Payment.Api.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Tadka.Api.Tests/Tadka.Api.Tests.csproj" />
+    <Project Path="tests/Tadka.Payment.Api.Tests/Tadka.Payment.Api.Tests.csproj" />
   </Folder>
 </Solution>

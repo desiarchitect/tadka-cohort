@@ -2,18 +2,21 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
-using Tadka.Api.Data;
+using Tadka.Payment.Api.Data;
 
 #nullable disable
 
-namespace Tadka.Api.Migrations.Payment
+namespace Tadka.Payment.Api.Migrations
 {
     [DbContext(typeof(PaymentDbContext))]
-    partial class PaymentDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260604025711_InitPaymentDb")]
+    partial class InitPaymentDb
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -23,7 +26,7 @@ namespace Tadka.Api.Migrations.Payment
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("Tadka.Api.Domain.Payments.Payment", b =>
+            modelBuilder.Entity("Tadka.Payment.Api.Domain.Payment", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -69,9 +72,9 @@ namespace Tadka.Api.Migrations.Payment
                     b.ToTable("payments", "payment");
                 });
 
-            modelBuilder.Entity("Tadka.Api.Domain.Payments.Payment", b =>
+            modelBuilder.Entity("Tadka.Payment.Api.Domain.Payment", b =>
                 {
-                    b.OwnsOne("Tadka.Api.Domain.ValueObjects.Money", "Amount", b1 =>
+                    b.OwnsOne("Tadka.Payment.Api.Domain.Money", "Amount", b1 =>
                         {
                             b1.Property<Guid>("PaymentId")
                                 .ValueGeneratedOnAdd()

@@ -1,0 +1,65 @@
+using Microsoft.EntityFrameworkCore;
+using Scalar.AspNetCore;
+using Tadka.Payment.Api;
+using Tadka.Payment.Api.Contracts;
+using Tadka.Payment.Api.Data;
+using Tadka.Payment.Api.Domain;
+using Tadka.Payment.Api.Gateway;
+using Tadka.Payment.Api.Resilience;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddOpenApi();
+builder.Services.Configure<PaymentOptions>(builder.Configuration.GetSection(PaymentOptions.SectionName));
+
+// Database-per-service (ADR-026): the Payment service owns its OWN PostgreSQL.
+builder.Services.AddDbContext<PaymentDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("PaymentDb")));
+
+builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
+builder.Services.AddSingleton<PaymentResiliencePipeline>();
+builder.Services.AddScoped<PaymentService>();
+
+var app = builder.Build();
+
+// The service owns its data: it migrates its OWN database on startup. If THIS database is down, only the
+// Payment service fails to start — the monolith (its own DB) is unaffected (ADR-024/026).
+using (var scope = app.Services.CreateScope())
+{
+    scope.ServiceProvider.GetRequiredService<PaymentDbContext>().Database.Migrate();
+}
+
+if (app.Environment.IsDevelopment())
+{
+    app.MapOpenApi();
+    app.MapScalarApiReference(options =>
+    {
+        options.Title = "Tadka Payment Service";
+        options.Theme = ScalarTheme.DeepSpace;
+    });
+}
+
+app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "payment" }));
+
+// POST /payments/charge — idempotent by orderId (ADR-025). A decline/timeout is a BUSINESS outcome
+// (HTTP 200 with Status=Failed); only a DOWN service makes the caller's HTTP call throw.
+app.MapPost("/payments/charge", async (ChargeRequest request, PaymentService payments, CancellationToken ct) =>
+{
+    var outcome = await payments.ChargeAsync(
+        request.OrderId, new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!), ct);
+    return Results.Ok(new ChargeResponse(request.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason));
+});
+
+// GET /payments/{orderId} — query a payment's status (request/reply stays HTTP even after Day-9 Kafka).
+app.MapGet("/payments/{orderId:guid}", async (Guid orderId, PaymentDbContext db) =>
+{
+    var p = await db.Payments.AsNoTracking().FirstOrDefaultAsync(x => x.OrderId == orderId);
+    return p is null
+        ? Results.NotFound()
+        : Results.Ok(new ChargeResponse(p.OrderId, p.Status.ToString(), p.GatewayReference, p.FailureReason));
+});
+
+app.Run();
+
+// Exposed so the integration test project can boot the real service via WebApplicationFactory<Program>.
+public partial class Program { }

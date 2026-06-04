@@ -3,10 +3,10 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace Tadka.Api.Migrations.Payment
+namespace Tadka.Payment.Api.Migrations
 {
     /// <inheritdoc />
-    public partial class InitPaymentSchema : Migration
+    public partial class InitPaymentDb : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)

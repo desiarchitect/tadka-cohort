@@ -48,33 +48,34 @@ else
     builder.Services.AddSingleton<Tadka.Api.Infrastructure.Realtime.IOrderTrackingBus, Tadka.Api.Infrastructure.Realtime.NullOrderTrackingBus>();
 }
 
-// ── Payment module (ADR-021/022/023) ───────────────────────────────────────────────────────────
-// Its own DbContext + schema + migration history; today it shares the same physical Postgres (logical
-// separation now, physical split at Day-8 extraction). Ordering has zero references to any of this.
-builder.Services.Configure<Tadka.Api.Modules.Payments.PaymentOptions>(
-    builder.Configuration.GetSection(Tadka.Api.Modules.Payments.PaymentOptions.SectionName));
+// ── Payment, now a SEPARATE service (ADR-024/025/026) ───────────────────────────────────────────
+// Day 8: the Payment module was extracted into Tadka.Payment.Api (own process + own database). The
+// monolith no longer contains the gateway, PaymentService, or PaymentDbContext — it keeps only the async
+// orchestration (queue + background processor) and a typed HTTP client to the Payment service, wrapped in
+// the REUSED Day-7 Polly pipeline (timeout + bulkhead, now around the network hop). POST /orders is still
+// decoupled from payment via the in-process queue, so intake stays in milliseconds (ADR-023, preserved).
+builder.Services.Configure<Tadka.Api.Modules.Payments.PaymentClientOptions>(
+    builder.Configuration.GetSection(Tadka.Api.Modules.Payments.PaymentClientOptions.SectionName));
 
-builder.Services.AddDbContext<PaymentDbContext>(options =>
-    options.UseNpgsql(
-        builder.Configuration.GetConnectionString("TadkaDb"),
-        // The module owns its OWN migration history, in its OWN schema — independent of the core
-        // context's history. This is what lets Payment's schema evolve on its own (ADR-022).
-        npgsql => npgsql.MigrationsHistoryTable("__EFMigrationsHistory", "payment")));
-
-builder.Services.AddSingleton<Tadka.Api.Modules.Payments.IPaymentGateway, Tadka.Api.Modules.Payments.FakePaymentGateway>();
-builder.Services.AddSingleton<Tadka.Api.Infrastructure.Resilience.PaymentResiliencePipeline>();
+builder.Services.AddSingleton<Tadka.Api.Modules.Payments.PaymentClientResilience>();
 builder.Services.AddSingleton<Tadka.Api.Modules.Payments.PaymentWorkChannel>();
-builder.Services.AddScoped<Tadka.Api.Modules.Payments.PaymentService>();
 builder.Services.AddHostedService<Tadka.Api.Modules.Payments.PaymentProcessor>();
+
+builder.Services.AddHttpClient<Tadka.Api.Modules.Payments.IPaymentClient, Tadka.Api.Modules.Payments.HttpPaymentClient>((sp, client) =>
+{
+    var url = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Tadka.Api.Modules.Payments.PaymentClientOptions>>().Value.ServiceUrl;
+    if (!string.IsNullOrWhiteSpace(url))
+        client.BaseAddress = new Uri(url);
+});
 
 var app = builder.Build();
 
-// Automatically apply migrations on startup (great for cohort local dev). Each context owns its own
-// migration history, so we migrate both — core first, then the Payment module's schema.
+// Automatically apply migrations on startup (great for cohort local dev). The monolith now owns ONLY the
+// core schema — the Payment service migrates its OWN database in its OWN process (ADR-026). A broken
+// payment DB can no longer stop the monolith from booting.
 using (var scope = app.Services.CreateScope())
 {
     scope.ServiceProvider.GetRequiredService<TadkaDbContext>().Database.Migrate();
-    scope.ServiceProvider.GetRequiredService<PaymentDbContext>().Database.Migrate();
 }
 
 
