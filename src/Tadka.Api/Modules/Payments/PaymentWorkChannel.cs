@@ -11,6 +11,10 @@ public sealed record PaymentWorkItem(Guid OrderId, Money Amount);
 /// — bounded so a payment backlog applies back-pressure instead of growing without limit. This is the
 /// right-sized step today; its durable successor is Kafka + the Outbox pattern (Week 5), so a crash
 /// can't lose a queued payment. Registered as a singleton: one queue, many writers, one reader.
+///
+/// <para><b>Hand-rolled for learning.</b> In production this is what <b>MassTransit / NServiceBus</b>
+/// give you out of the box (queue + retries + outbox + DLQ). We expose the wiring so you see the
+/// mechanics; reach for the library at work.</para>
 /// </summary>
 public sealed class PaymentWorkChannel
 {

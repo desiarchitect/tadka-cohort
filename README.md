@@ -4,6 +4,8 @@ A food delivery platform built as a teaching project for the [Desi Architect](ht
 
 Tadka starts as a .NET 10 monolith and evolves into **4 services + an API gateway** over 8 weeks. Every architectural decision is earned, not assumed.
 
+> **This is a teaching repo.** The code is *deliberately* over-annotated with inline ADR references and rationale, and several things are hand-rolled (the background payment queue, the Polly pipeline, the HTTP client, object mapping) **to show the mechanics**. Production code should be cleaner, and you'd reach for libraries — **MassTransit/NServiceBus** (messaging + outbox), **Microsoft.Extensions.Http.Resilience** (Polly), **Mapster/AutoMapper** (mapping). We expose the wiring for learning; we name the library for Monday morning.
+
 ## 🏃 Run it yourself — Student Runbooks
 
 **New here? Start with [`docs/runbooks/`](docs/runbooks/README.md)** — a copy-paste guide **per day (Day 1 → Day 7)**: how to start the app and infra, every command to run, the API requests to try (with expected responses), and how to verify that day's demo and code actually work. Each day is a git branch (`git checkout day-0N`); the runbooks live on the latest branch (`day-07`).

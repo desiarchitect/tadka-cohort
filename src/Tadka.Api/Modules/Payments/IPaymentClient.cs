@@ -23,6 +23,10 @@ public interface IPaymentClient
 /// pipeline (ADR-025). A DOWN service / a fired timeout surfaces as <c>null</c> — and because the queued
 /// item is already consumed, that charge is lost and the order stays pending. We leave that gap visible:
 /// it's exactly what Kafka + the Outbox pattern fix on Day 9.
+///
+/// <para><b>Hand-rolled for learning.</b> In production: register HTTP resilience declaratively via
+/// <b>Microsoft.Extensions.Http.Resilience</b> (<c>AddStandardResilienceHandler</c>, Polly under the hood),
+/// and prefer durable messaging (<b>MassTransit</b>) over a synchronous call for commands like this.</para>
 /// </summary>
 public sealed class HttpPaymentClient(
     HttpClient http,

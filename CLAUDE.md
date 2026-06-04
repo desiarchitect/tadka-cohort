@@ -5,6 +5,11 @@ The .NET 10 codebase students clone and run. Evolves monolith → 4 services + g
 ## Stack
 .NET 10 (Controllers) · PostgreSQL 16 · EF Core (code-first) · xUnit + FluentAssertions + NSubstitute + Testcontainers. Redis/Kafka/YARP/OTEL/Polly/Terraform enter in later weeks.
 
+## This is a TEACHING repo (read before judging the code)
+- **Deliberately over-annotated.** Inline `// (ADR-NNN)` references and rationale paragraphs exist so a student *reading the repo* learns the *why*. Production code should be cleaner — the "why" belongs in ADRs/PRs, not inline. Don't strip the ADR refs (they're the cohort's spine); just know this style is a teaching choice, not a model for prod.
+- **Hand-rolled on purpose.** We hand-roll the channel/background processor, the Polly pipeline, the HTTP client, the after-commit event dispatch, and response mapping to *show the mechanics*. **Production libraries (what to use at work)** — tell students this explicitly: messaging + outbox/inbox → **MassTransit / NServiceBus**; HTTP resilience → **Microsoft.Extensions.Http.Resilience** (Polly); object mapping → **Mapster / AutoMapper**; "make dispatch impossible to forget" → an EF **`SaveChanges` interceptor**. We expose the wiring for learning; we name the library for Monday morning.
+- **Boundaries are enforced by test, not just convention:** `tests/Tadka.Api.Tests/Architecture/BoundaryTests.cs` fails the build on a cross-schema FK (ADR-008) or any Ordering→Payment reference (ADR-022/024).
+
 ## Commands (use the PowerShell tool — Bash/WSL can't see `D:`)
 ```
 dotnet build Tadka.slnx
