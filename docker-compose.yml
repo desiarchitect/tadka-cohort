@@ -97,6 +97,49 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Kafka (Day 9) — the async event backbone (ADR-027). Single-node KRaft (no Zookeeper).
+  # Two listeners: HOST (localhost:9092) for the apps you run via `dotnet run`, and DOCKER
+  # (kafka:29092) for in-network containers like the UI. Topics auto-create for cohort convenience.
+  kafka:
+    image: apache/kafka:3.8.0
+    container_name: tadka-kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9092,DOCKER://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,DOCKER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+    restart: unless-stopped
+
+  # Kafka UI (Day 9) — watch topics, partitions, consumer-group LAG live (the catch-up demo).
+  kafka-ui:
+    image: kafbat/kafka-ui:latest
+    container_name: tadka-kafka-ui
+    ports:
+      - "8090:8080"
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_CLUSTERS_0_NAME: tadka
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      DYNAMIC_CONFIG_ENABLED: "true"
+    restart: unless-stopped
+
 volumes:
   pgdata:
   pgdata_replica:

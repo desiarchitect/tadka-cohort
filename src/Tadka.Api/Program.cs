@@ -48,25 +48,25 @@ else
     builder.Services.AddSingleton<Tadka.Api.Infrastructure.Realtime.IOrderTrackingBus, Tadka.Api.Infrastructure.Realtime.NullOrderTrackingBus>();
 }
 
-// ── Payment, now a SEPARATE service (ADR-024/025/026) ───────────────────────────────────────────
-// Day 8: the Payment module was extracted into Tadka.Payment.Api (own process + own database). The
-// monolith no longer contains the gateway, PaymentService, or PaymentDbContext — it keeps only the async
-// orchestration (queue + background processor) and a typed HTTP client to the Payment service, wrapped in
-// the REUSED Day-7 Polly pipeline (timeout + bulkhead, now around the network hop). POST /orders is still
-// decoupled from payment via the in-process queue, so intake stays in milliseconds (ADR-023, preserved).
-builder.Services.Configure<Tadka.Api.Modules.Payments.PaymentClientOptions>(
-    builder.Configuration.GetSection(Tadka.Api.Modules.Payments.PaymentClientOptions.SectionName));
+// ── Payment over KAFKA, durable (ADR-027/028/029) ───────────────────────────────────────────────
+// Day 9: the Day-8 synchronous HTTP bridge is replaced by an async event backbone. Order creation writes
+// an `order-placed` row to the transactional Outbox (in the order's transaction); the OutboxRelay
+// publishes it to Kafka; the Payment service consumes it, charges, and publishes `payment-results`; the
+// PaymentResultsConsumer below converges the order (Saga). A down Payment service now means messages
+// WAIT, not lost charges. Kafka is OFF when no BootstrapServers are configured (tests / single-process dev):
+// the Outbox row is still written (harmless), but the relay + consumer don't start.
+builder.Services.Configure<Tadka.Api.Infrastructure.Messaging.KafkaOptions>(
+    builder.Configuration.GetSection(Tadka.Api.Infrastructure.Messaging.KafkaOptions.SectionName));
 
-builder.Services.AddSingleton<Tadka.Api.Modules.Payments.PaymentClientResilience>();
-builder.Services.AddSingleton<Tadka.Api.Modules.Payments.PaymentWorkChannel>();
-builder.Services.AddHostedService<Tadka.Api.Modules.Payments.PaymentProcessor>();
-
-builder.Services.AddHttpClient<Tadka.Api.Modules.Payments.IPaymentClient, Tadka.Api.Modules.Payments.HttpPaymentClient>((sp, client) =>
+var kafkaOptions = builder.Configuration
+    .GetSection(Tadka.Api.Infrastructure.Messaging.KafkaOptions.SectionName)
+    .Get<Tadka.Api.Infrastructure.Messaging.KafkaOptions>();
+if (kafkaOptions?.Enabled == true)
 {
-    var url = sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<Tadka.Api.Modules.Payments.PaymentClientOptions>>().Value.ServiceUrl;
-    if (!string.IsNullOrWhiteSpace(url))
-        client.BaseAddress = new Uri(url);
-});
+    builder.Services.AddSingleton<Tadka.Api.Infrastructure.Messaging.KafkaProducer>();
+    builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.OutboxRelay>();
+    builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.PaymentResultsConsumer>();
+}
 
 var app = builder.Build();
 

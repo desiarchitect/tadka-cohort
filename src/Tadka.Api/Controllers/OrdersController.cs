@@ -1,3 +1,4 @@
+using System.Text.Json;
 using FluentValidation;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
@@ -6,8 +7,10 @@ using Tadka.Api.Contracts;
 using Tadka.Api.Contracts.Orders;
 using Tadka.Api.Contracts.Restaurants;
 using Tadka.Api.Data;
+using Tadka.Api.Data.Messaging;
 using Tadka.Api.Data.Repositories;
 using Tadka.Api.Domain.Common;
+using Tadka.Api.Infrastructure.Messaging;
 using Tadka.Api.Domain.Orders;
 using Tadka.Api.Domain.Restaurants;
 using Tadka.Api.Domain.ValueObjects;
@@ -88,13 +91,22 @@ public class OrdersController(
         if (!string.IsNullOrWhiteSpace(idempotencyKey))
             _idempotencyStore.Record(idempotencyKey, order.Id);
 
+        // Transactional Outbox (ADR-028): stage the cross-service `order-placed` event on the SAME
+        // DbContext as the order, so it commits in the SAME transaction — the event can never be lost on
+        // a crash (no dual-write problem). The OutboxRelay (ADR-027) publishes it to Kafka; the Payment
+        // service consumes it and charges OFF the request path. POST /orders still returns in ms.
+        var placed = new OrderPlacedMessage(Guid.NewGuid(), order.Id, order.TotalAmount.Amount, order.TotalAmount.Currency);
+        _db.Set<OutboxMessage>().Add(new OutboxMessage
+        {
+            Topic = Topics.OrderPlaced,
+            Key = order.Id.ToString(),
+            Payload = JsonSerializer.Serialize(placed)
+        });
+
         await _orderRepository.SaveChangesAsync();
 
-        // Publish domain events AFTER the state is committed (ADR-013): a failed side-effect must
-        // not roll back a persisted order. OrderPlaced fans out via MediatR (ADR-022) — the Payment
-        // module reacts to it and charges the card OFF the request path (ADR-023). Ordering does not
-        // know Payment exists; it just announces "an order was placed." That decoupling is the whole
-        // Week-4 lesson: a slow payment gateway can no longer stall order creation.
+        // Publish in-process domain events AFTER commit (ADR-013): live-tracking/notification handlers.
+        // The cross-service payment flow now rides the Outbox above (Kafka), not an in-process handler.
         await PublishEventsAsync(order);
 
         return CreatedAtAction(nameof(GetById), new { id = order.Id }, MapToResponse(order));

@@ -55,8 +55,10 @@ public class BoundaryTests
         // The payment domain entity is owned by the Payment service now.
         Assert.Null(assembly.GetType("Tadka.Api.Domain.Payments.Payment"));
 
-        // What the monolith MAY keep is the client-side seam only (talks over the contract).
-        Assert.Contains("IPaymentClient", typeNames);
+        // Day 9: even the Day-8 HTTP client is gone — Ordering talks to Payment only via Kafka
+        // (Outbox → order-placed; payment-results → MediatR reaction). No direct payment client at all.
+        Assert.DoesNotContain("IPaymentClient", typeNames);
+        Assert.DoesNotContain("HttpPaymentClient", typeNames);
     }
 
     [Fact]

@@ -5,6 +5,7 @@ using Tadka.Payment.Api.Contracts;
 using Tadka.Payment.Api.Data;
 using Tadka.Payment.Api.Domain;
 using Tadka.Payment.Api.Gateway;
+using Tadka.Payment.Api.Messaging;
 using Tadka.Payment.Api.Resilience;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -19,6 +20,16 @@ builder.Services.AddDbContext<PaymentDbContext>(options =>
 builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
 builder.Services.AddSingleton<PaymentResiliencePipeline>();
 builder.Services.AddScoped<PaymentService>();
+
+// Kafka (ADR-027): consume `order-placed`, charge, publish `payment-results` (the Saga reply). OFF when
+// no BootstrapServers are configured (the HTTP charge endpoint + tests still work without a broker).
+builder.Services.Configure<KafkaOptions>(builder.Configuration.GetSection(KafkaOptions.SectionName));
+var kafkaOptions = builder.Configuration.GetSection(KafkaOptions.SectionName).Get<KafkaOptions>();
+if (kafkaOptions?.Enabled == true)
+{
+    builder.Services.AddSingleton<KafkaProducer>();
+    builder.Services.AddHostedService<OrderPlacedConsumer>();
+}
 
 var app = builder.Build();
 

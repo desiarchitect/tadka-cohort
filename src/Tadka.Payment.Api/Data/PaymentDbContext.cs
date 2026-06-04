@@ -13,11 +13,13 @@ namespace Tadka.Payment.Api.Data;
 public class PaymentDbContext(DbContextOptions<PaymentDbContext> options) : DbContext(options)
 {
     public DbSet<Domain.Payment> Payments => Set<Domain.Payment>();
+    public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.HasDefaultSchema("payment");
         modelBuilder.ApplyConfiguration(new PaymentConfiguration());
+        modelBuilder.ApplyConfiguration(new InboxMessageConfiguration());
     }
 }
 
