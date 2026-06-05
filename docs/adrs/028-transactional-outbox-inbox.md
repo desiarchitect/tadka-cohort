@@ -15,7 +15,8 @@ Kafka (ADR-027) decouples services in time, but it introduces two classic correc
 
 **Outbox on the producer, Inbox on the consumer.**
 
-- **Transactional Outbox (monolith):** when an order is placed, write the `order-placed` payload into an `outbox_messages` row **in the same database transaction as the order**. One commit, atomic — either both land or neither. A separate **OutboxRelay** `BackgroundService` polls unsent rows, publishes them to Kafka, and marks them sent (at-least-once: if it crashes after publish before marking, it republishes — the consumer's Inbox dedups). The event can never be lost because it's committed with the order.
+- **Transactional Outbox (monolith):** when an order is placed, write the `order-placed` payload into an `outbox_messages` row **in the same database transaction as the order**. One commit, atomic — either both land or neither. A separate **OutboxRelay** `BackgroundService` **claims** unsent rows, publishes them to Kafka, and marks them sent (at-least-once: if it crashes after publish before marking, it republishes — the consumer's Inbox dedups). The event can never be lost because it's committed with the order.
+- **Multi-instance claim (`FOR UPDATE SKIP LOCKED`):** the monolith may run on **N pods**, so N relays poll the same table. A naive `WHERE ProcessedAt IS NULL … LIMIT 50` lets every pod grab the **same** rows → duplicate Kafka publishes + Postgres lock contention. The relay therefore claims each batch inside a transaction with `SELECT … FOR UPDATE SKIP LOCKED`: the row locks are held until commit, so other pods **skip the locked rows** and take the next *disjoint* batch. The Inbox still makes a stray duplicate *correct*, but SKIP LOCKED makes duplicates *rare and cheap* instead of guaranteed.
 - **Inbox / idempotent consumer (Payment + monolith):** before processing a message, record its `messageId` in an `inbox_messages` table; if it's already there, **skip** (it's a redelivery). Combined with the existing one-charge unique index on `payment.order_id`, this gives an **exactly-once *effect*** on top of at-least-once *delivery* — without Kafka transactions.
 
 ## Consequences
@@ -27,6 +28,7 @@ Kafka (ADR-027) decouples services in time, but it introduces two classic correc
 ### Negative / Risks
 - **More moving parts:** an outbox table + a relay loop + an inbox table per consumer. Polling adds a little latency (mitigated by a short poll interval / notify).
 - The relay is itself at-least-once → consumers **must** be idempotent (that's the Inbox's job; don't skip it).
+- **Concurrency assumption:** correctness across N relay instances depends on the `FOR UPDATE SKIP LOCKED` claim above. The single-instance shortcut (plain `LIMIT`) is the classic mistake — it *looks* fine on one pod and silently double-publishes the moment you scale out. The three ways to make the relay multi-instance-safe: (1) **`SKIP LOCKED`** claim (what we do — right-sized, no new infra); (2) **leader election** (only one pod runs the relay — simpler reasoning, but a SPOF until failover); (3) **CDC/Debezium** (no app-side relay at all — read the WAL). Pick by scale.
 - Inbox/outbox tables grow → need periodic pruning (a housekeeping job; noted, not built today).
 
 ### Cost (₹ / effort)
