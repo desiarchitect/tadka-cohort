@@ -1,4 +1,7 @@
+using System.Text;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
 using Tadka.Payment.Api;
 using Tadka.Payment.Api.Contracts;
@@ -31,6 +34,24 @@ if (kafkaOptions?.Enabled == true)
     builder.Services.AddHostedService<OrderPlacedConsumer>();
 }
 
+// Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token with the
+// SAME signing key as the monolith. The network is not a trust boundary — even with no gateway, a direct
+// call to the Payment service's HTTP endpoints needs a valid token.
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
+{
+    options.TokenValidationParameters = new TokenValidationParameters
+    {
+        ValidateIssuer = true, ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "tadka",
+        ValidateAudience = true, ValidAudience = builder.Configuration["Jwt:Audience"] ?? "tadka",
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:SigningKey"] ?? "")),
+        ValidateLifetime = true,
+        RoleClaimType = "role",
+        NameClaimType = "sub"
+    };
+});
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
 // The service owns its data: it migrates its OWN database on startup. If THIS database is down, only the
@@ -50,7 +71,10 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "payment" }));
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "payment" })); // public
 
 // POST /payments/charge — idempotent by orderId (ADR-025). A decline/timeout is a BUSINESS outcome
 // (HTTP 200 with Status=Failed); only a DOWN service makes the caller's HTTP call throw.
@@ -59,7 +83,7 @@ app.MapPost("/payments/charge", async (ChargeRequest request, PaymentService pay
     var outcome = await payments.ChargeAsync(
         request.OrderId, new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!), ct);
     return Results.Ok(new ChargeResponse(request.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason));
-});
+}).RequireAuthorization();
 
 // GET /payments/{orderId} — query a payment's status (request/reply stays HTTP even after Day-9 Kafka).
 app.MapGet("/payments/{orderId:guid}", async (Guid orderId, PaymentDbContext db) =>
@@ -68,7 +92,7 @@ app.MapGet("/payments/{orderId:guid}", async (Guid orderId, PaymentDbContext db)
     return p is null
         ? Results.NotFound()
         : Results.Ok(new ChargeResponse(p.OrderId, p.Status.ToString(), p.GatewayReference, p.FailureReason));
-});
+}).RequireAuthorization();
 
 app.Run();
 

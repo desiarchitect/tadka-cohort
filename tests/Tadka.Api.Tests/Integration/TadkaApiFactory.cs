@@ -1,5 +1,8 @@
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using Testcontainers.PostgreSql;
 
 namespace Tadka.Api.Tests.Integration;
@@ -31,6 +34,20 @@ public class TadkaApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         // (PaymentModuleIntegrationTests) that drive PaymentService deterministically.
         builder.UseSetting("Payment:Mode", "Off");
         builder.UseEnvironment("Development");
+
+        // Replace JWT bearer with a test scheme (default = Admin) so the pre-Day-10 suites pass unchanged;
+        // auth/ownership behaviour (401/403) is driven per-request via X-Test-* headers (TestAuthHandler).
+        builder.ConfigureTestServices(services =>
+        {
+            services.AddAuthentication(TestAuthHandler.Scheme)
+                .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.Scheme, _ => { });
+            services.PostConfigure<AuthenticationOptions>(o =>
+            {
+                o.DefaultScheme = TestAuthHandler.Scheme;
+                o.DefaultAuthenticateScheme = TestAuthHandler.Scheme;
+                o.DefaultChallengeScheme = TestAuthHandler.Scheme;
+            });
+        });
     }
 
     public async Task InitializeAsync() => await _postgres.StartAsync();

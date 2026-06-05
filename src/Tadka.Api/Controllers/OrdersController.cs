@@ -1,11 +1,13 @@
 using System.Text.Json;
 using FluentValidation;
 using MediatR;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Tadka.Api.Contracts;
 using Tadka.Api.Contracts.Orders;
 using Tadka.Api.Contracts.Restaurants;
+using Tadka.Api.Auth;
 using Tadka.Api.Data;
 using Tadka.Api.Data.Messaging;
 using Tadka.Api.Data.Repositories;
@@ -20,6 +22,7 @@ namespace Tadka.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/orders")]
+[Authorize] // every order endpoint requires a valid JWT (ADR-030); ownership is checked per-action (ADR-031)
 public class OrdersController(
     IOrderRepository orderRepository,
     OrderFactory orderFactory,
@@ -74,7 +77,10 @@ public class OrdersController(
             request.DeliveryAddress.Latitude,
             request.DeliveryAddress.Longitude);
 
-        var orderResult = _orderFactory.Create(request.CustomerId, restaurant, itemsRequest, address);
+        // A customer can only place an order as themselves (identity from the token, ADR-031); Admin may
+        // place on behalf of any customerId in the body (e.g. support/ops).
+        var effectiveCustomerId = User.IsAdmin() ? request.CustomerId : (User.UserId() ?? request.CustomerId);
+        var orderResult = _orderFactory.Create(effectiveCustomerId, restaurant, itemsRequest, address);
         if (orderResult.IsFailure)
             // An unavailable item, or an item not on this restaurant's menu, is a
             // domain-rule violation (valid request, breaks a business rule) → 422,
@@ -119,6 +125,10 @@ public class OrdersController(
         if (order is null)
             throw new NotFoundException(nameof(Order), id);
 
+        // Resource ownership (ADR-031): you can only read your OWN order (Admin sees all).
+        if (!User.IsAdmin() && order.CustomerId != User.UserId())
+            return Forbid();
+
         return Ok(MapToResponse(order));
     }
 
@@ -130,6 +140,10 @@ public class OrdersController(
     {
         pageSize = Math.Clamp(pageSize, 1, 50);
         page = Math.Max(1, page);
+
+        // A customer only sees THEIR OWN history (ADR-031); Admin may query any customerId.
+        if (!User.IsAdmin())
+            customerId = User.UserId();
 
         // Order *history* is read-heavy and tolerates slight replication lag, so it reads from the
         // replica (ADR-016). The (customer_id, created_at DESC) index (ADR-014) keeps it fast on a
@@ -150,6 +164,7 @@ public class OrdersController(
         return Ok(new PagedResponse<OrderResponse>(response, page, pageSize, totalCount));
     }
 
+    [Authorize(Roles = "RestaurantOwner,DeliveryAgent,Admin")] // kitchen/rider/ops advance status — not customers (ADR-031)
     [HttpPatch("{id:guid}/status")]
     public async Task<ActionResult> UpdateStatus(
         Guid id,
@@ -182,6 +197,10 @@ public class OrdersController(
         var order = await _orderRepository.GetByIdAsync(id);
         if (order is null)
             throw new NotFoundException(nameof(Order), id);
+
+        // Only the order's customer (or Admin) may cancel it (ADR-031).
+        if (!User.IsAdmin() && order.CustomerId != User.UserId())
+            return Forbid();
 
         var result = order.Cancel(request.Reason ?? string.Empty);
         if (result.IsFailure)

@@ -79,4 +79,14 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         var got = await client.GetFromJsonAsync<ChargeResponse>($"/payments/{orderId}");
         Assert.Equal(first.GatewayReference, got!.GatewayReference);
     }
+
+    [Fact]
+    public async Task Charge_without_a_token_is_rejected_401()  // per-service validation (ADR-031, defense in depth)
+    {
+        var client = _factory.CreateClient();
+        var req = new HttpRequestMessage(HttpMethod.Post, "/payments/charge")
+        { Content = JsonContent.Create(new { orderId = Guid.NewGuid(), amount = 100m, currency = "INR" }) };
+        req.Headers.Add("X-Test-NoAuth", "true");
+        Assert.Equal(System.Net.HttpStatusCode.Unauthorized, (await client.SendAsync(req)).StatusCode);
+    }
 }

@@ -26,6 +26,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(u => u.CreatedAt).HasDefaultValueSql("NOW()");
 
         builder.HasIndex(u => u.Email).IsUnique();
+        builder.Property(u => u.OwnedRestaurantId); // RestaurantOwner → their restaurant (ADR-031)
 
         builder.HasMany(u => u.SavedAddresses).WithOne().HasForeignKey(ua => ua.UserId).OnDelete(DeleteBehavior.Cascade);
 

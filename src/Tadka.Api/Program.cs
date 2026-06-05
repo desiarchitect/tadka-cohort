@@ -68,14 +68,44 @@ if (kafkaOptions?.Enabled == true)
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.PaymentResultsConsumer>();
 }
 
+// ── Authentication & Authorization (ADR-030/031) ────────────────────────────────────────────────
+// Stateless JWT bearer; each service verifies the token itself (defense in depth — the Payment service
+// validates the SAME key). Authorization is RBAC (the `role` claim) + resource-ownership checks done in
+// the controllers (the `sub` / `restaurantId` claims).
+builder.Services.Configure<Tadka.Api.Auth.JwtOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName));
+builder.Services.AddSingleton<Tadka.Api.Auth.TokenService>();
+builder.Services.AddSingleton<Microsoft.AspNetCore.Identity.IPasswordHasher<Tadka.Api.Domain.Users.User>,
+    Microsoft.AspNetCore.Identity.PasswordHasher<Tadka.Api.Domain.Users.User>>();
+
+var jwt = builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName).Get<Tadka.Api.Auth.JwtOptions>() ?? new();
+builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
+        {
+            ValidateIssuer = true, ValidIssuer = jwt.Issuer,
+            ValidateAudience = true, ValidAudience = jwt.Audience,
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(jwt.SigningKey)),
+            ValidateLifetime = true,
+            NameClaimType = "sub",
+            RoleClaimType = "role"
+        };
+    });
+builder.Services.AddAuthorization();
+
 var app = builder.Build();
 
-// Automatically apply migrations on startup (great for cohort local dev). The monolith now owns ONLY the
-// core schema — the Payment service migrates its OWN database in its OWN process (ADR-026). A broken
-// payment DB can no longer stop the monolith from booting.
+// Apply migrations on startup, then idempotently seed known demo users with real password hashes + roles
+// (so login works on a fresh DB). The monolith owns ONLY the core schema; the Payment service migrates its
+// own database in its own process (ADR-026).
 using (var scope = app.Services.CreateScope())
 {
-    scope.ServiceProvider.GetRequiredService<TadkaDbContext>().Database.Migrate();
+    var sp = scope.ServiceProvider;
+    sp.GetRequiredService<TadkaDbContext>().Database.Migrate();
+    await Tadka.Api.Auth.AuthSeeder.SeedAsync(
+        sp.GetRequiredService<TadkaDbContext>(),
+        sp.GetRequiredService<Microsoft.AspNetCore.Identity.IPasswordHasher<Tadka.Api.Domain.Users.User>>());
 }
 
 
@@ -91,6 +121,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseHttpsRedirection();
+app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 

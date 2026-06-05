@@ -8,6 +8,8 @@ public class User
     public string Phone { get; set; } = string.Empty;
     public string PasswordHash { get; set; } = string.Empty;
     public UserRole Role { get; set; }
+    /// <summary>For a RestaurantOwner: the restaurant they own → a JWT claim used for resource-ownership authz (ADR-031). Null otherwise.</summary>
+    public Guid? OwnedRestaurantId { get; set; }
     public List<UserAddress> SavedAddresses { get; set; } = [];
     public DateTime CreatedAt { get; set; }
 }

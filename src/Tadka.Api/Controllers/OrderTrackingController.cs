@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Threading.Channels;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Tadka.Api.Data.Repositories;
 using Tadka.Api.Infrastructure.Realtime;
@@ -8,6 +9,7 @@ namespace Tadka.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/orders")]
+[Authorize] // the live-tracking SSE stream requires a valid JWT (ADR-030)
 public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository orders) : ControllerBase
 {
     private readonly IOrderTrackingBus _bus = bus;

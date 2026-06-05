@@ -1,6 +1,8 @@
 using FluentValidation;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Tadka.Api.Auth;
 using Tadka.Api.Contracts;
 using Tadka.Api.Contracts.Restaurants;
 using Tadka.Api.Data;
@@ -28,6 +30,10 @@ public class RestaurantsController : ControllerBase
     }
 
     private static string MenuCacheKey(Guid restaurantId) => $"restaurant:{restaurantId}:menu";
+
+    // Resource-ownership (ADR-031): an owner may only touch THEIR restaurant (claim), Admin may touch any.
+    // RBAC ([Authorize(Roles=…)]) says "owners can edit menus"; this says "but only your own menu".
+    private bool OwnsOrAdmin(Guid restaurantId) => User.IsAdmin() || User.OwnedRestaurantId() == restaurantId;
 
     [HttpGet]
     public async Task<ActionResult<PagedResponse<RestaurantResponse>>> GetAll(
@@ -67,6 +73,7 @@ public class RestaurantsController : ControllerBase
         return Ok(MapToResponse(restaurant));
     }
 
+    [Authorize(Roles = "Admin")] // onboarding a new restaurant is an admin action (ADR-031)
     [HttpPost]
     public async Task<ActionResult<RestaurantResponse>> Create(
         [FromBody] CreateRestaurantRequest request,
@@ -132,12 +139,14 @@ public class RestaurantsController : ControllerBase
         return Ok(items.ToList());
     }
 
+    [Authorize(Roles = "RestaurantOwner,Admin")]
     [HttpPatch("{id:guid}/menu/{itemId:guid}/availability")]
     public async Task<ActionResult> UpdateMenuItemAvailability(
         Guid id,
         Guid itemId,
         [FromBody] UpdateAvailabilityRequest request)
     {
+        if (!OwnsOrAdmin(id)) return Forbid(); // owns-this-restaurant check (ADR-031)
         var restaurant = await _db.Restaurants
             .Include(r => r.Menu)
             .FirstOrDefaultAsync(r => r.Id == id);
@@ -157,11 +166,13 @@ public class RestaurantsController : ControllerBase
     }
 
     // PATCH a restaurant: partial update + deactivate (our "delete" — no hard DELETE).
+    [Authorize(Roles = "RestaurantOwner,Admin")]
     [HttpPatch("{id:guid}")]
     public async Task<ActionResult> UpdateRestaurant(
         Guid id,
         [FromBody] UpdateRestaurantRequest request)
     {
+        if (!OwnsOrAdmin(id)) return Forbid();
         var restaurant = await _db.Restaurants.FirstOrDefaultAsync(r => r.Id == id);
         if (restaurant is null)
             throw new NotFoundException(nameof(Restaurant), id);
@@ -175,12 +186,14 @@ public class RestaurantsController : ControllerBase
     }
 
     // POST a new menu item (restaurant-partner flow). A menu item is created within its restaurant.
+    [Authorize(Roles = "RestaurantOwner,Admin")]
     [HttpPost("{id:guid}/menu")]
     public async Task<ActionResult<MenuItemResponse>> AddMenuItem(
         Guid id,
         [FromBody] CreateMenuItemRequest request,
         [FromServices] IValidator<CreateMenuItemRequest> validator)
     {
+        if (!OwnsOrAdmin(id)) return Forbid();
         var validation = await validator.ValidateAsync(request);
         if (!validation.IsValid)
             throw new ValidationException(validation.Errors);
@@ -211,12 +224,14 @@ public class RestaurantsController : ControllerBase
     }
 
     // PATCH a menu item: partial update — e.g. a restaurant raising a dish's price.
+    [Authorize(Roles = "RestaurantOwner,Admin")]
     [HttpPatch("{id:guid}/menu/{itemId:guid}")]
     public async Task<ActionResult> UpdateMenuItem(
         Guid id,
         Guid itemId,
         [FromBody] UpdateMenuItemRequest request)
     {
+        if (!OwnsOrAdmin(id)) return Forbid(); // owner can edit only THEIR menu (ADR-031)
         var restaurant = await _db.Restaurants
             .Include(r => r.Menu)
             .FirstOrDefaultAsync(r => r.Id == id);
