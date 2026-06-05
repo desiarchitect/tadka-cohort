@@ -32,6 +32,10 @@ The lock's own TTL is the safety valve: if the winner crashes mid-refresh, the l
 - **Lock TTL must exceed the refresh time**, or a slow refresh's lock expires and a second caller starts a parallel refresh (two DB hits, not a thundering herd — tolerable, but sized to avoid). 
 - A naive release (`DEL` without the token check) could delete a *different* caller's lock. **Mitigation:** the owns-it token check on release.
 
+### Failure modes (CTO review)
+- **Hot key is the canonical stampede trigger.** The herd only forms on a key that *many* callers want at the instant it expires — i.e. a celebrity-restaurant menu (ADR-018). The single-flight lock is precisely the hot-key defence: one caller refreshes, the rest wait. If the *lock key itself* becomes the bottleneck, escalate to probabilistic early expiry / stale-while-revalidate (Revisit), or front Redis with an in-process L1 cache.
+- **Cache poisoning is out of scope for the lock — guard it upstream.** The lock controls *who refreshes*, not *what is stored*. Only ever cache values computed from our own DB + validated input, keyed by validated params — never attacker-controlled payloads (see ADR-018 failure modes). A poisoned value would be served to the whole herd until TTL.
+
 ### Cost (₹ / effort)
 A few lines in the cache service (one `SET NX EX`, a short retry loop, a guarded release). No infra cost. Cheap insurance against a self-inflicted DB spike at every TTL boundary.
 

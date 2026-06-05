@@ -31,6 +31,11 @@ We need an in-memory cache for hot, read-heavy, rarely-changing data — and a d
 - A second datastore to run, monitor, and reason about (memory limits, eviction). Acceptable: it's the cheapest fix for the proven bottleneck.
 - Stale window up to the TTL after a *missed* invalidation. Bounded and acceptable for the menu.
 
+### Failure modes (CTO review — "Staff engineers live in the failure modes")
+- **Redis down / partitioned.** Cache-aside MUST fall through to the DB, not error — the no-op fallback above makes Redis a *performance* dependency, not a correctness one. The catch: when Redis is down the DB suddenly takes 100% of read traffic (the load Redis was absorbing). Mitigation: the DB must be sized to survive a full cache outage (or Redis goes HA and becomes a hard dependency — see Revisit). *Demo:* kill Redis → menu still served, latency up, no errors (Day 14 chaos battery).
+- **Hot key (a celebrity restaurant).** One menu (e.g. a viral biryani place) is read far more than any other; on a miss the whole herd hits one key → the stampede of ADR-019 (single-flight lock collapses it), and at extreme scale that single key/connection becomes the limit. Mitigations beyond single-flight: a tiny in-process **L1** cache in front of Redis, or **key replication/sharding** (cache `menu:{id}:{copy}` across replicas). *Demo:* hammer one key (Day 14).
+- **Cache poisoning.** A cache only ever stores what we computed from our own DB and validated input — never raw, attacker-controlled, or unvalidated payloads, and the key is derived from validated route params (`{id}`), never from a header/body an attacker controls. Poisoning is an authn/validation failure that the cache then *amplifies*.
+
 ### Cost (₹ / effort)
 One small Redis instance (cheap) + a thin cache service + a `DEL` (<1ms) on each menu write. Far cheaper than extracting services to shed read load.
 

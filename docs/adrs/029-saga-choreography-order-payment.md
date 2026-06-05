@@ -48,3 +48,5 @@ Saga is a pattern: choreography = services reacting to domain events anywhere (*
 
 ## Revisit When
 When a third participant joins the order flow (Delivery/Restaurant, Week 6) and the choreography becomes hard to follow → consider **orchestration** (a saga coordinator, e.g. MassTransit state machine / Temporal). When compensation must refund real charges → model the refund saga explicitly.
+
+> **Day-11 update (3rd participant joined):** Delivery is now the 3rd Kafka participant, so this "revisit" trigger fired. We deliberately **stay choreography** at 3 linear steps (an orchestrator for 3 steps is its own anti-pattern), but the full treatment — choreography vs orchestration on the *same* flow + the implementation landscape (MassTransit/Temporal/Camunda/Axon/Step Functions/Durable Functions) + when to switch — is taught in `cohort-prep/day-11/saga-deep-dive.md`. The CTO "choreography trap" caution (4+ services → implicit, unobservable flow) is exactly the switch signal documented there.
