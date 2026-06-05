@@ -5,10 +5,15 @@ public static class Topics
 {
     public const string OrderPlaced = "order-placed";
     public const string PaymentResults = "payment-results";
+    public const string OrderConfirmed = "order-confirmed";   // → Delivery assigns a rider (ADR-033)
 }
 
 /// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.</summary>
 public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency);
+
+/// <summary>Published by Ordering (via the Outbox) when an order auto-confirms after payment — carries what
+/// the Delivery service needs (no back-call, ADR-008). Consumed by the Delivery service.</summary>
+public sealed record OrderConfirmedMessage(Guid MessageId, Guid OrderId, double Latitude, double Longitude);
 
 /// <summary>Published by the Payment service after it settles a charge. Consumed by Ordering (the Saga reaction).</summary>
 public sealed record PaymentResultMessage(Guid MessageId, Guid OrderId, string Status, string? GatewayReference, string? FailureReason);

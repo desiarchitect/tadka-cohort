@@ -97,6 +97,25 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Delivery service database (Day 11) — database-per-service (ADR-033). Own PostgreSQL for the 3rd service.
+  delivery-db:
+    image: postgres:16
+    container_name: tadka-delivery-db
+    ports:
+      - "5435:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tadka}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tadka_local}
+      POSTGRES_DB: ${DELIVERY_DB:-tadka_delivery}
+    volumes:
+      - pgdata_delivery:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tadka}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   # Kafka (Day 9) — the async event backbone (ADR-027). Single-node KRaft (no Zookeeper).
   # Two listeners: HOST (localhost:9092) for the apps you run via `dotnet run`, and DOCKER
   # (kafka:29092) for in-network containers like the UI. Topics auto-create for cohort convenience.
@@ -144,3 +163,4 @@ volumes:
   pgdata:
   pgdata_replica:
   pgdata_payment:
+  pgdata_delivery:

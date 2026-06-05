@@ -1,7 +1,11 @@
+using System.Text.Json;
 using MediatR;
+using Tadka.Api.Data;
+using Tadka.Api.Data.Messaging;
 using Tadka.Api.Data.Repositories;
 using Tadka.Api.Domain.Common.Events;
 using Tadka.Api.Domain.Orders;
+using Tadka.Api.Infrastructure.Messaging;
 
 namespace Tadka.Api.Domain.Orders.Events.Handlers;
 
@@ -14,6 +18,7 @@ namespace Tadka.Api.Domain.Orders.Events.Handlers;
 /// </summary>
 public sealed class ConfirmOrderOnPaymentCompleted(
     IOrderRepository orders,
+    TadkaDbContext db,
     IMediator mediator,
     ILogger<ConfirmOrderOnPaymentCompleted> logger) : INotificationHandler<PaymentCompletedEvent>
 {
@@ -30,6 +35,17 @@ public sealed class ConfirmOrderOnPaymentCompleted(
                 notification.OrderId, order.Status);
             return;
         }
+
+        // Saga continues to the 3rd participant (ADR-029/033): publish `order-confirmed` via the Outbox, in
+        // the SAME transaction as the confirm — the Delivery service consumes it and assigns a rider. The
+        // event carries the delivery lat/long so Delivery needs no back-call (ADR-008).
+        var confirmed = new OrderConfirmedMessage(Guid.NewGuid(), order.Id, order.DeliveryAddress.Latitude, order.DeliveryAddress.Longitude);
+        db.Set<OutboxMessage>().Add(new OutboxMessage
+        {
+            Topic = Topics.OrderConfirmed,
+            Key = order.Id.ToString(),
+            Payload = JsonSerializer.Serialize(confirmed)
+        });
 
         await orders.SaveChangesAsync();
         await PublishAndClear(order, mediator);
