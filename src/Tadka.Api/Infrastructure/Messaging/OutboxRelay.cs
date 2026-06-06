@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Tadka.Api.Data;
 using Tadka.Api.Data.Messaging;
+using Tadka.Telemetry;
 
 namespace Tadka.Api.Infrastructure.Messaging;
 
@@ -50,7 +52,14 @@ public sealed class OutboxRelay(
 
                 foreach (var message in batch)
                 {
-                    await producer.PublishRawAsync(message.Topic, message.Key, message.Payload, stoppingToken);
+                    // Re-attach the trace context captured when the row was enqueued, so this async publish
+                    // (the request span is long gone) rejoins the order's trace (ADR-041). The consumer reads
+                    // this span's id from the Kafka header and hangs its work under the same trace.
+                    var parentCtx = TadkaTrace.ParseContext(message.TraceParent);
+                    using var span = TadkaDiagnostics.ActivitySource.StartActivity(
+                        $"outbox publish {message.Topic}", ActivityKind.Producer, parentCtx);
+                    var headerTrace = span?.Id ?? message.TraceParent;   // sampled span id, else the original
+                    await producer.PublishRawAsync(message.Topic, message.Key, message.Payload, headerTrace, stoppingToken);
                     message.ProcessedAt = DateTime.UtcNow;
                 }
 

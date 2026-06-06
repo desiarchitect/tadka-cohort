@@ -3,7 +3,11 @@
 # Day 5: + PostgreSQL streaming read replica (ADR-016)
 # Day 6: + Redis (cache-aside + stampede lock + live-tracking pub/sub backplane — ADR-018/019/020)
 # Day 8: Add Kafka + Zookeeper (first service extraction)
-# Day 13: Add Prometheus + Grafana
+# Day 13: + observability stack (OTEL Collector + Jaeger + Prometheus + Grafana) behind the `observability`
+#         compose PROFILE — off by default to keep the Week-7 RAM tier sane. Bring it up with:
+#           docker compose up -d                          # core only (DBs, Redis, Kafka)
+#           docker compose --profile observability up -d  # + collector/jaeger/prometheus/grafana
+#         Then export OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317 before `dotnet run` (ADR-040).
 
 services:
   # Primary — all writes, plus reads that must be fresh (read-your-writes).
@@ -178,6 +182,70 @@ services:
       KAFKA_CLUSTERS_0_NAME: tadka
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       DYNAMIC_CONFIG_ENABLED: "true"
+    restart: unless-stopped
+
+  # ── Observability stack (Day 13, ADR-040) — PROFILE: observability (opt-in) ──────────────────────────
+  # Instrument once with OpenTelemetry, export OTLP to the Collector, which fans out to Jaeger (traces) +
+  # Prometheus (metrics); Grafana sits on top. The Collector is the vendor-neutral SEAM: swap Jaeger for
+  # Datadog by changing the Collector config, not the app. Apps run on the HOST via `dotnet run` and push
+  # OTLP to localhost:4317 (published below).
+
+  # OTEL Collector — the single OTLP sink. Receives traces+metrics from all 5 services, routes them.
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    container_name: tadka-otel-collector
+    profiles: ["observability"]
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./docker/observability/otel-collector-config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC  (apps export here: OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317)
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus scrape endpoint (the Collector's metrics exporter)
+    depends_on:
+      - jaeger
+    restart: unless-stopped
+
+  # Jaeger — distributed-tracing backend + UI. Accepts OTLP from the Collector (in-network on 4317).
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    container_name: tadka-jaeger
+    profiles: ["observability"]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # Jaeger UI — the saga-in-one-trace waterfall
+    restart: unless-stopped
+
+  # Prometheus — metrics TSDB. Scrapes the Collector's :8889 endpoint (both in-network, no host hop).
+  prometheus:
+    image: prom/prometheus:v3.0.1
+    container_name: tadka-prometheus
+    profiles: ["observability"]
+    volumes:
+      - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"     # Prometheus UI (run PromQL; check /tsdb-status for the cardinality demo)
+    depends_on:
+      - otel-collector
+    restart: unless-stopped
+
+  # Grafana — dashboards over Prometheus + Jaeger; ships a provisioned System-Overview RED dashboard + one alert.
+  grafana:
+    image: grafana/grafana:11.4.0
+    container_name: tadka-grafana
+    profiles: ["observability"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"        # cohort convenience — no login wall for the demo
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./docker/observability/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3000:3000"     # Grafana UI (admin/admin)
+    depends_on:
+      - prometheus
     restart: unless-stopped
 
 volumes:

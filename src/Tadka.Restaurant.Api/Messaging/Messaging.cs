@@ -1,6 +1,8 @@
+using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
 using Microsoft.Extensions.Options;
+using Tadka.Telemetry;
 
 namespace Tadka.Restaurant.Api.Messaging;
 
@@ -45,8 +47,13 @@ public sealed class KafkaProducer : IDisposable
         => _producer = new ProducerBuilder<string, string>(
             new ProducerConfig { BootstrapServers = options.Value.BootstrapServers, Acks = Acks.All }).Build();
 
-    public Task PublishRawAsync(string topic, string key, string value, CancellationToken ct = default)
-        => _producer.ProduceAsync(topic, new Message<string, string> { Key = key, Value = value }, ct);
+    public Task PublishRawAsync(string topic, string key, string value, string? traceParent = null, CancellationToken ct = default)
+    {
+        var message = new Message<string, string> { Key = key, Value = value };
+        if (!string.IsNullOrEmpty(traceParent))   // carry the trace across Kafka (ADR-041)
+            message.Headers = new Headers { { TadkaTrace.TraceParentHeader, Encoding.UTF8.GetBytes(traceParent) } };
+        return _producer.ProduceAsync(topic, message, ct);
+    }
 
     public void Dispose() => _producer.Dispose();
 }

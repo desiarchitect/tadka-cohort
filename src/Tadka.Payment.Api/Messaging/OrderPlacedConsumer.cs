@@ -1,9 +1,12 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Tadka.Payment.Api.Data;
 using Tadka.Payment.Api.Domain;
+using Tadka.Telemetry;
 
 namespace Tadka.Payment.Api.Messaging;
 
@@ -41,6 +44,11 @@ public sealed class OrderPlacedConsumer(
                 var cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
 
+                // Open a consume span under the order's trace (ADR-041); the charge + payment-results
+                // publish below then hang off this span — so the whole saga is one Jaeger waterfall.
+                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(
+                    $"consume {Topics.OrderPlaced}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
+
                 await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr); // at-least-once: commit only after the charge + result are done
             }
@@ -51,6 +59,11 @@ public sealed class OrderPlacedConsumer(
 
         consumer.Close();
     }, stoppingToken);
+
+    private static string? ReadTraceParent(ConsumeResult<string, string> cr) =>
+        cr.Message.Headers is not null && cr.Message.Headers.TryGetLastBytes(TadkaTrace.TraceParentHeader, out var bytes)
+            ? Encoding.UTF8.GetString(bytes)
+            : null;
 
     private async Task HandleAsync(string value, CancellationToken ct)
     {

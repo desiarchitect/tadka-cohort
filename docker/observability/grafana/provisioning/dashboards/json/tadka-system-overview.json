@@ -1,0 +1,109 @@
+{
+  "uid": "tadka-system-overview",
+  "title": "Tadka — System Overview (RED + business)",
+  "tags": ["tadka", "day-13"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request rate (req/s) per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count[1m]))",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Error rate (5xx req/s) per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~\"5..\"}[1m]))",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "P95 latency (s) per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Orders placed (rate/min)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum(rate(tadka_orders_placed_total[1m])) * 60",
+          "legendFormat": "orders/min"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Payment results by status (rate/s)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum by (status) (rate(tadka_payment_result_total[5m]))",
+          "legendFormat": "{{status}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Metric series count (cardinality watch — ADR-042)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 16 },
+      "description": "Total active series in Prometheus. Flip OTEL_CARDINALITY_DEMO=true and place orders — watch this line climb one step per order (order_id as a label). Then revert.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "prometheus_tsdb_head_series",
+          "legendFormat": "active series"
+        }
+      ]
+    }
+  ]
+}

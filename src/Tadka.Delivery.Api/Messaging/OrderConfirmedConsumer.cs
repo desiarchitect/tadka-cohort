@@ -1,9 +1,12 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Tadka.Delivery.Api.Data;
 using Tadka.Delivery.Api.Domain;
+using Tadka.Telemetry;
 
 namespace Tadka.Delivery.Api.Messaging;
 
@@ -39,6 +42,8 @@ public sealed class OrderConfirmedConsumer(
             {
                 var cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
+                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(   // rejoin the trace (ADR-041)
+                    $"consume {Topics.OrderConfirmed}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
                 await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr);
             }
@@ -49,6 +54,11 @@ public sealed class OrderConfirmedConsumer(
 
         consumer.Close();
     }, stoppingToken);
+
+    private static string? ReadTraceParent(ConsumeResult<string, string> cr) =>
+        cr.Message.Headers is not null && cr.Message.Headers.TryGetLastBytes(TadkaTrace.TraceParentHeader, out var bytes)
+            ? Encoding.UTF8.GetString(bytes)
+            : null;
 
     private async Task HandleAsync(string value, CancellationToken ct)
     {

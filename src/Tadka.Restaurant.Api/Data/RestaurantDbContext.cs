@@ -61,6 +61,7 @@ public class RestaurantDbContext(DbContextOptions<RestaurantDbContext> options) 
             b.Property(x => x.Topic).IsRequired().HasMaxLength(100);
             b.Property(x => x.Key).IsRequired().HasMaxLength(200);
             b.Property(x => x.Payload).IsRequired();
+            b.Property(x => x.TraceParent).HasMaxLength(64);   // W3C traceparent (ADR-041), nullable
             b.Property(x => x.CreatedAt).HasDefaultValueSql("NOW()");
             b.HasIndex(x => x.ProcessedAt);
         });

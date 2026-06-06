@@ -106,10 +106,22 @@ public class OrdersController(
         {
             Topic = Topics.OrderPlaced,
             Key = order.Id.ToString(),
-            Payload = JsonSerializer.Serialize(placed)
+            Payload = JsonSerializer.Serialize(placed),
+            TraceParent = Tadka.Telemetry.TadkaTrace.CurrentTraceParent()   // carry the trace across Kafka (ADR-041)
         });
 
         await _orderRepository.SaveChangesAsync();
+
+        // Observability (ADR-040): business throughput counter (no labels) + order.id on the request span
+        // (high-cardinality id belongs on the span/logs, never a metric label — ADR-042).
+        Tadka.Telemetry.TadkaDiagnostics.OrdersPlaced.Add(1);
+        System.Diagnostics.Activity.Current?.SetTag("order.id", order.Id);
+
+        // CARDINALITY-BLOWUP DEMO (ADR-042): flip OTEL_CARDINALITY_DEMO=true to stamp order_id as a metric
+        // label → each order = a new Prometheus series → TSDB explodes. The fix is to NOT do this (above).
+        if (Environment.GetEnvironmentVariable("OTEL_CARDINALITY_DEMO") == "true")
+            Tadka.Telemetry.TadkaDiagnostics.OrdersPlacedByIdBAD.Add(1,
+                new KeyValuePair<string, object?>("order_id", order.Id.ToString()));
 
         // Publish in-process domain events AFTER commit (ADR-013): live-tracking/notification handlers.
         // The cross-service payment flow now rides the Outbox above (Kafka), not an in-process handler.

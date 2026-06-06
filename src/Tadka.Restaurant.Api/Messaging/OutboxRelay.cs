@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Tadka.Restaurant.Api.Data;
 using Tadka.Restaurant.Api.Domain;
+using Tadka.Telemetry;
 
 namespace Tadka.Restaurant.Api.Messaging;
 
@@ -41,7 +43,12 @@ public sealed class OutboxRelay(
 
                 foreach (var message in batch)
                 {
-                    await producer.PublishRawAsync(message.Topic, message.Key, message.Payload, stoppingToken);
+                    // Re-attach the captured trace context so menu-updated → replica shows as one trace (ADR-041).
+                    var parentCtx = TadkaTrace.ParseContext(message.TraceParent);
+                    using var span = TadkaDiagnostics.ActivitySource.StartActivity(
+                        $"outbox publish {message.Topic}", ActivityKind.Producer, parentCtx);
+                    var headerTrace = span?.Id ?? message.TraceParent;
+                    await producer.PublishRawAsync(message.Topic, message.Key, message.Payload, headerTrace, stoppingToken);
                     message.ProcessedAt = DateTime.UtcNow;
                 }
 

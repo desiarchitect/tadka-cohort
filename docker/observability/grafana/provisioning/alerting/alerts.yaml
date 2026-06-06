@@ -1,0 +1,46 @@
+# Grafana alert provisioning (Day 13, ADR-040 — SLO/error-budget demo). ONE alert, not sixty: the
+# Payment SLO (99.5% success — it depends on Razorpay) is the signal that needs a human. We alert on the
+# BUSINESS metric (payment failure rate), not HTTP 5xx — in Tadka a declined payment is a 200-with-Failed
+# business outcome, not a transport error, so 5xx would never see it. Trip it live with Payment:Mode=Failing:
+# the rule goes Firing in Grafana's Alerting UI, then clears when Payment recovers.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: tadka-slo
+    folder: Tadka
+    interval: 10s
+    rules:
+      - uid: tadka-payment-failure-rate
+        title: Payment failure rate above SLO (P1)
+        condition: C
+        for: 30s
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: page
+        annotations:
+          summary: "Payment failures breaching the 99.5% SLO — open Jaeger, the trace ends at Payment."
+          runbook: "docs/runbooks/day-13.md"
+        data:
+          - refId: A
+            relativeTimeRange:
+              from: 300
+              to: 0
+            datasourceUid: tadka-prometheus
+            model:
+              refId: A
+              instant: true
+              # increase over 5m (not rate[1m]): robust against OTLP's 60s metric-export cadence — a burst of
+              # declines keeps the alert Firing for ~5 min, long enough to see in the UI and then clear.
+              expr: sum(increase(tadka_payment_result_total{status="failed"}[5m]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]

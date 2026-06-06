@@ -3,8 +3,13 @@ using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using Tadka.Api.Data;
 using Tadka.Api.Middleware;
+using Tadka.Telemetry;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Observability (ADR-040): structured JSON logs + OTEL traces/metrics over OTLP. OTLP export is gated on
+// OTEL_EXPORTER_OTLP_ENDPOINT, so the test suite + single-process dev are unchanged (no stack required).
+builder.AddTadkaTelemetry("Tadka.Api");
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();

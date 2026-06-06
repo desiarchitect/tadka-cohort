@@ -199,7 +199,8 @@ public class RestaurantsController(RestaurantDbContext db, ICacheService cache) 
         {
             Topic = Topics.MenuUpdated,
             Key = r.Id.ToString(),
-            Payload = JsonSerializer.Serialize(snapshot)
+            Payload = JsonSerializer.Serialize(snapshot),
+            TraceParent = Tadka.Telemetry.TadkaTrace.CurrentTraceParent()   // carry the trace across Kafka (ADR-041)
         });
     }
 

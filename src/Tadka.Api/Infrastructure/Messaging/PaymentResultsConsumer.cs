@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
 using MediatR;
@@ -6,6 +8,7 @@ using Microsoft.Extensions.Options;
 using Tadka.Api.Data;
 using Tadka.Api.Data.Messaging;
 using Tadka.Api.Domain.Common.Events;
+using Tadka.Telemetry;
 
 namespace Tadka.Api.Infrastructure.Messaging;
 
@@ -41,6 +44,11 @@ public sealed class PaymentResultsConsumer(
                 var cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
 
+                // Rejoin the order's trace: read the traceparent the producer injected and open a consume
+                // span as a remote child (ADR-041). Missing header ⇒ a new root (graceful).
+                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(
+                    $"consume {Topics.PaymentResults}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
+
                 await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr); // at-least-once: commit only after we've processed it
             }
@@ -51,6 +59,12 @@ public sealed class PaymentResultsConsumer(
 
         consumer.Close();
     }, stoppingToken);
+
+    // Pull the W3C traceparent the producer stamped on the message headers (ADR-041).
+    private static string? ReadTraceParent(ConsumeResult<string, string> cr) =>
+        cr.Message.Headers is not null && cr.Message.Headers.TryGetLastBytes(TadkaTrace.TraceParentHeader, out var bytes)
+            ? Encoding.UTF8.GetString(bytes)
+            : null;
 
     private async Task HandleAsync(string value, CancellationToken ct)
     {

@@ -48,4 +48,8 @@ public class OutboxMessage
     public string Payload { get; set; } = default!; // already-serialized JSON
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ProcessedAt { get; set; }
+
+    /// <summary>W3C traceparent captured at enqueue (ADR-041) — re-injected as a Kafka header at relay so
+    /// the menu-updated → replica flow shows as one trace. Null when telemetry is off (harmless).</summary>
+    public string? TraceParent { get; set; }
 }

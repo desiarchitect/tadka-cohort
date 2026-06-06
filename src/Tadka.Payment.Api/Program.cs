@@ -10,8 +10,12 @@ using Tadka.Payment.Api.Domain;
 using Tadka.Payment.Api.Gateway;
 using Tadka.Payment.Api.Messaging;
 using Tadka.Payment.Api.Resilience;
+using Tadka.Telemetry;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Observability (ADR-040): same one-liner as the monolith; gated on OTEL_EXPORTER_OTLP_ENDPOINT.
+builder.AddTadkaTelemetry("Tadka.Payment.Api");
 
 builder.Services.AddOpenApi();
 builder.Services.Configure<PaymentOptions>(builder.Configuration.GetSection(PaymentOptions.SectionName));

@@ -7,8 +7,12 @@ using Scalar.AspNetCore;
 using Tadka.Restaurant.Api.Caching;
 using Tadka.Restaurant.Api.Data;
 using Tadka.Restaurant.Api.Messaging;
+using Tadka.Telemetry;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Observability (ADR-040): gated on OTEL_EXPORTER_OTLP_ENDPOINT.
+builder.AddTadkaTelemetry("Tadka.Restaurant.Api");
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();

@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Tadka.Payment.Api.Data;
 using Tadka.Payment.Api.Domain;
 using Tadka.Payment.Api.Gateway;
 using Tadka.Payment.Api.Resilience;
+using Tadka.Telemetry;
 
 namespace Tadka.Payment.Api;
 
@@ -25,6 +27,13 @@ public sealed class PaymentService(
 {
     public async Task<ChargeOutcome> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken = default)
     {
+        // Custom business span (ADR-040): auto-instrumentation gives HTTP/DB spans, but "how long does the
+        // charge take?" is a business question only a custom span answers. order.id + amount go on the SPAN
+        // (high cardinality is fine here) — NEVER as metric labels (ADR-042).
+        using var activity = TadkaDiagnostics.ActivitySource.StartActivity("ProcessPayment", ActivityKind.Internal);
+        activity?.SetTag("order.id", orderId);
+        activity?.SetTag("payment.amount", amount.Amount);
+
         // DEMO LEVER (Day 8): a fatal in the charge path. Post-extraction this kills ONLY this service.
         if (options.CurrentValue.CrashOnCharge)
         {
@@ -74,6 +83,11 @@ public sealed class PaymentService(
             payment.CompletedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(cancellationToken);
 
+            // Low-cardinality business metrics (ADR-042): status is bounded; amount is a histogram.
+            TadkaDiagnostics.PaymentResults.Add(1, new KeyValuePair<string, object?>("status", "success"));
+            TadkaDiagnostics.PaymentAmount.Record((double)amount.Amount);
+            activity?.SetTag("payment.status", "success");
+
             logger.LogInformation("💳 Payment COMPLETED for order {OrderId} (ref {Reference}).", orderId, reference);
             return new ChargeOutcome(PaymentStatus.Completed, reference, null);
         }
@@ -85,6 +99,10 @@ public sealed class PaymentService(
             payment.Status = PaymentStatus.Failed;
             payment.FailureReason = $"{ex.GetType().Name}: {ex.Message}";
             await db.SaveChangesAsync(CancellationToken.None);
+
+            TadkaDiagnostics.PaymentResults.Add(1, new KeyValuePair<string, object?>("status", "failed"));
+            activity?.SetTag("payment.status", "failed");
+            activity?.SetStatus(ActivityStatusCode.Error, payment.FailureReason);
 
             logger.LogWarning("❌ Payment FAILED for order {OrderId}: {Reason}", orderId, payment.FailureReason);
             return new ChargeOutcome(PaymentStatus.Failed, null, payment.FailureReason);

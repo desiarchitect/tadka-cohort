@@ -1,6 +1,8 @@
+using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
 using Microsoft.Extensions.Options;
+using Tadka.Telemetry;
 
 namespace Tadka.Payment.Api.Messaging;
 
@@ -16,7 +18,14 @@ public sealed class KafkaProducer : IDisposable
     }
 
     public Task PublishAsync(string topic, string key, object payload, CancellationToken cancellationToken = default)
-        => _producer.ProduceAsync(topic, new Message<string, string> { Key = key, Value = JsonSerializer.Serialize(payload) }, cancellationToken);
+    {
+        var message = new Message<string, string> { Key = key, Value = JsonSerializer.Serialize(payload) };
+        // Inject the consume span's traceparent so payment-results stays on the order's trace (ADR-041).
+        var traceParent = TadkaTrace.CurrentTraceParent();
+        if (!string.IsNullOrEmpty(traceParent))
+            message.Headers = new Headers { { TadkaTrace.TraceParentHeader, Encoding.UTF8.GetBytes(traceParent) } };
+        return _producer.ProduceAsync(topic, message, cancellationToken);
+    }
 
     public void Dispose() => _producer.Dispose();
 }

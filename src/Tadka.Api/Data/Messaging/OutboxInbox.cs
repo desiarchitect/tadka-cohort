@@ -16,6 +16,11 @@ public class OutboxMessage
     public string Payload { get; set; } = default!;   // already-serialized JSON
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? ProcessedAt { get; set; }
+
+    /// <summary>W3C traceparent captured when the row was enqueued (ADR-041). The relay re-injects it as a
+    /// Kafka header so the async hop rejoins the order's trace even though the request span is long gone.
+    /// Nullable — when telemetry is off there's no ambient activity and this stays null (harmless).</summary>
+    public string? TraceParent { get; set; }
 }
 
 /// <summary>
@@ -37,6 +42,7 @@ public class OutboxMessageConfiguration : IEntityTypeConfiguration<OutboxMessage
         b.Property(x => x.Topic).IsRequired().HasMaxLength(100);
         b.Property(x => x.Key).IsRequired().HasMaxLength(200);
         b.Property(x => x.Payload).IsRequired();
+        b.Property(x => x.TraceParent).HasMaxLength(64);   // W3C traceparent (ADR-041), nullable
         b.Property(x => x.CreatedAt).HasDefaultValueSql("NOW()");
         // The relay scans for unsent rows oldest-first.
         b.HasIndex(x => x.ProcessedAt);

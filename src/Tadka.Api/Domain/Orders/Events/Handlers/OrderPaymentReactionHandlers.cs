@@ -44,7 +44,8 @@ public sealed class ConfirmOrderOnPaymentCompleted(
         {
             Topic = Topics.OrderConfirmed,
             Key = order.Id.ToString(),
-            Payload = JsonSerializer.Serialize(confirmed)
+            Payload = JsonSerializer.Serialize(confirmed),
+            TraceParent = Tadka.Telemetry.TadkaTrace.CurrentTraceParent()   // carry the trace across Kafka (ADR-041)
         });
 
         await orders.SaveChangesAsync();

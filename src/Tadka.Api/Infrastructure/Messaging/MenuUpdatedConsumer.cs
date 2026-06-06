@@ -1,9 +1,12 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Tadka.Api.Data;
 using Tadka.Api.Data.ReadModel;
+using Tadka.Telemetry;
 
 namespace Tadka.Api.Infrastructure.Messaging;
 
@@ -39,6 +42,8 @@ public sealed class MenuUpdatedConsumer(
             {
                 var cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
+                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(   // rejoin the trace (ADR-041)
+                    $"consume {Topics.MenuUpdated}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
                 await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr);
             }
@@ -49,6 +54,11 @@ public sealed class MenuUpdatedConsumer(
 
         consumer.Close();
     }, stoppingToken);
+
+    private static string? ReadTraceParent(ConsumeResult<string, string> cr) =>
+        cr.Message.Headers is not null && cr.Message.Headers.TryGetLastBytes(TadkaTrace.TraceParentHeader, out var bytes)
+            ? Encoding.UTF8.GetString(bytes)
+            : null;
 
     private async Task HandleAsync(string value, CancellationToken ct)
     {

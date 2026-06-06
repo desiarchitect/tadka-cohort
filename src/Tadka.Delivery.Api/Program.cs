@@ -6,8 +6,12 @@ using Scalar.AspNetCore;
 using Tadka.Delivery.Api;
 using Tadka.Delivery.Api.Data;
 using Tadka.Delivery.Api.Messaging;
+using Tadka.Telemetry;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Observability (ADR-040): gated on OTEL_EXPORTER_OTLP_ENDPOINT.
+builder.AddTadkaTelemetry("Tadka.Delivery.Api");
 
 builder.Services.AddOpenApi();
 

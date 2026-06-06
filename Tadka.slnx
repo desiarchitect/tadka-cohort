@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Tadka.Telemetry/Tadka.Telemetry.csproj" />
     <Project Path="src/Tadka.Api/Tadka.Api.csproj" />
     <Project Path="src/Tadka.Payment.Api/Tadka.Payment.Api.csproj" />
     <Project Path="src/Tadka.Delivery.Api/Tadka.Delivery.Api.csproj" />
