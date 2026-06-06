@@ -6,7 +6,20 @@ public static class Topics
     public const string OrderPlaced = "order-placed";
     public const string PaymentResults = "payment-results";
     public const string OrderConfirmed = "order-confirmed";   // → Delivery assigns a rider (ADR-033)
+    public const string MenuUpdated = "menu-updated";         // ← Restaurant publishes; Ordering updates its price replica (ADR-037)
 }
+
+/// <summary>One menu item, as carried in a <see cref="RestaurantSnapshotMessage"/> (ADR-037).</summary>
+public sealed record MenuItemSnapshot(
+    Guid MenuItemId, string Name, decimal PriceAmount, string PriceCurrency, bool IsAvailable, string Category, bool IsVeg);
+
+public sealed record AddressSnapshot(
+    string Line1, string Line2, string City, string Pincode, double Latitude, double Longitude);
+
+/// <summary>The full state of a restaurant + menu at a change (ADR-037, event-carried state transfer).
+/// Consumed by Ordering to upsert its local price replica — no back-call (ADR-008).</summary>
+public sealed record RestaurantSnapshotMessage(
+    Guid MessageId, Guid RestaurantId, string Name, bool IsActive, AddressSnapshot Address, List<MenuItemSnapshot> Menu);
 
 /// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.</summary>
 public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency);

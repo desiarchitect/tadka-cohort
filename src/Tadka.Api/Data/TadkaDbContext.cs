@@ -1,8 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Tadka.Api.Data.Configurations;
+using Tadka.Api.Data.ReadModel;
 using Tadka.Api.Domain.Delivery;
 using Tadka.Api.Domain.Orders;
-using Tadka.Api.Domain.Restaurants;
 using Tadka.Api.Domain.Users;
 
 namespace Tadka.Api.Data;
@@ -24,9 +24,10 @@ public class TadkaDbContext : DbContext
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
 
-    // Restaurant domain
-    public DbSet<Restaurant> Restaurants => Set<Restaurant>();
-    public DbSet<MenuItem> MenuItems => Set<MenuItem>();
+    // Restaurant read model (ADR-037): Ordering's OWN local price replica, fed by the Restaurant service's
+    // `menu-updated` events. NOT the Restaurant aggregate — that was extracted into its own service (ADR-036).
+    public DbSet<RestaurantReplica> RestaurantReplicas => Set<RestaurantReplica>();
+    public DbSet<MenuItemReplica> MenuReplicas => Set<MenuItemReplica>();
 
     // Delivery domain
     public DbSet<DeliveryAgent> DeliveryAgents => Set<DeliveryAgent>();

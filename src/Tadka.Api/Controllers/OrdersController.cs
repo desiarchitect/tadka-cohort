@@ -14,7 +14,6 @@ using Tadka.Api.Data.Repositories;
 using Tadka.Api.Domain.Common;
 using Tadka.Api.Infrastructure.Messaging;
 using Tadka.Api.Domain.Orders;
-using Tadka.Api.Domain.Restaurants;
 using Tadka.Api.Domain.ValueObjects;
 using Tadka.Api.Exceptions;
 
@@ -28,6 +27,7 @@ public class OrdersController(
     OrderFactory orderFactory,
     IIdempotencyStore idempotencyStore,
     IMediator mediator,
+    IRestaurantPricingSource pricingSource,
     TadkaReadDbContext readDb,
     TadkaDbContext db) : ControllerBase
 {
@@ -35,8 +35,9 @@ public class OrdersController(
     private readonly OrderFactory _orderFactory = orderFactory;
     private readonly IIdempotencyStore _idempotencyStore = idempotencyStore;
     private readonly IMediator _mediator = mediator; // ADR-022: publishes domain events; Payment reacts to OrderPlaced
+    private readonly IRestaurantPricingSource _pricing = pricingSource; // server-side pricing (ADR-037: local replica, or SyncHttp lever)
     private readonly TadkaReadDbContext _read = readDb; // replica — order history (ADR-016)
-    private readonly TadkaDbContext _db = db; // monolith-phase lookup of restaurant + menu for server-side pricing
+    private readonly TadkaDbContext _db = db; // primary — order writes + the transactional Outbox
 
     [HttpPost]
     public async Task<ActionResult<OrderResponse>> Create(
@@ -60,13 +61,12 @@ public class OrdersController(
             }
         }
 
-        // Load restaurant with menu to do server-side pricing (the client never sends a price).
-        var restaurant = await _db.Restaurants.AsNoTracking()
-            .Include(r => r.Menu)
-            .FirstOrDefaultAsync(r => r.Id == request.RestaurantId);
-
+        // Server-side pricing (the client never sends a price). The menu now lives in the Restaurant
+        // service (ADR-036); we price from the local read model — available even when Restaurant is down
+        // (ADR-037). The `SyncHttp` lever swaps this for a synchronous call to show the coupling it avoids.
+        var restaurant = await _pricing.GetAsync(request.RestaurantId);
         if (restaurant is null)
-            throw new NotFoundException(nameof(Restaurant), request.RestaurantId);
+            throw new NotFoundException("Restaurant", request.RestaurantId);
 
         var itemsRequest = request.Items.Select(i => (i.MenuItemId, i.Quantity, i.SpecialInstructions)).ToList();
         var address = new Address(

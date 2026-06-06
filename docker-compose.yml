@@ -116,6 +116,27 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # Restaurant service database (Day 12) — database-per-service (ADR-036/026). Own PostgreSQL for the 4th
+  # service. The monolith no longer owns the restaurant schema; it keeps a local read replica (ADR-037)
+  # in its own `ordering` schema, fed by this service's menu-updated events.
+  restaurant-db:
+    image: postgres:16
+    container_name: tadka-restaurant-db
+    ports:
+      - "5436:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tadka}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tadka_local}
+      POSTGRES_DB: ${RESTAURANT_DB:-tadka_restaurant}
+    volumes:
+      - pgdata_restaurant:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tadka}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
   # Kafka (Day 9) — the async event backbone (ADR-027). Single-node KRaft (no Zookeeper).
   # Two listeners: HOST (localhost:9092) for the apps you run via `dotnet run`, and DOCKER
   # (kafka:29092) for in-network containers like the UI. Topics auto-create for cohort convenience.
@@ -164,3 +185,4 @@ volumes:
   pgdata_replica:
   pgdata_payment:
   pgdata_delivery:
+  pgdata_restaurant:

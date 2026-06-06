@@ -4,10 +4,12 @@
     <Project Path="src/Tadka.Payment.Api/Tadka.Payment.Api.csproj" />
     <Project Path="src/Tadka.Delivery.Api/Tadka.Delivery.Api.csproj" />
     <Project Path="src/Tadka.Gateway/Tadka.Gateway.csproj" />
+    <Project Path="src/Tadka.Restaurant.Api/Tadka.Restaurant.Api.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Tadka.Api.Tests/Tadka.Api.Tests.csproj" />
     <Project Path="tests/Tadka.Payment.Api.Tests/Tadka.Payment.Api.Tests.csproj" />
     <Project Path="tests/Tadka.Delivery.Api.Tests/Tadka.Delivery.Api.Tests.csproj" />
+    <Project Path="tests/Tadka.Restaurant.Api.Tests/Tadka.Restaurant.Api.Tests.csproj" />
   </Folder>
 </Solution>

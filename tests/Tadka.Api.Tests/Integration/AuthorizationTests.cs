@@ -12,11 +12,9 @@ public class AuthorizationTests(TadkaApiFactory factory) : IClassFixture<TadkaAp
 {
     private readonly TadkaApiFactory _factory = factory;
 
-    private static readonly Guid Meghana = new("a1b2c3d4-0001-4000-8000-000000000001");
-    private static readonly Guid OtherRestaurant = new("a1b2c3d4-0002-4000-8000-000000000002");
-    private static readonly Guid Biryani = new("b1b2c3d4-0001-4000-8000-000000000001");
     private static readonly Guid Priya = new("c1b2c3d4-0001-4000-8000-000000000001");
-    private static readonly Guid Owner1 = new("e0000000-0000-4000-8000-000000000001");
+    // NOTE: the "owner cannot edit another restaurant's menu" RBAC+ownership test moved to
+    // Tadka.Restaurant.Api.Tests on Day 12 — that endpoint now lives in the Restaurant service (ADR-036).
 
     private static readonly object OrderBody = new
     {
@@ -52,17 +50,6 @@ public class AuthorizationTests(TadkaApiFactory factory) : IClassFixture<TadkaAp
         // The owner (Priya) can read it → 200.
         var asOwner = Get($"/api/v1/orders/{order.Id}", $"Customer:{Priya}");
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(asOwner)).StatusCode);
-    }
-
-    [Fact]
-    public async Task Owner_cannot_edit_another_restaurants_menu_403()  // Demo 2 — RBAC role passes, ownership fails
-    {
-        var client = _factory.CreateClient();
-        // Owner1 owns Meghana, but targets a DIFFERENT restaurant's menu → 403 (role is fine, ownership isn't).
-        var req = new HttpRequestMessage(HttpMethod.Patch, $"/api/v1/restaurants/{OtherRestaurant}/menu/{Guid.NewGuid()}")
-        { Content = JsonContent.Create(new { isVeg = true }) };
-        req.Headers.Add("X-Test-Auth", $"RestaurantOwner:{Owner1}:{Meghana}");
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(req)).StatusCode);
     }
 
     [Fact]

@@ -71,19 +71,11 @@ public class PaymentReactionTests(TadkaApiFactory factory) : IClassFixture<Tadka
         return order!.Id;
     }
 
-    private async Task<(Guid RestaurantId, Guid MenuItemId)> DiscoverSeedAsync()
-    {
-        using var rDoc = JsonDocument.Parse(await _client.GetStringAsync("/api/v1/restaurants"));
-        var restaurantId = Unwrap(rDoc.RootElement).EnumerateArray().First().GetProperty("id").GetGuid();
-
-        using var mDoc = JsonDocument.Parse(await _client.GetStringAsync($"/api/v1/restaurants/{restaurantId}/menu"));
-        foreach (var item in Unwrap(mDoc.RootElement).EnumerateArray())
-        {
-            var available = !item.TryGetProperty("isAvailable", out var a) || a.GetBoolean();
-            if (available) return (restaurantId, item.GetProperty("id").GetGuid());
-        }
-        throw new InvalidOperationException("No available menu item found.");
-    }
+    // Restaurant was extracted (ADR-036): price from the seeded local replica (ADR-037), known IDs.
+    private Task<(Guid RestaurantId, Guid MenuItemId)> DiscoverSeedAsync()
+        => Task.FromResult((
+            new Guid("a1b2c3d4-0001-4000-8000-000000000001"),
+            new Guid("b1b2c3d4-0001-4000-8000-000000000001")));
 
     private static JsonElement Unwrap(JsonElement root) =>
         root.ValueKind == JsonValueKind.Array ? root

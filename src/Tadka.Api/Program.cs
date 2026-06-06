@@ -26,6 +26,26 @@ builder.Services.AddScoped<Tadka.Api.Data.Repositories.IOrderRepository, Tadka.A
 builder.Services.AddScoped<Tadka.Api.Data.Repositories.IIdempotencyStore, Tadka.Api.Data.Repositories.IdempotencyStore>();
 builder.Services.AddScoped<Tadka.Api.Domain.Orders.OrderFactory>();
 
+// Server-side pricing source (ADR-037). Restaurant was extracted (ADR-036), so order pricing no longer
+// reads an in-process Restaurant aggregate. Default = the local read model (available even when Restaurant
+// is down). `Ordering:RestaurantReadMode = SyncHttp` swaps in a synchronous HTTP read to demonstrate the
+// temporal coupling the read model avoids (the Day-12 "Restaurant down → orders still flow" demo).
+var readMode = builder.Configuration["Ordering:RestaurantReadMode"] ?? "LocalReplica";
+if (string.Equals(readMode, "SyncHttp", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddHttpClient<Tadka.Api.Domain.Orders.IRestaurantPricingSource,
+        Tadka.Api.Infrastructure.RestaurantReadModel.HttpRestaurantPricingSource>(c =>
+    {
+        c.BaseAddress = new Uri(builder.Configuration["Services:Restaurant:BaseUrl"] ?? "http://localhost:5260");
+        c.Timeout = TimeSpan.FromSeconds(2); // fail fast — but a down peer still fails the order (the point)
+    });
+}
+else
+{
+    builder.Services.AddScoped<Tadka.Api.Domain.Orders.IRestaurantPricingSource,
+        Tadka.Api.Infrastructure.RestaurantReadModel.LocalReplicaPricingSource>();
+}
+
 // In-process events via MediatR (ADR-022, supersedes the Day-4 hand-rolled dispatcher). One call
 // auto-registers every INotificationHandler<T> in the assembly — order notification + SSE backplane
 // (ADR-020) + the Payment module's OrderPlaced handler + the order's reaction to payment settling.
@@ -66,6 +86,8 @@ if (kafkaOptions?.Enabled == true)
     builder.Services.AddSingleton<Tadka.Api.Infrastructure.Messaging.KafkaProducer>();
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.OutboxRelay>();
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.PaymentResultsConsumer>();
+    // Keep the local price replica fresh from the Restaurant service's menu-updated events (ADR-037).
+    builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.MenuUpdatedConsumer>();
 }
 
 // ── Authentication & Authorization (ADR-030/031) ────────────────────────────────────────────────
@@ -81,6 +103,9 @@ var jwt = builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName
 builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        // Keep our own claim names ("role"/"sub"); don't remap to the long WS-* URIs, or
+        // [Authorize(Roles = …)] would never see the role claim from our JsonWebToken (ADR-030/031).
+        options.MapInboundClaims = false;
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateIssuer = true, ValidIssuer = jwt.Issuer,

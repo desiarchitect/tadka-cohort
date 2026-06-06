@@ -150,22 +150,13 @@ public class OrderFlowIntegrationTests(TadkaApiFactory factory) : IClassFixture<
                 "12 MG Road", "Indiranagar", "Bengaluru", "560038", 12.9716, 77.5946));
     }
 
-    private async Task<(Guid RestaurantId, Guid MenuItemId)> DiscoverSeedAsync()
-    {
-        var restaurantId = (await GetFirstIdAsync("/api/v1/restaurants"))
-            ?? throw new InvalidOperationException("No seeded restaurants found.");
-
-        using var menuDoc = JsonDocument.Parse(
-            await _client.GetStringAsync($"/api/v1/restaurants/{restaurantId}/menu"));
-        var items = Unwrap(menuDoc.RootElement);
-        foreach (var item in items.EnumerateArray())
-        {
-            var available = !item.TryGetProperty("isAvailable", out var a) || a.GetBoolean();
-            if (available)
-                return (restaurantId, item.GetProperty("id").GetGuid());
-        }
-        throw new InvalidOperationException("No available menu item found.");
-    }
+    // Restaurant was extracted (ADR-036): the monolith no longer serves /restaurants. Order pricing now
+    // reads the local price replica (ADR-037), seeded with the canonical menu — so use those known IDs
+    // (Meghana Foods + Chicken Biryani). The replica is what makes orders price without the Restaurant service.
+    private Task<(Guid RestaurantId, Guid MenuItemId)> DiscoverSeedAsync()
+        => Task.FromResult((
+            new Guid("a1b2c3d4-0001-4000-8000-000000000001"),
+            new Guid("b1b2c3d4-0001-4000-8000-000000000001")));
 
     private async Task<Guid?> GetFirstIdAsync(string url)
     {

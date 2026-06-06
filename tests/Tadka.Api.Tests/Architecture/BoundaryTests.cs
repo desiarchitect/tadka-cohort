@@ -62,6 +62,21 @@ public class BoundaryTests
     }
 
     [Fact]
+    public void Monolith_does_not_own_the_Restaurant_aggregate()  // ADR-036 — extracted on Day 12
+    {
+        var assembly = typeof(TadkaDbContext).Assembly;
+
+        // The Restaurant + MenuItem aggregate moved to Tadka.Restaurant.Api. The monolith keeps only a
+        // read-only price replica in its own `ordering` schema (ADR-037) — not the aggregate, not its CRUD.
+        Assert.Null(assembly.GetType("Tadka.Api.Domain.Restaurants.Restaurant"));
+        Assert.Null(assembly.GetType("Tadka.Api.Domain.Restaurants.MenuItem"));
+        Assert.Null(assembly.GetType("Tadka.Api.Controllers.RestaurantsController"));
+
+        // The local read model IS expected (Ordering owns it).
+        Assert.NotNull(assembly.GetType("Tadka.Api.Data.ReadModel.MenuItemReplica"));
+    }
+
+    [Fact]
     public void Ordering_domain_does_not_reference_Payment_types()  // ADR-022/024
     {
         var assembly = typeof(TadkaDbContext).Assembly;
