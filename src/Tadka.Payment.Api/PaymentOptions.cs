@@ -14,6 +14,23 @@ public sealed class PaymentOptions
     /// <summary>Polly bulkhead permits (ADR-021). High (e.g. 1000) ≈ "no bulkhead".</summary>
     public int MaxConcurrentCharges { get; set; } = 10;
 
+    // ── Circuit breaker + retry (ADR-043) ────────────────────────────────────────────────────────────
+    /// <summary>Retry attempts on a TRANSPORT failure (timeout / gateway-unavailable), jittered exponential
+    /// backoff. 0 ≈ no retry. Never retries a business decline.</summary>
+    public int MaxRetryAttempts { get; set; } = 2;
+
+    /// <summary>Circuit opens when this fraction of calls fail within the sampling window (min-throughput met).</summary>
+    public double CircuitFailureRatio { get; set; } = 0.5;
+
+    /// <summary>Minimum calls in the sampling window before the breaker can open (stops one blip tripping it).</summary>
+    public int CircuitMinimumThroughput { get; set; } = 5;
+
+    /// <summary>Rolling window over which the failure ratio is measured (seconds).</summary>
+    public double CircuitSamplingSeconds { get; set; } = 30;
+
+    /// <summary>How long the circuit stays open (fail-fast) before a half-open probe (seconds).</summary>
+    public double CircuitBreakSeconds { get; set; } = 60;
+
     /// <summary>
     /// DEMO LEVER (Day 8 crash/fault isolation): when true, a charge calls <c>Environment.FailFast</c> and
     /// the Payment service process dies. Post-extraction this kills ONLY this service — the monolith keeps

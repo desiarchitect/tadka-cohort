@@ -13,5 +13,10 @@ public interface IPaymentGateway
     Task<string> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken);
 }
 
-/// <summary>The gateway rejected the charge (insufficient funds, fraud hold, etc.).</summary>
+/// <summary>The gateway rejected the charge (insufficient funds, fraud hold, etc.) — a BUSINESS outcome.
+/// Final: never retried, never trips the circuit breaker (ADR-043). A decline is an answer, not an outage.</summary>
 public sealed class PaymentDeclinedException(string message) : Exception(message);
+
+/// <summary>The gateway itself is unreachable/erroring (5xx, connection refused) — a TRANSPORT failure.
+/// Transient: eligible for retry, and counts toward the circuit breaker (ADR-043). Distinct from a decline.</summary>
+public sealed class PaymentGatewayUnavailableException(string message) : Exception(message);

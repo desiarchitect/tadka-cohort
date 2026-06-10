@@ -33,6 +33,11 @@ public static class TadkaDiagnostics
     public static readonly Histogram<double> PaymentAmount =
         Meter.CreateHistogram<double>("tadka.payment.amount", unit: "INR", description: "Charged amount distribution.");
 
+    /// <summary>Circuit-breaker state transitions on the Payment→gateway pipeline (ADR-043), labelled by
+    /// <c>state</c> = open|closed|half_open (low cardinality). Lets a Grafana panel show the breaker trip + recover.</summary>
+    public static readonly Counter<long> PaymentCircuitTransitions =
+        Meter.CreateCounter<long>("tadka.payment.circuit_transitions", description: "Payment gateway circuit-breaker state transitions.");
+
     /// <summary>DEMO-ONLY anti-pattern (ADR-042): a counter that the OrdersController labels with order_id when
     /// <c>OTEL_CARDINALITY_DEMO=true</c>. Each order becomes a brand-new Prometheus series → watch the series
     /// count explode, then revert. This exists ONLY to show why ids must never be metric labels.</summary>
