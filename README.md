@@ -84,9 +84,19 @@ tadka/
 │   └── templates/           # Reusable templates
 ├── docker-compose.yml       # Infrastructure (PostgreSQL, later Redis, Kafka)
 └── k6/                      # Load test scripts (from Week 7)
+├── toydemo/                 # Failure-first toy demos for breadth topics (not in main Tadka evolution)
+│   ├── TOY-DEMO-PLAN.md     # Living progress + detailed phase plan (start here)
+│   ├── TEMPLATE-TOY-RUN-AND-TEST.md
+│   └── day-XX-*/              # Day-wise toys, each with its own RUN-AND-TEST.md (deep run/test doc)
 ```
 
+<<<<<<< Updated upstream
 ## Releases
+=======
+**toydemo/** contains standalone failure-first toy demos (using docker/node/js/.net) for system design topics that have coverage in the curriculum (primers, interview-track, teardowns) but are not built into the core Tadka app. See `toydemo/TOY-DEMO-PLAN.md` and each toy's `RUN-AND-TEST.md` for details. These support the "show it, don't just tell it" rule and breadth for interviews.
+
+## Per-day code states
+>>>>>>> Stashed changes
 
 Each release is a clean, runnable snapshot of Tadka at the end of that week. You can download a ZIP from GitHub Releases or check out the tag locally.
 
