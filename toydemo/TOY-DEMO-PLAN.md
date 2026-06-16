@@ -191,6 +191,7 @@ This structure guarantees the user stays in the loop for testing and commits, ex
   - [x] toydemo/README.md created with overview and mapping.
   - [x] tadka/README.md updated (Project Structure + short description paragraph).
 - [x] Git: Phase 0 foundation committed **directly on the official day-01 branch** (commit 4c37d95). No separate toydemo-* side branches created. See new "Git Branching Strategy (clarified by user)" section below.
+- [x] 2026-06-17: Verified foundation via list_dir + git: only the three expected files exist (README.md, TEMPLATE-TOY-RUN-AND-TEST.md, TOY-DEMO-PLAN.md). Working tree clean on day-01. No actual runnable toy demos implemented yet (this is only the skeleton/framework).
 - [ ] User visual/skeleton confirmation received for Phase 0 (review toydemo/ on day-01 + confirm "looks good, proceed to Phase 1").
 - [ ] Phase 0 complete and marked.
 - [ ] Phase 1 ... (to be filled as work progresses with dates and links to each toy's deep RUN-AND-TEST.md)
