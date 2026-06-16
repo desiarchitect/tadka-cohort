@@ -190,13 +190,47 @@ This structure guarantees the user stays in the loop for testing and commits, ex
   - [x] TEMPLATE-TOY-RUN-AND-TEST.md created with 12-section template.
   - [x] toydemo/README.md created with overview and mapping.
   - [x] tadka/README.md updated (Project Structure + short description paragraph).
-- [ ] User visual/skeleton confirmation received for Phase 0 (ask user to review the created files in toydemo/ and confirm "Phase 0 skeleton looks good, proceed to Phase 1").
+- [x] Git: Phase 0 foundation committed **directly on the official day-01 branch** (commit 4c37d95). No separate toydemo-* side branches created. See new "Git Branching Strategy (clarified by user)" section below.
+- [ ] User visual/skeleton confirmation received for Phase 0 (review toydemo/ on day-01 + confirm "looks good, proceed to Phase 1").
 - [ ] Phase 0 complete and marked.
 - [ ] Phase 1 ... (to be filled as work progresses with dates and links to each toy's deep RUN-AND-TEST.md)
 
 *End of living plan. Follow phases and gates strictly. User gate required before any commit of changes.*
 
 **Phase 0 Execution Log**
+- 2026-06-17: Skeleton created on day-16 working tree → stashed → cherry-picked directly onto official day-01 (commit 4c37d95) → side branch deleted. Now lives on day-01 as requested.
+- Plan updated on day-01 with the clarified strategy.
+
+## Git Branching Strategy (clarified by user)
+**User clarification**: "we have day-01, day-02 already for each day.. i meant to commit in the same days branch and not creating new branches"
+
+- All toydemo/ work (foundation + each toy) is committed **directly on the existing official day-NN branches** (day-01, day-02, day-03, day-06, day-09, day-15, etc.). No new `toydemo-*-*` side branches.
+- The Phase 0 foundation skeleton (this plan, the template, the common README) was introduced on **day-01** (earliest relevant branch) via direct commit (4c37d95).
+- For a toy whose concept "belongs" to a specific day (e.g. WebSocket/stateful realtime + hot key toys belong with Day 06 curriculum):
+  - `git checkout day-06`
+  - `git cherry-pick 4c37d95`  (or the latest toydemo commit from previous day) — this carries/moves the previous toydemo/ state onto day-06.
+  - Add the day-specific toy sub-folder + its deep RUN-AND-TEST.md under `toydemo/day-06-.../`
+  - `git add toydemo/ ; git commit ...` directly on day-06.
+- To advance to the next day (e.g. when later adding Day 09 toys): `git checkout day-09; git cherry-pick <the day-06 toydemo commit hash>` — this moves the entire toydemo/ history (foundation + Day 06 toys) forward.
+- This keeps `toydemo/` versioned together with the Tadka code state for that teaching day, exactly like the rest of the repo. The day-NN branches are the single source of truth for both the app and its supporting teaching toys.
+
+**How to Carry Changes Forward (example)**
+```bash
+# When starting work for Day 06 toys
+git checkout day-06
+git cherry-pick 4c37d95   # brings the foundation from day-01
+# add Day 06 toys...
+git add toydemo/
+git commit -m "toydemo: add Day 06 toys (rate-limiter, hot-key, WebSocket) with failure-first demos and deep RUN-AND-TEST.md"
+
+# Later, when doing Day 09
+git checkout day-09
+git cherry-pick <day-06-toydemo-commit>  # moves previous toydemo state forward
+```
+
+The living plan travels with the toydemo/ commits.
+
+Current state: Phase 0 foundation is cleanly on official day-01 (no extra branches). Ready to be carried when we implement toys on their respective days.
 - 2026-06-17: Directory created, living plan, template, toydemo/README, tadka/README update done.
 - Next: User review of skeleton + explicit confirmation before Phase 1.
 
