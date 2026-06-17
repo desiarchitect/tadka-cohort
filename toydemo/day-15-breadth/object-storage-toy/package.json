@@ -1,0 +1,13 @@
+{
+  "name": "object-storage-toy",
+  "version": "1.0.0",
+  "description": "Failure-first blobs-in-DB vs presigned object storage (Day 15)",
+  "main": "real-demo.js",
+  "scripts": {
+    "break": "node real-demo.js --mode=break",
+    "fix": "node real-demo.js --mode=fix"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT"
+}
