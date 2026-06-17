@@ -71,7 +71,7 @@ node real-db.js --mode=fix
 | 1 | 03/04 | cursor-pagination, grpc-vs-rest | done |
 | 2 | 06 | rate-limiter, hot-key-stampede, stateful-websocket | done |
 | 3 | 09 | notification-fanout, stream-processing | done |
-| 4 | 15 | search-index, video-hls-cdn, olap-cdc, object-storage, web-crawler | search committed; 4 awaiting user test |
+| 4 | 15 | search-index, video-hls-cdn, olap-cdc, object-storage, web-crawler | done (day-15) |
 
 Stretch (not started): feed fan-out push vs pull, CRDT merge.
 
@@ -86,8 +86,12 @@ Stretch (not started): feed fan-out push vs pull, CRDT merge.
 - All work lands on official `day-NN` branches (cherry-pick forward; no separate toydemo-* branches).
 - Update `TOY-DEMO-PLAN.md` after every toy and phase.
 
-## Curriculum wiring (Phase 5 — not started)
-Once toys are user-approved: wire into `cohort-prep/DEMOS.md`, day plans, option-space, interview-pack.
+## Curriculum wiring (Phase 5 — done)
+- [`cohort-prep/DEMOS.md`](../../desiarchitect-website/cohort-prep/DEMOS.md#toy-demos--breadth-topics-tadka-doesnt-build--tadkatoydemo) — full toy index with break/fix numbers
+- Day run-sheets: `cohort-prep/day-03`, `day-06`, `day-09`, `day-15` — pre-class toy callouts
+- [`domain-primers.md`](../../desiarchitect-website/cohort-prep/interview-pack/domain-primers.md) — one runnable toy per breadth primer
+- [`SYSTEM_DESIGN_COVERAGE.md`](../../desiarchitect-website/cohort-prep/SYSTEM_DESIGN_COVERAGE.md) — toy links on drill/optional rows
+- **Inventory:** `toydemo/verify-all.ps1` (list all toys; `-Run break|fix` for smoke)
 
 ---
 

@@ -121,12 +121,12 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 
 **Progress Checkpoints**
 - [x] Search toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/search-index-toy/RUN-AND-TEST.md) — real-db.js Postgres GIN vs LIKE (committed day-15)
-- [ ] Video/HLS toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/video-hls-cdn-toy/RUN-AND-TEST.md) — real HTTP only, **awaiting user test**
-- [ ] OLAP/CDC toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/olap-cdc-toy/RUN-AND-TEST.md) — real-db.js fact ~31ms vs rollup ~0.1ms, **awaiting user test**
-- [ ] Object storage toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/object-storage-toy/RUN-AND-TEST.md) — bytea 10MB logical vs 32KB meta + presigned HTTP, **awaiting user test**
-- [ ] Web crawler toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/web-crawler-toy/RUN-AND-TEST.md) — break 192×429 vs fix 0×429, **awaiting user test**
-- (stretch items)
-- Phase 4 fully confirmed.
+- [x] Video/HLS toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/video-hls-cdn-toy/RUN-AND-TEST.md) — committed day-15 (64cc7a4)
+- [x] OLAP/CDC toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/olap-cdc-toy/RUN-AND-TEST.md) — committed day-15
+- [x] Object storage toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/object-storage-toy/RUN-AND-TEST.md) — committed day-15
+- [x] Web crawler toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/web-crawler-toy/RUN-AND-TEST.md) — committed day-15
+- (stretch items: feed fan-out, CRDT — not started)
+- [x] Phase 4 fully confirmed (2026-06-17, user approved commit).
 
 ## Phase 5 ΓÇö Integration, Polish & Curriculum Wiring
 **After all core toys + docs are user-confirmed and committed in prior phases.**
@@ -140,6 +140,16 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 **No new toys in this phase** ΓÇö only wiring + docs.
 
 **User confirmation gate** for the integration changes before final commit.
+
+**Progress (2026-06-17):**
+- [x] `toydemo/verify-all.ps1` inventory runner
+- [x] `cohort-prep/DEMOS.md` — full toy section (12 toys, break/fix table)
+- [x] Day READMEs: day-03, day-06, day-09, day-15 — pre-class toy callouts
+- [x] `domain-primers.md` — runnable toy link per primer
+- [x] `SYSTEM_DESIGN_COVERAGE.md` — toy links for breadth + drill rows
+- [x] `interview-pack/README.md`, `tadka/README.md` updated
+- [ ] Stretch toys (feed fan-out, CRDT) — deferred
+- [x] Phase 5 wiring complete (user approved 2026-06-17).
 
 ## Cross-Cutting Rules (Apply to All Phases)
 - **Living Plan Updates:** After every phase or individual toy completion, edit `D:\work\desi-architect\toydemo\TOY-DEMO-PLAN.md` (the project copy) with:
@@ -201,8 +211,10 @@ This structure guarantees the user stays in the loop for testing and commits, ex
 - [x] Phase 2 rate-limiter-toy committed on day-06 (2026-06-17): fixed-window 150 allowed vs token-bucket 110/40.
 - [x] Phase 2 hot-key-stampede-toy committed on day-06 (2026-06-17): break 200 DB queries / fix 1.
 - [x] Phase 2 complete on day-06 (2026-06-17). Phase 3 notification-fanout-toy committed on day-09.
-- [x] Phase 3 complete on day-09 (2026-06-17). Phase 4 search committed; video-hls-cdn, olap-cdc, object-storage, web-crawler built (all real-first).
-- [ ] Phase 4 user-confirmed + committed (4 toys pending gate on day-15).
+- [x] Phase 3 complete on day-09 (2026-06-17).
+- [x] Phase 4 complete on day-15 (commit 64cc7a4, 2026-06-17).
+- [x] Phase 5 curriculum wiring complete (2026-06-17).
+- [x] **All 12 core toys shipped** (Phases 1–4) + DEMOS/day-plan/primer integration (Phase 5).
 
 *End of living plan. Follow phases and gates strictly. User gate required before any commit of changes.*
 

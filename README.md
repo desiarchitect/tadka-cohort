@@ -99,7 +99,7 @@ tadka/
     └── day-XX-*/            # Day-wise toys with deep RUN-AND-TEST.md (see toydemo/README.md)
 ```
 
-See [toydemo/README.md](toydemo/README.md) for standalone failure-first toy demos used to teach topics not implemented in the core Tadka app (e.g. cursor pagination death, hot-key stampede, search inverted index, fan-out, WebSocket backplanes, OLAP/CDC). Each toy follows the same style as `samples/sharding-demo/` and includes zero-dep quick simulations + real verification paths against the project's existing Postgres/Redis/Kafka services where possible.
+See [toydemo/README.md](toydemo/README.md) for **12 failure-first toys** (cursor pagination, gRPC vs REST, rate limiters, hot-key stampede, WebSocket backplane, Kafka fan-out, stream windows, search/GIN, HLS+CDN, OLAP/CDC, object storage, web crawler). Each ships `RUN-AND-TEST.md`; **real entrypoints** (`real-db.js`, `real-redis.js`, etc.) use the project's Postgres/Redis/Kafka where applicable. Inventory: `toydemo/verify-all.ps1`. Curriculum wiring: [cohort-prep/DEMOS.md](../desiarchitect-website/cohort-prep/DEMOS.md#toy-demos--breadth-topics-tadka-doesnt-build--tadkatoydemo).
 
 ## Per-day code states
 
