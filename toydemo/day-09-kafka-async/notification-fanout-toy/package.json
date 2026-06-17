@@ -1,0 +1,17 @@
+{
+  "name": "notification-fanout-toy",
+  "version": "1.0.0",
+  "description": "Failure-first toy demo for promo notification fan-out (Day 09, Kafka/async)",
+  "main": "index.js",
+  "scripts": {
+    "break": "node index.js --mode=break",
+    "fix": "node index.js --mode=fix",
+    "kafka:fix": "node real-kafka.js --mode=fix"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT",
+  "dependencies": {
+    "kafkajs": "^2.2.4"
+  }
+}
