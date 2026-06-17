@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package menu;
+
+// Internal menu lookup — the pattern Ordering uses to price an order.
+service MenuService {
+  rpc GetMenuItemsBatch (GetMenuItemsBatchRequest) returns (GetMenuItemsBatchResponse);
+}
+
+message MenuItem {
+  int32 id = 1;
+  int32 restaurant_id = 2;
+  string name = 3;
+  int32 price_paise = 4;
+  string category = 5;
+  bool available = 6;
+  string description = 7;
+}
+
+message GetMenuItemsBatchRequest {
+  repeated int32 ids = 1;
+}
+
+message GetMenuItemsBatchResponse {
+  repeated MenuItem items = 1;
+}
