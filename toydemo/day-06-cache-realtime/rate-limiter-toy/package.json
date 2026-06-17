@@ -1,0 +1,15 @@
+{
+  "name": "rate-limiter-toy",
+  "version": "1.0.0",
+  "description": "Failure-first toy demo for rate limiter algorithms (Day 06 concept)",
+  "main": "index.js",
+  "scripts": {
+    "break": "node index.js --mode=break",
+    "fix": "node index.js --mode=fix",
+    "server:break": "node server.js --algorithm=fixed-window",
+    "server:fix": "node server.js --algorithm=token-bucket"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT"
+}
