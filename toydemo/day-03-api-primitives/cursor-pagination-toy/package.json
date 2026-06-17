@@ -1,0 +1,14 @@
+{
+  "name": "cursor-pagination-toy",
+  "version": "1.0.0",
+  "description": "Failure-first toy demo for cursor vs offset pagination (Day 03/04 concept)",
+  "main": "index.js",
+  "scripts": {
+    "break": "node index.js --mode=break",
+    "fix": "node index.js --mode=fix",
+    "test": "node index.js"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT"
+}
