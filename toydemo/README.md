@@ -84,7 +84,10 @@ node real-db.js --mode=fix
 
 **Phase 3 (Day 09 - Kafka / async / fan-out)**
 - notification-fanout-toy (sync push loop vs Kafka + inbox + DLQ) — done
-- stream-processing-toy (unbounded all-time counts vs 5-min tumbling buckets) — ready for user test
+- stream-processing-toy (unbounded all-time counts vs 5-min tumbling buckets) — done
+
+**Phase 4 (Day 15 - breadth / teardown)**
+- search-index-toy (LIKE full scan vs inverted index) — ready for user test
 - Stateful WebSocket / realtime toy (presence, ordering, backplane limits)
 
 **Phase 3 (Day 09 - Kafka / async / fan-out)**
