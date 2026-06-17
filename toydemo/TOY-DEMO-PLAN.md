@@ -90,7 +90,7 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 **Same per-toy process as Phase 1** (create, implement failure-first, deep RUN-AND-TEST.md, update living plan, **STOP and ask for user test + explicit confirmation** before commit or next toy).
 
 **Progress Checkpoints (update in TOY-DEMO-PLAN.md)**
-- [ ] Rate limiter algos toy + deep doc ΓÇö date
+- [x] Rate limiter algos toy + deep doc — 2026-06-17 — [RUN-AND-TEST.md](day-06-cache-realtime/rate-limiter-toy/RUN-AND-TEST.md) — committed on day-06
 - [ ] Hot key / stampede toy + deep doc ΓÇö date
 - [ ] Stateful WebSocket toy + deep doc ΓÇö date
 - Phase 2 fully user-confirmed and committed.
@@ -197,7 +197,9 @@ This structure guarantees the user stays in the loop for testing and commits, ex
 - [x] Phase 0 complete and marked.
 - [x] Phase 1 gRPC toy committed on day-04 (2026-06-17): user verified REST 200 RTT/88ms vs gRPC 1 RTT/27ms.
 - [x] Phase 1 complete and marked (2026-06-17). Carried to day-06 for Phase 2.
-- [ ] Phase 2 ... (to be filled as work progresses with dates and links to each toy's deep RUN-AND-TEST.md)
+- [x] Phase 2 rate-limiter-toy committed on day-06 (2026-06-17): fixed-window 150 allowed vs token-bucket 110/40.
+- [x] Phase 2 hot-key/stampede toy started (2026-06-17) — **awaiting user test**.
+- [ ] Phase 2 complete (hot-key + WebSocket toys pending).
 
 *End of living plan. Follow phases and gates strictly. User gate required before any commit of changes.*
 
