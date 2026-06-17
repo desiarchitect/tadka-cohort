@@ -72,7 +72,7 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 
 **Progress Checkpoints (update in TOY-DEMO-PLAN.md)**
 - [x] Cursor pagination toy + deep doc complete — 2026-06-17 — [RUN-AND-TEST.md](day-03-api-primitives/cursor-pagination-toy/RUN-AND-TEST.md) — user verified real-db.js (OFFSET ~14ms/80k rows vs cursor ~0.15ms/20 rows)
-- [ ] gRPC toy + deep doc complete — date
+- [x] gRPC toy + deep doc complete — 2026-06-17 — [RUN-AND-TEST.md](day-03-api-primitives/grpc-vs-rest-toy/RUN-AND-TEST.md) — user verified real-bench.js (REST 200 RTT/88ms vs gRPC 1 RTT/27ms)
 - After user confirmation for the whole phase: mark Phase 1 done and create the day-wise branch merge if desired.
 
 **Verification for Phase (after user test/confirm)**
@@ -195,7 +195,8 @@ This structure guarantees the user stays in the loop for testing and commits, ex
 - [x] Phase 1 started on day-03: cursor-pagination-toy (index.js simulation + real-db.js Postgres verification + RUN-AND-TEST.md). real-db.js stdin fix for Windows multi-line SQL.
 - [x] User tested cursor-pagination-toy (2026-06-17): `real-db.js --mode=break` (~14ms, 80,020 rows, 729 buffer hits) vs `--mode=fix` (~0.15ms, 20 rows, 6 buffer hits). Committed on day-03; carried to day-04 for gRPC toy.
 - [x] Phase 0 complete and marked.
-- [ ] Phase 1 complete and marked (gRPC toy pending on day-04).
+- [x] Phase 1 gRPC toy committed on day-04 (2026-06-17): user verified REST 200 RTT/88ms vs gRPC 1 RTT/27ms.
+- [x] Phase 1 complete and marked (2026-06-17). Carried to day-06 for Phase 2.
 - [ ] Phase 2 ... (to be filled as work progresses with dates and links to each toy's deep RUN-AND-TEST.md)
 
 *End of living plan. Follow phases and gates strictly. User gate required before any commit of changes.*
