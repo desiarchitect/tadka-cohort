@@ -1,0 +1,14 @@
+{
+  "name": "video-hls-cdn-toy",
+  "version": "1.0.0",
+  "description": "Failure-first HLS segments + edge cache vs progressive download (Day 15)",
+  "main": "real-demo.js",
+  "scripts": {
+    "setup": "node setup-media.js",
+    "break": "node real-demo.js --mode=break",
+    "fix": "node real-demo.js --mode=fix"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT"
+}

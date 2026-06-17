@@ -1,0 +1,13 @@
+{
+  "name": "web-crawler-toy",
+  "version": "1.0.0",
+  "description": "Failure-first web crawler: politeness + dedup vs naive trap (Day 15)",
+  "main": "real-crawl.js",
+  "scripts": {
+    "break": "node real-crawl.js --mode=break",
+    "fix": "node real-crawl.js --mode=fix"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT"
+}

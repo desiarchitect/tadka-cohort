@@ -1,0 +1,14 @@
+{
+  "name": "olap-cdc-toy",
+  "version": "1.0.0",
+  "description": "Failure-first OLAP on row store vs CDC-fed rollup (Day 15)",
+  "main": "real-db.js",
+  "scripts": {
+    "break": "node real-db.js --mode=break",
+    "fix": "node real-db.js --mode=fix",
+    "cdc": "node real-cdc.js"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT"
+}

@@ -121,10 +121,10 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 
 **Progress Checkpoints**
 - [x] Search toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/search-index-toy/RUN-AND-TEST.md) — real-db.js Postgres GIN vs LIKE (committed day-15)
-- [ ] Video/HLS toy + doc
-- [ ] OLAP/CDC toy + doc
-- [ ] Object storage toy + doc
-- [ ] Web crawler toy + doc
+- [ ] Video/HLS toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/video-hls-cdn-toy/RUN-AND-TEST.md) — real HTTP only, **awaiting user test**
+- [ ] OLAP/CDC toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/olap-cdc-toy/RUN-AND-TEST.md) — real-db.js fact ~31ms vs rollup ~0.1ms, **awaiting user test**
+- [ ] Object storage toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/object-storage-toy/RUN-AND-TEST.md) — bytea 10MB logical vs 32KB meta + presigned HTTP, **awaiting user test**
+- [ ] Web crawler toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/web-crawler-toy/RUN-AND-TEST.md) — break 192×429 vs fix 0×429, **awaiting user test**
 - (stretch items)
 - Phase 4 fully confirmed.
 
@@ -201,8 +201,8 @@ This structure guarantees the user stays in the loop for testing and commits, ex
 - [x] Phase 2 rate-limiter-toy committed on day-06 (2026-06-17): fixed-window 150 allowed vs token-bucket 110/40.
 - [x] Phase 2 hot-key-stampede-toy committed on day-06 (2026-06-17): break 200 DB queries / fix 1.
 - [x] Phase 2 complete on day-06 (2026-06-17). Phase 3 notification-fanout-toy committed on day-09.
-- [x] Phase 3 complete on day-09 (2026-06-17). Phase 4 started on day-15 (search-index-toy built).
-- [ ] Phase 2 complete (hot-key + WebSocket toys pending).
+- [x] Phase 3 complete on day-09 (2026-06-17). Phase 4 search committed; video-hls-cdn, olap-cdc, object-storage, web-crawler built (all real-first).
+- [ ] Phase 4 user-confirmed + committed (4 toys pending gate on day-15).
 
 *End of living plan. Follow phases and gates strictly. User gate required before any commit of changes.*
 

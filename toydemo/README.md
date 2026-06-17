@@ -21,107 +21,74 @@ tadka/toydemo/
 ├── TOY-DEMO-PLAN.md           # Living plan (phases, day mapping, progress, git rules, user gates)
 ├── TEMPLATE-TOY-RUN-AND-TEST.md
 ├── README.md                  # This file
-└── day-03-api-primitives/
-    ├── cursor-pagination-toy/
-    │   ├── index.js           # Fast zero-dep simulation (break / fix modes)
-    │   ├── real-db.js         # Real Postgres verification using project's tadka-postgres container + EXPLAIN (ANALYZE, BUFFERS)
-    │   ├── package.json
-    │   └── RUN-AND-TEST.md    # The deep, copy-paste-ready guide (12 sections)
-    └── grpc-vs-rest-toy/
-        ├── index.js           # Fast zero-dep simulation (chatty REST vs gRPC batch)
-        ├── real-bench.js      # Real HTTP + gRPC localhost benchmark
-        ├── proto/menu.proto   # The internal service contract
-        ├── package.json
-        └── RUN-AND-TEST.md
+├── day-03-api-primitives/
+│   ├── cursor-pagination-toy/ # real-db.js + optional index.js
+│   └── grpc-vs-rest-toy/      # real-bench.js + optional index.js
+├── day-06-cache-realtime/
+│   ├── rate-limiter-toy/
+│   ├── hot-key-stampede-toy/  # real-redis.js
+│   └── stateful-websocket-toy/ # real-chat.js
+├── day-09-kafka-async/
+│   ├── notification-fanout-toy/ # real-kafka.js
+│   └── stream-processing-toy/
+└── day-15-breadth/
+    ├── search-index-toy/      # real-db.js (GIN vs LIKE)
+    ├── video-hls-cdn-toy/     # real-demo.js (HTTP origin/edge)
+    ├── olap-cdc-toy/          # real-db.js + real-cdc.js
+    ├── object-storage-toy/    # real-demo.js (bytea vs presigned)
+    └── web-crawler-toy/       # real-crawl.js (politeness + dedup)
 ```
 
-Each toy is organized by the **curriculum day** when the concept is introduced.
+Each toy ships `RUN-AND-TEST.md` (the deep guide) and defaults `package.json` scripts to the **real** entrypoint.
 
 ## How any toy works (failure-first)
-1. Run the "break" scenario (naive OFFSET, no single-flight, chatty REST, naive fan-out, etc.).
-2. Observe clear bad metrics (rows examined growing to 80k, high p99, thundering herd, wasted IO, etc.).
-3. Apply the fix (cursor/keyset, single-flight cache stampede lock, gRPC, proper fan-out with outbox/inbox, etc.).
+1. Run the "break" scenario (naive OFFSET, no single-flight, chatty REST, blobs in DB, etc.).
+2. Observe clear bad metrics (rows examined, 429 throttles, origin egress MB, etc.).
+3. Apply the fix (cursor/keyset, presigned URL, polite crawler, HLS+edge, etc.).
 4. Re-run the same inducing workload.
-5. Compare numbers + (when applicable) real EXPLAIN plans or load test output.
+5. Compare numbers + (when applicable) real EXPLAIN plans or HTTP stats.
 6. Read the narrative in the toy's RUN-AND-TEST.md for the slide-friendly story.
 
-Most toys provide:
-- A zero-dependency / instant "smoke" path (pure JS arrays, no Docker) for live teaching.
-- A "real verification" path that uses the project's existing docker-compose services (postgres, redis...) so students see production-like behavior (query planner, buffer stats, real timings) without new infrastructure.
+**Real implementation first:** every toy has a runnable real path (Postgres, HTTP, Redis, Kafka, files). Pure-JS simulation is optional smoke only where it exists.
 
 ## Running a toy
-See the individual `RUN-AND-TEST.md` inside each toy folder. They are the single source of truth and follow the template exactly (Windows PowerShell commands included).
+See the individual `RUN-AND-TEST.md` inside each toy folder. Windows PowerShell commands included.
 
-Typical quick smoke:
+Typical real path:
 ```powershell
-cd tadka\toydemo\day-03-api-primitives\cursor-pagination-toy
-node index.js --mode=break
-node index.js --mode=fix
-```
+cd D:\work\desi-architect\tadka
+docker compose up -d postgres   # when the toy needs Postgres
 
-For the real DB truth (when the toy provides a real-*.js or raw SQL):
-```bash
-# from tadka/
-docker compose up -d postgres
-cd toydemo/day-03-api-primitives/cursor-pagination-toy
+cd toydemo\day-15-breadth\search-index-toy
 node real-db.js --mode=break
 node real-db.js --mode=fix
 ```
 
+## Planned toys — status (see TOY-DEMO-PLAN.md for gates)
+
+| Phase | Day | Toys | Status |
+|-------|-----|------|--------|
+| 1 | 03/04 | cursor-pagination, grpc-vs-rest | done |
+| 2 | 06 | rate-limiter, hot-key-stampede, stateful-websocket | done |
+| 3 | 09 | notification-fanout, stream-processing | done |
+| 4 | 15 | search-index, video-hls-cdn, olap-cdc, object-storage, web-crawler | search committed; 4 awaiting user test |
+
+Stretch (not started): feed fan-out push vs pull, CRDT merge.
+
 ## Relation to other demos in the repo
-- `samples/sharding-demo/` — the original reference implementation of this style (failure numbers, maps-to-Tadka section, DEMOS.md). The toydemo/ toys follow the same spirit but live outside the main app so they can be more focused and polyglot.
-- Main Tadka evolution (src/, k6/, docker-compose) — the "build the right thing" path. Toys show "what happens if you build the common wrong thing first".
-
-## Planned toys (day-mapped, see TOY-DEMO-PLAN.md for status)
-**Phase 1 (Day 03/04 - API & contract primitives)**
-- cursor-pagination-toy (OFFSET death vs cursor/keyset + real EXPLAIN) — done
-- grpc-vs-rest-toy (chatty REST vs gRPC batch + real localhost bench) — ready for user test
-
-**Phase 2 (Day 06 - Cache, realtime, hot paths)**
-- rate-limiter-toy (fixed-window boundary burst vs token bucket) — done
-- hot-key-stampede-toy (cache expiry thundering herd vs ADR-019 single-flight) — done
-- stateful-websocket-toy (multi-instance WS without vs with Redis backplane) — done
-
-**Phase 3 (Day 09 - Kafka / async / fan-out)**
-- notification-fanout-toy (sync push loop vs Kafka + inbox + DLQ) — done
-- stream-processing-toy (unbounded all-time counts vs 5-min tumbling buckets) — done
-
-**Phase 4 (Day 15 - breadth / teardown)**
-- search-index-toy (LIKE full scan vs inverted index) — ready for user test
-- Stateful WebSocket / realtime toy (presence, ordering, backplane limits)
-
-**Phase 3 (Day 09 - Kafka / async / fan-out)**
-- Notification / promotional fan-out (transactional vs mass, DLQ, idempotency)
-- Simple stream processing / heavy hitters / sliding windows
-
-**Phase 4 (Day 15 - Breadth / domain primers)**
-- Search / inverted index toy
-- Video streaming (HLS + CDN + adaptive client)
-- OLAP / CDC / analytics row vs columnar
-- Object storage (S3-like pre-signed, multipart, dedup)
-- Web crawler (frontier, politeness, bloom, traps)
-- (stretch) Feed fan-out push vs pull, basic CRDT merge
-
-See the living `TOY-DEMO-PLAN.md` for exact progress checkboxes, user-confirmation gates, and branch strategy.
+- `samples/sharding-demo/` — original reference for this style.
+- Main Tadka evolution — the "build the right thing" path. Toys show "what happens if you build the common wrong thing first".
 
 ## Contribution rules (strict)
 - Every toy must ship with a complete `RUN-AND-TEST.md` following the 12-section template.
 - Failure-first + visible numbers/metrics required.
-- After code + doc for a toy is done: **stop**. Do not commit. Ask the user (or reviewer) to personally run the deep document end-to-end and give explicit "approved to commit <toy name>" before any git add/commit.
-- All work lands on the official `day-NN` branches (cherry-pick foundation forward; never create separate toydemo-* side branches).
-- Update `TOY-DEMO-PLAN.md` (the project copy) after every toy and phase.
+- After code + doc: **stop** — user runs the deep doc and gives explicit "approved to commit" before git commit.
+- All work lands on official `day-NN` branches (cherry-pick forward; no separate toydemo-* branches).
+- Update `TOY-DEMO-PLAN.md` after every toy and phase.
 
-## Curriculum wiring (future phases)
-Once toys are user-approved and landed on the day branches:
-- Day plans get "run this toy before class" callouts.
-- option-space.md and interview-pack get links.
-- `cohort-prep/DEMOS.md` and main `tadka/README.md` get refreshed references.
-
-This keeps the "language-agnostic 80/20 + failure analysis grading" claim honest with runnable artifacts.
-
-## License / usage
-Same as the rest of the cohort materials. Use for teaching the cohort and for your own interview/system design prep. Run the break path on candidates if you want to see whether they have felt the pain before.
+## Curriculum wiring (Phase 5 — not started)
+Once toys are user-approved: wire into `cohort-prep/DEMOS.md`, day plans, option-space, interview-pack.
 
 ---
 
-Maintained as part of the Desi Architect teaching stack. The living plan (`TOY-DEMO-PLAN.md`) is the current source of truth for status and process.
+Maintained as part of the Desi Architect teaching stack. `TOY-DEMO-PLAN.md` is the current source of truth for status and process.
