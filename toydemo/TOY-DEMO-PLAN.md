@@ -145,11 +145,16 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 - [x] `toydemo/verify-all.ps1` inventory runner
 - [x] `cohort-prep/DEMOS.md` — full toy section (12 toys, break/fix table)
 - [x] Day READMEs: day-03, day-06, day-09, day-15 — pre-class toy callouts
+- [x] `plan.md`: day-03, day-06, day-09, day-15 — toy demo sections
+- [x] `option-space.md` / `api-style-selection.md`: day-03, day-06, day-09, day-15 — runnable toy tables
+- [x] `interview-track.md` — week-by-week toy overlay
 - [x] `domain-primers.md` — runnable toy link per primer
 - [x] `SYSTEM_DESIGN_COVERAGE.md` — toy links for breadth + drill rows
 - [x] `interview-pack/README.md`, `tadka/README.md` updated
-- [ ] Stretch toys (feed fan-out, CRDT) — deferred
-- [x] Phase 5 wiring complete (user approved 2026-06-17).
+- [x] `samples/sharding-demo/README.md` — cross-ref to toydemo + hot-key toy
+- [x] Branch carry-forward: full `toydemo/` cherry-picked to **`day-16`**; tag **`toydemo-v1.0`**
+- [ ] Stretch toys (feed fan-out, CRDT) — deferred (optional, not core plan)
+- [x] Phase 5 wiring complete (2026-06-17).
 
 ## Cross-Cutting Rules (Apply to All Phases)
 - **Living Plan Updates:** After every phase or individual toy completion, edit `D:\work\desi-architect\toydemo\TOY-DEMO-PLAN.md` (the project copy) with:
@@ -252,6 +257,21 @@ git cherry-pick <day-06-toydemo-commit>  # moves previous toydemo state forward
 The living plan travels with the toydemo/ commits.
 
 Current state: Phase 0 foundation is cleanly on official day-01 (no extra branches). Ready to be carried when we implement toys on their respective days.
+
+### Toydemo branch map (canonical checkout)
+
+| Branch | `toydemo/` contents | Notes |
+|--------|---------------------|-------|
+| `day-01` | Phase 0 foundation only | skeleton + plan |
+| `day-03` | + Phase 1 (cursor, grpc) | API primitives |
+| `day-04` | same as day-03 + grpc committed | |
+| `day-06` | + Phase 2 (rate-limit, hot-key, websocket) | |
+| `day-09` | + Phase 3 (fan-out, stream) | |
+| `day-15` | + Phase 4 breadth (5 toys) + Phase 5 wiring | teaching branch for Day 15 |
+| **`day-16`** | **full 12 toys + verify-all + sharding-demo** | **recommended student checkout** |
+| Tag `toydemo-v1.0` | points at day-16 tip | immutable snapshot |
+
+Per-day branches keep *their* phase toys for historical accuracy; **`day-16`** is the single checkout for the complete inventory.
 - 2026-06-17: Directory created, living plan, template, toydemo/README, tadka/README update done.
 - Next: User review of skeleton + explicit confirmation before Phase 1.
 

@@ -31,3 +31,7 @@ No dependencies, deterministic (fixed inputs → same numbers every run). Routes
 ## How this maps to Tadka
 
 Tadka stays single-Postgres at 1 lakh/day — correctly. When Day-16's load test finds the single-writer ceiling (~2,500 writes/s ≈ ~1 crore orders/day), *this* is the next move: shard the orders table by a high-cardinality key, consistent-hashing + vnodes so the first reshard doesn't move the whole dataset. Postgres analogs: Citus, Vitess, or app-level routing. Full reasoning — shard-key choice, cross-shard query pain, online resharding — in the [sharding deep-dive](../../../desiarchitect-website/cohort-prep/interview-pack/sharding-deep-dive.md).
+
+## Related failure-first demos
+
+Same pedagogy as [`toydemo/`](../../toydemo/README.md) (12 breadth/realtime toys) and the Tadka day break-kits — indexed in [cohort-prep/DEMOS.md](../../../desiarchitect-website/cohort-prep/DEMOS.md). Hot-key mitigation referenced in takeaway #4: [`hot-key-stampede-toy`](../../toydemo/day-06-cache-realtime/hot-key-stampede-toy/RUN-AND-TEST.md).
