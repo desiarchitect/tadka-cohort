@@ -92,8 +92,8 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 **Progress Checkpoints (update in TOY-DEMO-PLAN.md)**
 - [x] Rate limiter algos toy + deep doc — 2026-06-17 — [RUN-AND-TEST.md](day-06-cache-realtime/rate-limiter-toy/RUN-AND-TEST.md) — committed on day-06
 - [x] Hot key / stampede toy + deep doc — 2026-06-17 — [RUN-AND-TEST.md](day-06-cache-realtime/hot-key-stampede-toy/RUN-AND-TEST.md) — committed on day-06 (200 DB queries → 1)
-- [ ] Stateful WebSocket toy + deep doc ΓÇö date
-- Phase 2 fully user-confirmed and committed.
+- [x] Stateful WebSocket toy + deep doc — 2026-06-17 — [RUN-AND-TEST.md](day-06-cache-realtime/stateful-websocket-toy/RUN-AND-TEST.md) — committed on day-06 (break ~49% / fix 100% delivery)
+- [x] Phase 2 fully user-confirmed and committed (2026-06-17).
 
 ## Phase 3 ΓÇö Day 09 Kafka/Async/Fan-Out & Stream Toys
 **Toys**
@@ -199,7 +199,7 @@ This structure guarantees the user stays in the loop for testing and commits, ex
 - [x] Phase 1 complete and marked (2026-06-17). Carried to day-06 for Phase 2.
 - [x] Phase 2 rate-limiter-toy committed on day-06 (2026-06-17): fixed-window 150 allowed vs token-bucket 110/40.
 - [x] Phase 2 hot-key-stampede-toy committed on day-06 (2026-06-17): break 200 DB queries / fix 1.
-- [x] Phase 2 stateful-websocket-toy started (2026-06-17) — **awaiting user test**.
+- [x] Phase 2 complete on day-06 (2026-06-17). Phase 3 started on day-09.
 - [ ] Phase 2 complete (hot-key + WebSocket toys pending).
 
 *End of living plan. Follow phases and gates strictly. User gate required before any commit of changes.*
