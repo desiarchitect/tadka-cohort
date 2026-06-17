@@ -22,11 +22,17 @@ tadka/toydemo/
 ├── TEMPLATE-TOY-RUN-AND-TEST.md
 ├── README.md                  # This file
 └── day-03-api-primitives/
-    └── cursor-pagination-toy/
-        ├── index.js           # Fast zero-dep simulation (break / fix modes)
-        ├── real-db.js         # Real Postgres verification using project's tadka-postgres container + EXPLAIN (ANALYZE, BUFFERS)
+    ├── cursor-pagination-toy/
+    │   ├── index.js           # Fast zero-dep simulation (break / fix modes)
+    │   ├── real-db.js         # Real Postgres verification using project's tadka-postgres container + EXPLAIN (ANALYZE, BUFFERS)
+    │   ├── package.json
+    │   └── RUN-AND-TEST.md    # The deep, copy-paste-ready guide (12 sections)
+    └── grpc-vs-rest-toy/
+        ├── index.js           # Fast zero-dep simulation (chatty REST vs gRPC batch)
+        ├── real-bench.js      # Real HTTP + gRPC localhost benchmark
+        ├── proto/menu.proto   # The internal service contract
         ├── package.json
-        └── RUN-AND-TEST.md    # The deep, copy-paste-ready guide (12 sections)
+        └── RUN-AND-TEST.md
 ```
 
 Each toy is organized by the **curriculum day** when the concept is introduced.
@@ -68,8 +74,8 @@ node real-db.js --mode=fix
 
 ## Planned toys (day-mapped, see TOY-DEMO-PLAN.md for status)
 **Phase 1 (Day 03/04 - API & contract primitives)**
-- cursor-pagination-toy (OFFSET death vs cursor/keyset + real EXPLAIN)
-- gRPC vs REST internal toy (payload bloat + latency)
+- cursor-pagination-toy (OFFSET death vs cursor/keyset + real EXPLAIN) — done
+- grpc-vs-rest-toy (chatty REST vs gRPC batch + real localhost bench) — ready for user test
 
 **Phase 2 (Day 06 - Cache, realtime, hot paths)**
 - Rate limiter algorithms
