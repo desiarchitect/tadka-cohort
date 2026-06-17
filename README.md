@@ -90,8 +90,12 @@ tadka/
 │   ├── diagrams/            # Mermaid architecture diagrams
 │   └── templates/           # Reusable templates
 ├── docker-compose.yml       # Infrastructure (PostgreSQL, later Redis, Kafka)
-└── k6/                      # Load test scripts (from Week 7)
+├── k6/                      # Load test scripts (from Week 7)
+└── toydemo/                 # Failure-first toy demos for breadth topics (not in main Tadka evolution)
+    └── day-XX-*/            # Day-wise toys with deep RUN-AND-TEST.md (see toydemo/README.md)
 ```
+
+See [toydemo/README.md](toydemo/README.md) for standalone failure-first toy demos used to teach topics not implemented in the core Tadka app (e.g. cursor pagination death, hot-key stampede, search inverted index, fan-out, WebSocket backplanes, OLAP/CDC). Each toy follows the same style as `samples/sharding-demo/` and includes zero-dep quick simulations + real verification paths against the project's existing Postgres/Redis/Kafka services where possible.
 
 ## Per-day code states
 
