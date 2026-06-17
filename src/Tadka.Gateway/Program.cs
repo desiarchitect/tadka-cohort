@@ -26,6 +26,10 @@ var app = builder.Build();
 
 app.UseRateLimiter();
 
+// Live order tracker demo (ADR-020): samples/live-tracker → wwwroot/demo at build; no npm step.
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
 // The gateway is a THIN edge: routing + rate-limit only. It forwards Authorization as-is; each service
 // still validates the JWT itself (ADR-031, defense in depth — the gateway is not a trust boundary).
 app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "gateway" }));

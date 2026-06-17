@@ -15,4 +15,17 @@
     <ProjectReference Include="..\Tadka.Telemetry\Tadka.Telemetry.csproj" />
   </ItemGroup>
 
+  <!-- samples/live-tracker → wwwroot/demo at build (single source of truth) -->
+  <Target Name="CopyLiveTrackerDemo" BeforeTargets="Build">
+    <PropertyGroup>
+      <LiveTrackerSource>$(MSBuildThisFileDirectory)..\..\samples\live-tracker</LiveTrackerSource>
+      <LiveTrackerDest>$(MSBuildThisFileDirectory)wwwroot\demo</LiveTrackerDest>
+    </PropertyGroup>
+    <MakeDir Directories="$(LiveTrackerDest)" />
+    <ItemGroup>
+      <LiveTrackerFiles Include="$(LiveTrackerSource)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LiveTrackerFiles)" DestinationFolder="$(LiveTrackerDest)\%(RecursiveDir)" SkipUnchangedFiles="true" />
+  </Target>
+
 </Project>

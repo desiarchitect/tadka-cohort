@@ -62,4 +62,7 @@ terraform/*.tfplan
 # k6
 k6/results/
 
+# Gateway live-tracker demo (copied from samples/live-tracker at build)
+src/Tadka.Gateway/wwwroot/demo/
+
 *.log

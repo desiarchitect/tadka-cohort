@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tadka Live Order Tracker</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Tadka Live Tracker</h1>
+      <p>Watch order status updates over SSE (ADR-020). Served from the gateway at <code>/demo/</code>.</p>
+    </header>
+
+    <section class="card" id="login-card">
+      <h2>Customer login</h2>
+      <label for="email">Email</label>
+      <input id="email" type="email" value="priya@tadka.test" autocomplete="username" />
+      <label for="password">Password</label>
+      <input id="password" type="password" value="Password123!" autocomplete="current-password" />
+      <div class="row">
+        <button type="button" id="btn-login">Log in</button>
+      </div>
+      <p class="hint">Seeded demo account. Password is in <code>AuthSeeder.DefaultPassword</code>.</p>
+      <p class="error hidden" id="login-error"></p>
+    </section>
+
+    <section class="card hidden" id="order-card">
+      <h2>Your order</h2>
+      <p class="order-meta" id="order-meta"></p>
+      <div class="row">
+        <button type="button" id="btn-place-order">Place demo order (Meghana biryani ×2)</button>
+        <button type="button" id="btn-track" class="secondary" disabled>Connect SSE stream</button>
+      </div>
+      <p class="error hidden" id="order-error"></p>
+    </section>
+
+    <section class="card hidden" id="stream-card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin:0">Live stream</h2>
+        <span class="status-pill" id="conn-pill">Disconnected</span>
+      </div>
+      <ul class="timeline" id="timeline"></ul>
+      <p class="hint" id="stream-hint">Events arrive over <code>GET /api/v1/orders/{id}/events</code> via Redis pub/sub.</p>
+    </section>
+
+    <section class="card hidden" id="kitchen-card">
+      <h2>Kitchen demo (class use)</h2>
+      <p class="hint">Advance status as the restaurant owner. Customers cannot PATCH status (ADR-031).</p>
+      <div class="row" id="kitchen-buttons"></div>
+      <p class="error hidden" id="kitchen-error"></p>
+    </section>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
