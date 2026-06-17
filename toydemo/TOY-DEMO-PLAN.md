@@ -104,7 +104,7 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 
 **Progress Checkpoints**
 - [x] Notification fan-out toy + deep doc — 2026-06-17 — [RUN-AND-TEST.md](day-09-kafka-async/notification-fanout-toy/RUN-AND-TEST.md) — committed on day-09
-- [ ] Stream processing toy + deep doc
+- [x] Stream processing toy + deep doc — 2026-06-17 — [RUN-AND-TEST.md](day-09-kafka-async/stream-processing-toy/RUN-AND-TEST.md) — committed on day-09
 - Phase 3 confirmed.
 
 ## Phase 4 ΓÇö Day 15 Breadth / Teardown Toys (the 5 Domain Primers + Fan-Out)
@@ -200,7 +200,7 @@ This structure guarantees the user stays in the loop for testing and commits, ex
 - [x] Phase 2 rate-limiter-toy committed on day-06 (2026-06-17): fixed-window 150 allowed vs token-bucket 110/40.
 - [x] Phase 2 hot-key-stampede-toy committed on day-06 (2026-06-17): break 200 DB queries / fix 1.
 - [x] Phase 2 complete on day-06 (2026-06-17). Phase 3 notification-fanout-toy committed on day-09.
-- [x] Phase 3 stream-processing-toy started (2026-06-17) — **awaiting user test**.
+- [x] Phase 3 complete on day-09 (2026-06-17). Phase 4 started on day-15.
 - [ ] Phase 2 complete (hot-key + WebSocket toys pending).
 
 *End of living plan. Follow phases and gates strictly. User gate required before any commit of changes.*

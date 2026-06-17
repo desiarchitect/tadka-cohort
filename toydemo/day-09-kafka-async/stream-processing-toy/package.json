@@ -1,0 +1,13 @@
+{
+  "name": "stream-processing-toy",
+  "version": "1.0.0",
+  "description": "Failure-first toy demo for sliding-window heavy hitters (Day 09)",
+  "main": "index.js",
+  "scripts": {
+    "break": "node index.js --mode=break",
+    "fix": "node index.js --mode=fix"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT"
+}
