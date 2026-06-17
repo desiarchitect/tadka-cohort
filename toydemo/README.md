@@ -80,7 +80,10 @@ node real-db.js --mode=fix
 **Phase 2 (Day 06 - Cache, realtime, hot paths)**
 - rate-limiter-toy (fixed-window boundary burst vs token bucket) — done
 - hot-key-stampede-toy (cache expiry thundering herd vs ADR-019 single-flight) — done
-- stateful-websocket-toy (multi-instance WS without vs with Redis backplane) — ready for user test
+- stateful-websocket-toy (multi-instance WS without vs with Redis backplane) — done
+
+**Phase 3 (Day 09 - Kafka / async / fan-out)**
+- notification-fanout-toy (sync push loop vs Kafka + inbox + DLQ) — ready for user test
 - Stateful WebSocket / realtime toy (presence, ordering, backplane limits)
 
 **Phase 3 (Day 09 - Kafka / async / fan-out)**
