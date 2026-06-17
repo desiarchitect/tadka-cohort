@@ -120,7 +120,7 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 **Same rigorous process:** deep docs, living plan updates, stop after each toy's doc for user test + confirmation.
 
 **Progress Checkpoints**
-- [ ] Search toy + doc
+- [x] Search toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/search-index-toy/RUN-AND-TEST.md) — real-db.js Postgres GIN vs LIKE (committed day-15)
 - [ ] Video/HLS toy + doc
 - [ ] OLAP/CDC toy + doc
 - [ ] Object storage toy + doc
@@ -151,6 +151,7 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
   "The <specific toy name> demo + its RUN-AND-TEST.md is ready in the branch. Please run it yourself by strictly following the deep document and report back the results (did the break/fix numbers appear as expected? Any friction?). Confirm with 'approved to commit <toy>' or give feedback before I commit or start the next item."
   Only after explicit confirmation: commit that isolated change (or the phase).
 - **Failure-First + Numbers:** Every demo must produce clear, capturable before/after metrics (like the sharding demo's 80% vs 24.5%).
+- **Real Implementation First (user-locked 2026-06-17):** Every toy ships a **runnable real path** (Postgres EXPLAIN, HTTP+gRPC sockets, Redis, Kafka, real files/HTTP for HLS, etc.) as the **primary** teaching surface. Pure-JS simulation is optional quick smoke only — never the only demo. `RUN-AND-TEST.md` must lead with the real commands; `package.json` scripts default to the real entrypoint.
 - **Reusability:** Follow sharding-demo structure (standalone, deterministic where possible, excellent README, "how this maps to Tadka + interview" section).
 - **Scope Control:** If a toy grows too large, split or simulate (fake transcode, in-memory "ES", etc.). Prefer zero external paid services.
 - **Branch Hygiene:** Use day-wise branches as primary development vehicle.
@@ -200,7 +201,7 @@ This structure guarantees the user stays in the loop for testing and commits, ex
 - [x] Phase 2 rate-limiter-toy committed on day-06 (2026-06-17): fixed-window 150 allowed vs token-bucket 110/40.
 - [x] Phase 2 hot-key-stampede-toy committed on day-06 (2026-06-17): break 200 DB queries / fix 1.
 - [x] Phase 2 complete on day-06 (2026-06-17). Phase 3 notification-fanout-toy committed on day-09.
-- [x] Phase 3 complete on day-09 (2026-06-17). Phase 4 started on day-15.
+- [x] Phase 3 complete on day-09 (2026-06-17). Phase 4 started on day-15 (search-index-toy built).
 - [ ] Phase 2 complete (hot-key + WebSocket toys pending).
 
 *End of living plan. Follow phases and gates strictly. User gate required before any commit of changes.*

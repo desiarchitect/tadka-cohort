@@ -1,0 +1,15 @@
+{
+  "name": "search-index-toy",
+  "version": "1.0.0",
+  "description": "Failure-first toy demo for inverted index vs LIKE scan (Day 15 breadth)",
+  "main": "index.js",
+  "scripts": {
+    "break": "node real-db.js --mode=break",
+    "fix": "node real-db.js --mode=fix",
+    "sim:break": "node index.js --mode=break",
+    "sim:fix": "node index.js --mode=fix"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT"
+}
