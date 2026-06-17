@@ -78,8 +78,8 @@ node real-db.js --mode=fix
 - grpc-vs-rest-toy (chatty REST vs gRPC batch + real localhost bench) — ready for user test
 
 **Phase 2 (Day 06 - Cache, realtime, hot paths)**
-- rate-limiter-toy (fixed-window boundary burst vs token bucket) — ready for user test
-- Hot key / thundering herd + stampede lock (builds on Tadka Redis day)
+- rate-limiter-toy (fixed-window boundary burst vs token bucket) — done
+- hot-key-stampede-toy (cache expiry thundering herd vs ADR-019 single-flight) — ready for user test
 - Stateful WebSocket / realtime toy (presence, ordering, backplane limits)
 
 **Phase 3 (Day 09 - Kafka / async / fan-out)**
