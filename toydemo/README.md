@@ -83,7 +83,8 @@ node real-db.js --mode=fix
 - stateful-websocket-toy (multi-instance WS without vs with Redis backplane) — done
 
 **Phase 3 (Day 09 - Kafka / async / fan-out)**
-- notification-fanout-toy (sync push loop vs Kafka + inbox + DLQ) — ready for user test
+- notification-fanout-toy (sync push loop vs Kafka + inbox + DLQ) — done
+- stream-processing-toy (unbounded all-time counts vs 5-min tumbling buckets) — ready for user test
 - Stateful WebSocket / realtime toy (presence, ordering, backplane limits)
 
 **Phase 3 (Day 09 - Kafka / async / fan-out)**
