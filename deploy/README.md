@@ -43,12 +43,16 @@ module "restaurant" {
 # ...repeat for monolith / payment / delivery; module.edge = ALB + ACM + WAF; module.msk = Kafka.
 ```
 
-## The "magic button" (for an account-holder, on their own time)
+## Instructor Terraform (`../terraform/`)
+
+Runnable IaC for people with an AWS account is in **[`../terraform/`](../terraform/)**: VPC, ALB, ECS Fargate (4 services), RDS (4), MSK, ElastiCache. Students do not write or submit this. In class we use the topology diagram, hop count, and monthly bill. Maybe a `terraform output` screenshot. Not a line-by-line HCL walk (ADR-039).
+
+## Magic button (instructor or self-study, not a student assignment)
 ```
-cd deploy && terraform init && terraform apply      # stands up VPC + ALB + 4 ECS services + RDS + MSK
-# or a CDK/CloudFormation stack — same result, results-not-syntax
+cd terraform/environments/demo && terraform init && terraform plan   # check before you spend
+# terraform apply   # real money — tear down after
 ```
-Teach what comes back: the ALB DNS name, per-service health, the request flow, the bill. **Not** the HCL.
+Care about what comes back: ALB DNS, health checks, request flow, the bill. Not the HCL. CDK or CloudFormation is fine too if you prefer.
 
 ## Why this is a black-box in the cohort
 - Not laptop-reproducible (needs an account, IAM, a VPC, **real money**) — can't meet the Day-4–7 demo bar here.

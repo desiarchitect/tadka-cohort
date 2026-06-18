@@ -14,6 +14,10 @@ Our team prioritizes development velocity over raw query performance at this sta
 
 Use EF Core with Npgsql (PostgreSQL provider) in Code-First mode. Domain entity classes are the source of truth for the database schema. Migrations are generated from C# code and version-controlled. Use `OwnsOne` for value object mapping (Money, Address).
 
+## Interview framing
+
+On a 45-min Swiggy HLD board, say **"ORM with versioned migrations"** or **"code-first schema"**. Do not debate EF Core vs Hibernate vs GORM. The decision is relational + migrations in the repo, not the library name.
+
 ## Consequences
 
 ### Positive

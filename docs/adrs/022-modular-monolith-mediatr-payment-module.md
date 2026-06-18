@@ -20,6 +20,10 @@ The question is **how much** to refactor. Rewriting every domain (Restaurant, De
 2. **The Payment module owns its data.** A separate `PaymentDbContext` owns the `payment` schema **and its own EF migration history** (`__EFMigrationsHistory` in the `payment` schema). Ordering's `TadkaDbContext` no longer maps `Payment` at all. Today both contexts point at the **same physical Postgres** — this is *logical* separation (own schema, own context, own migrations); the *physical* split (own database) is the Day-8 extraction. That's the honest modular-monolith step: you can already reason about Payment's data in isolation before you pay to move it.
 3. **Ordering has zero references to Payment.** No `using Tadka.Api.Domain.Payments` in Ordering. The Payment module reacts to `OrderPlaced` through an `INotificationHandler` it owns; it never reaches back into Ordering's tables. The only contract between them is the **event** — which is precisely what becomes a Kafka topic in Week 5 and an HTTP/event boundary in Day 8.
 
+## Interview framing
+
+On a Swiggy HLD board, say **"carve Payment as a module with its own schema; Ordering talks only via events"**. MediatR is an implementation detail for the repo, not an interview answer. Day 8 is the same boundary as a separate service.
+
 ## Consequences
 
 ### Positive

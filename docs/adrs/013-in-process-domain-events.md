@@ -24,6 +24,10 @@ We need a way for the order to *announce* "I was confirmed" and let interested p
 
 The shapes are chosen deliberately: an **event** (past tense, "something happened") and **independent handlers** are exactly an *event + its consumers* on a message bus. At extraction the dispatcher is swapped for a broker producer (Kafka) and the handlers become consumers in other services — **the domain code does not change**.
 
+## Interview framing
+
+On a Swiggy HLD board, say **"raise a domain event after commit; handlers react without coupling the aggregate"**. Do not name MediatR or dispatcher interfaces. The Week 5 answer is the same pattern on Kafka.
+
 ## Consequences
 
 ### Positive

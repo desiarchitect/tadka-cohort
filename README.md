@@ -19,11 +19,13 @@ Tadka starts as a .NET 10 monolith and evolves into **4 services + an API gatewa
 | 3 | Monolith — architect for scale | Indexes + `EXPLAIN`, connection pooling, a streaming **read replica** (read/write split); **Redis** cache-aside + stampede lock + CAP; SSE live tracking over a Redis backplane. |
 | 4 | Modular monolith → first extraction | Payment-gateway brownout → modular monolith, bulkhead/timeouts, CQRS; **extract Payment** (HTTP bridge — why HTTP before Kafka). |
 | 5 | Distributed patterns + edge | **Kafka** events, Saga, idempotency, Outbox, DLQ; **API gateway** (YARP), auth (JWT/OAuth2), authz (RBAC/ABAC), OWASP. |
-| 6 | 4 services + gateway, on the cloud | Extract **Delivery** + **Restaurant** → the final **4 services + an API gateway**; Docker, AWS ECS, Terraform, CI/CD. |
+| 6 | 4 services + gateway + deploy topology | Extract **Delivery** + **Restaurant** → the final **4 services + an API gateway**; deploy day covers routing and the bill, not student Terraform homework. |
 | 7 | Production — observability & resilience | OpenTelemetry logs/metrics/traces + SLOs; circuit breakers (Polly), retries/backoff, bulkhead, load shedding, chaos. |
 | 8 | Production — case studies & portfolio | Swiggy/Zomato/Razorpay teardowns; k6 load test + cost modeling; partitioning → sharding; final architecture doc + interview pack. |
 
 > **End state: 4 services — Payment, Delivery, Restaurant, and the Ordering/Identity core — plus an API gateway. Never "5 microservices."** The whole point is that you can name the exact failure that earned each one.
+
+> **Pre-built boilerplate:** Each `day-NN` branch has working CRUD, migrations, and handlers. Clone the branch; do not rebuild from scratch. Graded work is ADRs, diagrams, and failure analysis ([`cohort-prep/ASSIGNMENT_RUBRIC.md`](../desiarchitect-website/cohort-prep/ASSIGNMENT_RUBRIC.md)). In class, most time is on architecture, not C# syntax.
 
 ## Tech Stack
 
@@ -39,7 +41,7 @@ Tadka starts as a .NET 10 monolith and evolves into **4 services + an API gatewa
 - **xUnit + Testcontainers** — Unit + integration tests (real PostgreSQL)
 - **k6** — Load testing (from Week 3; capstone load test in Week 8)
 - **OpenTelemetry + Grafana/Tempo** — Tracing, metrics, logs (from Week 7)
-- **Terraform + AWS ECS** — Infrastructure as Code + deployment (from Week 6)
+- **AWS ECS + ALB** — Deploy topology in Week 6 (we read routing and cost, not HCL). Instructor Terraform lives in [`terraform/`](terraform/) if you want to spin it up yourself.
 
 ## Getting Started
 
