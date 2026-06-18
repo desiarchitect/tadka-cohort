@@ -19,6 +19,7 @@ is exactly what each load-test *type* is built to isolate.
 | [`stress.js`](stress.js) | climb until it breaks | **Where is the breaking point?** | the knee + first resource to saturate |
 | [`spike.js`](spike.js) | quiet → instant flood → drop → recover | Does it survive a sudden surge *and* recover? | circuit breaker OPEN; p99 returns to baseline |
 | [`dinner-rush.js`](dinner-rush.js) | Week-2 concurrency profile (monolith-direct `:5224`) | Does concurrency break naive code? | the Week-2 break-kit before/after |
+| [`hot-key.js`](hot-key.js) | sustained VUs, **~80%** traffic to Meghana menu | Does a celebrity restaurant melt one cache key / DB? | menu p99 spike; pair with stampede toy + single-flight |
 
 > `dinner-rush.js` is the original **Week-2 break-kit** fixture and deliberately
 > targets the monolith directly (`:5224`) — keep it as-is; the four Day-16
@@ -46,6 +47,11 @@ k6 run k6/stress.js          # or -e MAX_VUS=400 to push further
 
 # 5) Survive + recover from a surge
 k6 run k6/spike.js
+
+# 6) Hot-key / celebrity menu (Day 6 + Day 14 stampede)
+#    Invalidate Meghana's cache key first, then flood:
+#    docker exec tadka-redis redis-cli DEL restaurant:a1b2c3d4-0001-4000-8000-000000000001:menu
+k6 run k6/hot-key.js
 ```
 
 ## Env vars
