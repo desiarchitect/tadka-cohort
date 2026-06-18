@@ -1,0 +1,7 @@
+{
+  "name": "crdt-counter-toy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "G-Counter CRDT merge demo — conflict resolution without locks",
+  "type": "module"
+}

@@ -17,12 +17,26 @@ const FLOW = [
   "Delivered",
 ];
 
+const MAP_BOUNDS = {
+  minLat: 12.8,
+  maxLat: 13.2,
+  minLng: 77.4,
+  maxLng: 77.8,
+};
+
+// Meghana Foods (seeded restaurant) — approximate Indiranagar coords
+const RESTAURANT_PIN = { lat: 12.9784, lng: 77.6408, label: "Meghana" };
+const DELIVERY_PIN = { lat: 12.9141, lng: 77.6411, label: "You" };
+
 const state = {
   customerToken: null,
   ownerToken: null,
   orderId: null,
   streamAbort: null,
   events: [],
+  mapPollId: null,
+  riderPos: null,
+  trackMeta: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -160,6 +174,137 @@ function setConn(status) {
 function pushEvent(evt) {
   state.events.push(evt);
   renderTimeline();
+  if (evt.status === "Confirmed") startMapPolling();
+  if (evt.status === "Delivered") stopMapPolling();
+}
+
+function latLngToCanvas(lat, lng, w, h) {
+  const x = ((lng - MAP_BOUNDS.minLng) / (MAP_BOUNDS.maxLng - MAP_BOUNDS.minLng)) * (w - 24) + 12;
+  const y = h - ((lat - MAP_BOUNDS.minLat) / (MAP_BOUNDS.maxLat - MAP_BOUNDS.minLat)) * (h - 24) - 12;
+  return { x, y };
+}
+
+function drawMap() {
+  const canvas = $("map-canvas");
+  if (!canvas) return;
+  const ctx = canvas.getContext("2d");
+  const w = canvas.width;
+  const h = canvas.height;
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#0b1220";
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = "#1e293b";
+  ctx.lineWidth = 1;
+  for (let i = 1; i < 4; i++) {
+    const gx = (w / 4) * i;
+    const gy = (h / 4) * i;
+    ctx.beginPath();
+    ctx.moveTo(gx, 0);
+    ctx.lineTo(gx, h);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(0, gy);
+    ctx.lineTo(w, gy);
+    ctx.stroke();
+  }
+
+  function dot(pin, color, radius) {
+    const { x, y } = latLngToCanvas(pin.lat, pin.lng, w, h);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "11px system-ui,sans-serif";
+    ctx.fillText(pin.label, x + radius + 4, y + 4);
+  }
+
+  dot(RESTAURANT_PIN, "#f59e0b", 6);
+  dot(DELIVERY_PIN, "#3b82f6", 6);
+  if (state.riderPos) {
+    dot({ ...state.riderPos, label: state.trackMeta?.riderName || "Rider" }, "#22c55e", 7);
+    if (state.riderPos.lat && state.riderPos.lng) {
+      ctx.strokeStyle = "rgba(34,197,94,0.35)";
+      ctx.setLineDash([4, 4]);
+      const r = latLngToCanvas(state.riderPos.lat, state.riderPos.lng, w, h);
+      const d = latLngToCanvas(DELIVERY_PIN.lat, DELIVERY_PIN.lng, w, h);
+      ctx.beginPath();
+      ctx.moveTo(r.x, r.y);
+      ctx.lineTo(d.x, d.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+}
+
+function setMapPill(text, live) {
+  const pill = $("map-pill");
+  if (!pill) return;
+  pill.classList.remove("live", "err");
+  pill.textContent = text;
+  if (live) pill.classList.add("live");
+}
+
+async function fetchTrack(orderId, token) {
+  const res = await fetch(`${API}/api/v1/deliveries/${orderId}/track`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (res.status === 404) return null;
+  if (res.status === 502 || res.status === 503) return null;
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Track failed (${res.status}): ${text}`);
+  }
+  return res.json();
+}
+
+function stopMapPolling() {
+  if (state.mapPollId) {
+    clearInterval(state.mapPollId);
+    state.mapPollId = null;
+  }
+}
+
+async function pollTrackOnce() {
+  if (!state.orderId || !state.customerToken) return;
+  try {
+    const data = await fetchTrack(state.orderId, state.customerToken);
+    if (!data) {
+      setMapPill("No rider yet", false);
+      $("map-meta").textContent = "Delivery service may be down (Days 6–7) or rider not assigned yet.";
+      return;
+    }
+    state.trackMeta = {
+      riderName: data.agentName || "Rider",
+      status: data.status,
+    };
+    const loc = data.location;
+    if (loc?.latitude != null && loc?.longitude != null) {
+      state.riderPos = { lat: loc.latitude, lng: loc.longitude };
+      setMapPill(`${state.trackMeta.riderName} · ${data.status}`, true);
+      setError("map-error", null);
+    } else {
+      setMapPill(`${state.trackMeta.riderName} assigned`, false);
+    }
+    $("map-meta").textContent = `Polling ${API}/api/v1/deliveries/{orderId}/track every 2s`;
+    drawMap();
+    if (data.status === "Delivered") stopMapPolling();
+  } catch (e) {
+    setMapPill("Track error", false);
+    $("map-pill")?.classList.add("err");
+    setError("map-error", e.message);
+  }
+}
+
+function startMapPolling() {
+  const card = $("map-card");
+  if (!card) return;
+  show(card);
+  stopMapPolling();
+  drawMap();
+  pollTrackOnce();
+  state.mapPollId = setInterval(pollTrackOnce, 2000);
 }
 
 function parseSseChunk(buffer) {
@@ -258,7 +403,9 @@ $("btn-login").addEventListener("click", async () => {
     state.customerToken = await login($("email").value.trim(), $("password").value);
     show($("order-card"));
     show($("stream-card"));
+    show($("map-card"));
     show($("kitchen-card"));
+    drawMap();
     $("order-meta").textContent = "Logged in. Place an order to start tracking.";
     if (!state.ownerToken) {
       state.ownerToken = await login(OWNER_EMAIL, DEMO_PASSWORD);

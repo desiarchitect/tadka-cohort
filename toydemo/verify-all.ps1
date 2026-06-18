@@ -22,7 +22,8 @@ $toys = @(
     @{ Day = '15'; Name = 'video-hls-cdn-toy'; Path = 'day-15-breadth/video-hls-cdn-toy'; Entry = 'real-demo.js'; Docker = $false; Setup = 'node setup-media.js' },
     @{ Day = '15'; Name = 'olap-cdc-toy'; Path = 'day-15-breadth/olap-cdc-toy'; Entry = 'real-db.js'; Docker = $true },
     @{ Day = '15'; Name = 'object-storage-toy'; Path = 'day-15-breadth/object-storage-toy'; Entry = 'real-demo.js'; Docker = $true },
-    @{ Day = '15'; Name = 'web-crawler-toy'; Path = 'day-15-breadth/web-crawler-toy'; Entry = 'real-crawl.js'; Docker = $false }
+    @{ Day = '15'; Name = 'web-crawler-toy'; Path = 'day-15-breadth/web-crawler-toy'; Entry = 'real-crawl.js'; Docker = $false },
+    @{ Day = '15'; Name = 'crdt-counter-toy'; Path = 'day-15-breadth/crdt-counter-toy'; Entry = 'index.js'; Docker = $false }
 )
 
 Write-Host "=== Tadka Toy Demos ($($toys.Count) toys) ===" -ForegroundColor Cyan

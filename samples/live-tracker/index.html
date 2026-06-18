@@ -45,6 +45,21 @@
       <p class="hint" id="stream-hint">Events arrive over <code>GET /api/v1/orders/{id}/events</code> via Redis pub/sub.</p>
     </section>
 
+    <section class="card hidden" id="map-card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin:0">Delivery map</h2>
+        <span class="status-pill" id="map-pill">Waiting for rider</span>
+      </div>
+      <canvas id="map-canvas" width="640" height="280" aria-label="Bangalore delivery map"></canvas>
+      <p class="map-legend">
+        <span class="legend-dot restaurant"></span> Restaurant
+        <span class="legend-dot destination"></span> Your address
+        <span class="legend-dot rider"></span> Rider (polls every 2s)
+      </p>
+      <p class="hint" id="map-meta">Requires Delivery service (Day 11+). <code>GET /api/v1/deliveries/{orderId}/track</code></p>
+      <p class="error hidden" id="map-error"></p>
+    </section>
+
     <section class="card hidden" id="kitchen-card">
       <h2>Kitchen demo (class use)</h2>
       <p class="hint">Advance status as the restaurant owner. Customers cannot PATCH status (ADR-031).</p>

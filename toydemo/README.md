@@ -73,7 +73,7 @@ node real-db.js --mode=fix
 | 3 | 09 | notification-fanout, stream-processing | done |
 | 4 | 15 | search-index, video-hls-cdn, olap-cdc, object-storage, web-crawler | done (day-15) |
 
-Stretch (not started): feed fan-out push vs pull, CRDT merge.
+Stretch: feed fan-out push vs pull (optional). **CRDT:** `day-15-breadth/crdt-counter-toy` (G-Counter merge).
 
 ## Relation to other demos in the repo
 - `samples/sharding-demo/` — original reference for this style.

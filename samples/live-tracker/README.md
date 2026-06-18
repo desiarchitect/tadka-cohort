@@ -33,6 +33,7 @@ Static files are copied from this folder into `Tadka.Gateway/wwwroot/demo` at bu
 3. Watch the timeline fill (Created, then payment may push Confirmed async)
 4. Click kitchen buttons (owner token is fetched in the background) to advance Preparing → Delivered
 5. Each click should appear on the timeline without refreshing
+6. **Day 11+** (Delivery + gateway): after **Confirmed**, the **Delivery map** polls `GET /api/v1/deliveries/{orderId}/track` every 2s and moves the rider dot on a Bangalore canvas
 
 ## Technical notes
 
