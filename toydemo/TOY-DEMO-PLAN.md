@@ -125,7 +125,7 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 - [x] OLAP/CDC toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/olap-cdc-toy/RUN-AND-TEST.md) — committed day-15
 - [x] Object storage toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/object-storage-toy/RUN-AND-TEST.md) — committed day-15
 - [x] Web crawler toy + doc — 2026-06-17 — [RUN-AND-TEST.md](day-15-breadth/web-crawler-toy/RUN-AND-TEST.md) — committed day-15
-- (stretch items: feed fan-out, CRDT — not started)
+- [x] **CRDT stretch toy done** — `day-15-breadth/crdt-counter-toy` (G-Counter; `--mode=break` naive merge loses 7 updates → `--mode=fix` converges to 14). Google-Docs curveball. Feed fan-out push/pull kept as a primer (cheat-sheet #4 + `notification-fanout-toy`), no separate toy by decision.
 - [x] Phase 4 fully confirmed (2026-06-17, user approved commit).
 
 ## Phase 5 ΓÇö Integration, Polish & Curriculum Wiring
@@ -153,7 +153,7 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 - [x] `interview-pack/README.md`, `tadka/README.md` updated
 - [x] `samples/sharding-demo/README.md` — cross-ref to toydemo + hot-key toy
 - [x] Branch carry-forward: full `toydemo/` cherry-picked to **`day-16`**; tag **`toydemo-v1.0`**
-- [ ] Stretch toys (feed fan-out, CRDT) — deferred (optional, not core plan)
+- [x] Stretch: **CRDT toy done** (`crdt-counter-toy`); feed fan-out push/pull kept as primer + existing `notification-fanout-toy` (no separate toy, by decision)
 - [x] Phase 5 wiring complete (2026-06-17).
 
 ## Cross-Cutting Rules (Apply to All Phases)
