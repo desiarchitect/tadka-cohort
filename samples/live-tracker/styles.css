@@ -230,3 +230,104 @@ button.ghost {
 .legend-dot.restaurant { background: #f59e0b; }
 .legend-dot.destination { background: #3b82f6; }
 .legend-dot.rider { background: #22c55e; }
+
+select {
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: #0f172a;
+  color: var(--text);
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+}
+
+.menu-list {
+  margin-bottom: 0.75rem;
+}
+
+.menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.25rem;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.9rem;
+  cursor: pointer;
+  color: var(--text);
+  margin-bottom: 0;
+}
+
+.menu-item:last-child {
+  border-bottom: none;
+}
+
+.menu-item input[type="radio"] {
+  width: auto;
+  margin: 0;
+}
+
+.menu-name {
+  flex: 1;
+}
+
+.menu-price {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  color: var(--warn);
+}
+
+.inline-label {
+  margin: 0;
+  align-self: center;
+}
+
+.qty-input {
+  width: 4.5rem;
+  margin-bottom: 0;
+}
+
+.tap-log {
+  list-style: none;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  font-size: 0.8rem;
+}
+
+.tap-log li {
+  display: flex;
+  gap: 0.6rem;
+  align-items: baseline;
+  padding: 0.35rem 0.5rem;
+  border-left: 3px solid var(--border);
+  margin-bottom: 0.25rem;
+  background: #0f172a;
+  border-radius: 0 6px 6px 0;
+}
+
+.tap-log li.ok { border-left-color: var(--ok); }
+.tap-log li.dup { border-left-color: var(--err); background: rgba(239, 68, 68, 0.08); }
+.tap-log li.dup strong { color: #fca5a5; }
+.tap-log li.err { border-left-color: var(--err); }
+
+.tap-time {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.tap-id,
+.tap-key {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.status-pill.warn-pill {
+  border-color: #92400e;
+  color: #fcd34d;
+}
+
+.status-pill.refund {
+  border-color: #6d28d9;
+  color: #c4b5fd;
+}

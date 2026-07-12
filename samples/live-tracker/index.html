@@ -3,14 +3,14 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Tadka Live Order Tracker</title>
+  <title>Tadka Demo Console</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="wrap">
     <header>
-      <h1>Tadka Live Tracker</h1>
-      <p>Watch order status updates over SSE (ADR-020). Served from the gateway at <code>/demo/</code>.</p>
+      <h1>Tadka Demo Console</h1>
+      <p>Menu, orders, payments and live tracking in one page. Served from the gateway at <code>/demo/</code>.</p>
     </header>
 
     <section class="card" id="login-card">
@@ -26,14 +26,49 @@
       <p class="error hidden" id="login-error"></p>
     </section>
 
-    <section class="card hidden" id="order-card">
-      <h2>Your order</h2>
-      <p class="order-meta" id="order-meta"></p>
-      <div class="row">
-        <button type="button" id="btn-place-order">Place demo order (Meghana biryani ×2)</button>
-        <button type="button" id="btn-track" class="secondary" disabled>Connect SSE stream</button>
+    <section class="card hidden" id="menu-card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin:0">Menu</h2>
+        <span class="status-pill" id="instance-pill" title="Which API instance answered (X-Tadka-Instance header, Day 6 scale-out)">instance: n/a</span>
       </div>
+      <label for="restaurant-select">Restaurant</label>
+      <select id="restaurant-select"></select>
+      <div id="menu-list" class="menu-list"></div>
+      <div class="row">
+        <label class="inline-label" for="qty">Qty</label>
+        <input id="qty" type="number" min="1" max="9" value="2" class="qty-input" />
+        <button type="button" id="btn-refresh-menu" class="secondary">Refresh menu</button>
+      </div>
+      <p class="hint" id="menu-meta">Prices come from the server. Refresh repeatedly during the Day 6 scale-out demo to see which instance (and which cache) answers.</p>
+      <p class="error hidden" id="menu-error"></p>
+    </section>
+
+    <section class="card hidden" id="order-card">
+      <h2>Pay</h2>
+      <label for="idem-mode">Idempotency-Key mode (Day 4 break lever, ADR-011)</label>
+      <select id="idem-mode">
+        <option value="new-key">New key per tap (normal client)</option>
+        <option value="same-key">Same key on every tap (safe retry)</option>
+        <option value="no-key">No key (BROKEN - double-tap creates duplicates)</option>
+      </select>
+      <div class="row">
+        <button type="button" id="btn-pay">Pay</button>
+        <button type="button" id="btn-double-tap" class="ghost" title="Fires two Pay requests 80ms apart">Double tap</button>
+        <button type="button" id="btn-new-key" class="secondary" title="Rotate the shared key used by same-key mode">Rotate key</button>
+        <button type="button" id="btn-track" class="secondary" disabled>Reconnect SSE</button>
+      </div>
+      <p class="order-meta" id="order-meta"></p>
+      <ul class="tap-log" id="tap-log"></ul>
       <p class="error hidden" id="order-error"></p>
+    </section>
+
+    <section class="card hidden" id="payment-card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin:0">Payment</h2>
+        <span class="status-pill" id="payment-pill">No payment yet</span>
+      </div>
+      <p class="hint" id="payment-meta">Polls <code>GET /api/v1/payments/{orderId}</code> every 2s (Day 8+, via the gateway). Watch this flip to <strong>Refunded</strong> in the Day 11 compensation demo.</p>
+      <p class="error hidden" id="payment-error"></p>
     </section>
 
     <section class="card hidden" id="stream-card">
