@@ -1,10 +1,9 @@
-// Tadka live order tracker — vanilla JS, no build step.
+// Tadka Demo Console - vanilla JS, no build step.
+// Menu + Pay (idempotency lever) + payment status + SSE tracking + delivery map.
 // Uses fetch() for SSE so we can send Authorization (EventSource cannot).
 
 const API = window.location.origin;
 
-const MEGHANA_ID = "a1b2c3d4-0001-4000-8000-000000000001";
-const MEGHANA_ITEM_ID = "b1b2c3d4-0001-4000-8000-000000000001";
 const OWNER_EMAIL = "owner1@tadka.test";
 const DEMO_PASSWORD = "Password123!";
 
@@ -24,7 +23,7 @@ const MAP_BOUNDS = {
   maxLng: 77.8,
 };
 
-// Meghana Foods (seeded restaurant) — approximate Indiranagar coords
+// Meghana Foods (seeded restaurant) - approximate Indiranagar coords
 const RESTAURANT_PIN = { lat: 12.9784, lng: 77.6408, label: "Meghana" };
 const DELIVERY_PIN = { lat: 12.9141, lng: 77.6411, label: "You" };
 
@@ -37,9 +36,19 @@ const state = {
   mapPollId: null,
   riderPos: null,
   trackMeta: null,
+  restaurants: [],
+  menu: [],
+  selectedRestaurantId: null,
+  selectedItemId: null,
+  sharedIdemKey: newKey(),
+  paymentPollId: null,
 };
 
 const $ = (id) => document.getElementById(id);
+
+function newKey() {
+  return `console-${crypto.randomUUID()}`;
+}
 
 function show(el) {
   el.classList.remove("hidden");
@@ -74,10 +83,88 @@ async function login(email, password) {
   return data.accessToken;
 }
 
-async function placeOrder(token) {
+// ---------- Menu ----------
+
+function setInstancePill(res) {
+  // Day 6 scale-out demo: the monolith stamps X-Tadka-Instance so the class can
+  // see which replica answered. Absent on single-instance days - show n/a.
+  const pill = $("instance-pill");
+  const instance = res.headers.get("x-tadka-instance");
+  pill.textContent = instance ? `instance: ${instance}` : "instance: n/a";
+  pill.classList.toggle("live", !!instance);
+}
+
+async function loadRestaurants() {
+  const res = await fetch(`${API}/api/v1/restaurants?page=1&pageSize=20`, {
+    headers: state.customerToken ? { Authorization: `Bearer ${state.customerToken}` } : {},
+  });
+  if (!res.ok) throw new Error(`Restaurants failed (${res.status})`);
+  const data = await res.json();
+  state.restaurants = data.items || [];
+  const sel = $("restaurant-select");
+  sel.innerHTML = "";
+  for (const r of state.restaurants) {
+    const opt = document.createElement("option");
+    opt.value = r.id;
+    opt.textContent = r.name;
+    sel.appendChild(opt);
+  }
+  if (!state.selectedRestaurantId && state.restaurants.length) {
+    state.selectedRestaurantId = state.restaurants[0].id;
+  }
+  if (state.selectedRestaurantId) sel.value = state.selectedRestaurantId;
+}
+
+async function loadMenu() {
+  if (!state.selectedRestaurantId) return;
+  const res = await fetch(`${API}/api/v1/restaurants/${state.selectedRestaurantId}/menu`, {
+    headers: state.customerToken ? { Authorization: `Bearer ${state.customerToken}` } : {},
+  });
+  if (!res.ok) throw new Error(`Menu failed (${res.status})`);
+  setInstancePill(res);
+  state.menu = await res.json();
+  renderMenu();
+}
+
+function renderMenu() {
+  const list = $("menu-list");
+  list.innerHTML = "";
+  const available = state.menu.filter((m) => m.isAvailable);
+  if (!available.length) {
+    list.innerHTML = `<p class="hint">No available items.</p>`;
+    return;
+  }
+  if (!state.selectedItemId || !available.some((m) => m.id === state.selectedItemId)) {
+    state.selectedItemId = available[0].id;
+  }
+  for (const item of available) {
+    const row = document.createElement("label");
+    row.className = "menu-item";
+    const price = item.price ? `${item.price.currency} ${item.price.amount}` : "";
+    row.innerHTML = `
+      <input type="radio" name="menu-item" value="${item.id}" ${item.id === state.selectedItemId ? "checked" : ""} />
+      <span class="menu-name">${item.name}</span>
+      <span class="menu-price">${price}</span>`;
+    row.querySelector("input").addEventListener("change", () => {
+      state.selectedItemId = item.id;
+    });
+    list.appendChild(row);
+  }
+}
+
+// ---------- Pay ----------
+
+function idemHeaderFor(mode) {
+  if (mode === "no-key") return null;
+  if (mode === "same-key") return state.sharedIdemKey;
+  return newKey(); // new-key
+}
+
+async function payOnce(mode) {
+  const qty = Math.max(1, Math.min(9, parseInt($("qty").value, 10) || 1));
   const payload = {
-    restaurantId: MEGHANA_ID,
-    items: [{ menuItemId: MEGHANA_ITEM_ID, quantity: 2 }],
+    restaurantId: state.selectedRestaurantId,
+    items: [{ menuItemId: state.selectedItemId, quantity: qty }],
     deliveryAddress: {
       line1: "Flat 402, Green Apartments",
       line2: "HSR Layout",
@@ -87,22 +174,141 @@ async function placeOrder(token) {
       longitude: 77.6411,
     },
   };
+  const headers = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${state.customerToken}`,
+  };
+  const key = idemHeaderFor(mode);
+  if (key) headers["Idempotency-Key"] = key;
+
   const res = await fetch(`${API}/api/v1/orders`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-      "Idempotency-Key": `live-tracker-${Date.now()}`,
-    },
+    headers,
     body: JSON.stringify(payload),
   });
-  if (!res.ok && res.status !== 200) {
-    const body = await res.text();
-    throw new Error(`Order failed (${res.status}): ${body}`);
+  const bodyText = await res.text();
+  let orderId = null;
+  try {
+    orderId = JSON.parse(bodyText).id || null;
+  } catch {
+    /* non-JSON error body */
   }
-  const data = await res.json();
-  return data.id;
+  return { status: res.status, orderId, key, body: bodyText };
 }
+
+function logTap(result, mode) {
+  const ul = $("tap-log");
+  const li = document.createElement("li");
+  const time = new Date().toLocaleTimeString();
+  const keyLabel = result.key ? result.key.slice(-8) : "none";
+
+  // Classify the outcome so the break is unmissable on screen:
+  // 201 + first-seen id  -> order created
+  // 200 + known id       -> idempotent replay (the fix working)
+  // 201 + second id      -> DUPLICATE (the break)
+  const priorIds = [...ul.querySelectorAll("[data-order-id]")].map((n) => n.dataset.orderId);
+  let cls = "ok";
+  let verdict = "created";
+  if (result.status === 200 && result.orderId && priorIds.includes(result.orderId)) {
+    verdict = "replay - same order returned";
+  } else if (result.status === 201 || result.status === 200) {
+    if (result.orderId && priorIds.length && !priorIds.includes(result.orderId)) {
+      cls = "dup";
+      verdict = "DUPLICATE ORDER - customer pays twice";
+    }
+  } else {
+    cls = "err";
+    verdict = `failed (${result.status})`;
+  }
+
+  li.className = cls;
+  if (result.orderId) li.dataset.orderId = result.orderId;
+  li.innerHTML = `<span class="tap-time">${time}</span> <span>${result.status}</span> <span class="tap-id">${result.orderId ? result.orderId.slice(0, 8) : "-"}</span> <span class="tap-key">key:${keyLabel}</span> <strong>${verdict}</strong>`;
+  ul.prepend(li);
+}
+
+async function pay(mode) {
+  setError("order-error", null);
+  try {
+    const result = await payOnce(mode);
+    logTap(result, mode);
+    if ((result.status === 201 || result.status === 200) && result.orderId) {
+      state.orderId = result.orderId;
+      $("order-meta").textContent = `Order ${state.orderId}`;
+      $("btn-track").disabled = false;
+      connectSse(state.orderId, state.customerToken).catch((e) => {
+        if (e.name !== "AbortError") setError("order-error", e.message);
+      });
+      startPaymentPolling();
+    } else if (result.status >= 400) {
+      setError("order-error", `Order failed (${result.status}): ${result.body.slice(0, 300)}`);
+    }
+  } catch (e) {
+    setError("order-error", e.message);
+  }
+}
+
+// ---------- Payment status ----------
+
+function setPaymentPill(text, cls) {
+  const pill = $("payment-pill");
+  pill.classList.remove("live", "err", "warn-pill", "refund");
+  pill.textContent = text;
+  if (cls) pill.classList.add(cls);
+}
+
+function stopPaymentPolling() {
+  if (state.paymentPollId) {
+    clearInterval(state.paymentPollId);
+    state.paymentPollId = null;
+  }
+}
+
+async function pollPaymentOnce() {
+  if (!state.orderId || !state.customerToken) return;
+  try {
+    const res = await fetch(`${API}/api/v1/payments/${state.orderId}`, {
+      headers: { Authorization: `Bearer ${state.customerToken}` },
+    });
+    if (res.status === 404) {
+      setPaymentPill("No payment yet", null);
+      return;
+    }
+    if (res.status === 502 || res.status === 503) {
+      setPaymentPill("Payment service down", "err");
+      $("payment-meta").textContent = "Payment service unreachable - expected before Day 8, or during the Day 8/9 kill-the-service demos.";
+      return;
+    }
+    if (!res.ok) throw new Error(`Payment lookup failed (${res.status})`);
+    const p = await res.json();
+    setError("payment-error", null);
+    if (p.status === "Completed") {
+      setPaymentPill("Completed", "live");
+    } else if (p.status === "Failed") {
+      setPaymentPill(`Failed - ${p.failureReason || "declined"}`, "err");
+    } else if (p.status === "Refunded") {
+      // Day 11 compensation payoff: restaurant rejected AFTER the charge - the saga refunds.
+      setPaymentPill("Refunded", "refund");
+    } else {
+      setPaymentPill(p.status || "Pending", "warn-pill");
+    }
+    if (p.gatewayReference) {
+      $("payment-meta").textContent = `Gateway ref: ${p.gatewayReference}`;
+    }
+    // Keep polling even after Completed - a refund can arrive later (Day 11 compensation).
+  } catch (e) {
+    setError("payment-error", e.message);
+  }
+}
+
+function startPaymentPolling() {
+  show($("payment-card"));
+  stopPaymentPolling();
+  pollPaymentOnce();
+  state.paymentPollId = setInterval(pollPaymentOnce, 2000);
+}
+
+// ---------- Order status / SSE ----------
 
 async function patchStatus(orderId, status, token) {
   const res = await fetch(`${API}/api/v1/orders/${orderId}/status`, {
@@ -130,7 +336,6 @@ function formatTime(iso) {
 function renderTimeline() {
   const ul = $("timeline");
   ul.innerHTML = "";
-  const seen = new Set(state.events.map((e) => e.status));
 
   for (const step of FLOW) {
     const hit = state.events.filter((e) => e.status === step);
@@ -141,19 +346,18 @@ function renderTimeline() {
       <span class="dot"></span>
       <div>
         <div><strong>${step}</strong></div>
-        ${last ? `<div class="time">${last.message} · ${formatTime(last.timestamp)}</div>` : `<div class="time">waiting…</div>`}
+        ${last ? `<div class="time">${last.message} - ${formatTime(last.timestamp)}</div>` : `<div class="time">waiting...</div>`}
       </div>`;
     ul.appendChild(li);
   }
 
-  if (!seen.size && state.events.length) {
-    // Non-standard status — append raw events at bottom
-    for (const e of state.events) {
-      const li = document.createElement("li");
-      li.classList.add("active");
-      li.innerHTML = `<span class="dot"></span><div><strong>${e.status}</strong><div class="time">${e.message}</div></div>`;
-      ul.appendChild(li);
-    }
+  // Non-standard statuses (e.g. Cancelled in the Day 11 refund demo) - append raw at bottom
+  const extras = state.events.filter((e) => !FLOW.includes(e.status));
+  for (const e of extras) {
+    const li = document.createElement("li");
+    li.classList.add("active");
+    li.innerHTML = `<span class="dot"></span><div><strong>${e.status}</strong><div class="time">${e.message} - ${formatTime(e.timestamp)}</div></div>`;
+    ul.appendChild(li);
   }
 }
 
@@ -272,7 +476,7 @@ async function pollTrackOnce() {
     const data = await fetchTrack(state.orderId, state.customerToken);
     if (!data) {
       setMapPill("No rider yet", false);
-      $("map-meta").textContent = "Delivery service may be down (Days 6–7) or rider not assigned yet.";
+      $("map-meta").textContent = "Delivery service may be down (Days 6-7) or rider not assigned yet.";
       return;
     }
     state.trackMeta = {
@@ -282,7 +486,7 @@ async function pollTrackOnce() {
     const loc = data.location;
     if (loc?.latitude != null && loc?.longitude != null) {
       state.riderPos = { lat: loc.latitude, lng: loc.longitude };
-      setMapPill(`${state.trackMeta.riderName} · ${data.status}`, true);
+      setMapPill(`${state.trackMeta.riderName} - ${data.status}`, true);
       setError("map-error", null);
     } else {
       setMapPill(`${state.trackMeta.riderName} assigned`, false);
@@ -396,17 +600,26 @@ function buildKitchenButtons() {
   }
 }
 
+// ---------- Wiring ----------
+
 $("btn-login").addEventListener("click", async () => {
   setError("login-error", null);
   $("btn-login").disabled = true;
   try {
     state.customerToken = await login($("email").value.trim(), $("password").value);
+    show($("menu-card"));
     show($("order-card"));
     show($("stream-card"));
     show($("map-card"));
     show($("kitchen-card"));
     drawMap();
-    $("order-meta").textContent = "Logged in. Place an order to start tracking.";
+    $("order-meta").textContent = "Logged in. Pick a menu item, then Pay.";
+    try {
+      await loadRestaurants();
+      await loadMenu();
+    } catch (e) {
+      setError("menu-error", e.message);
+    }
     if (!state.ownerToken) {
       state.ownerToken = await login(OWNER_EMAIL, DEMO_PASSWORD);
     }
@@ -418,21 +631,32 @@ $("btn-login").addEventListener("click", async () => {
   }
 });
 
-$("btn-place-order").addEventListener("click", async () => {
-  setError("order-error", null);
-  $("btn-place-order").disabled = true;
-  try {
-    state.orderId = await placeOrder(state.customerToken);
-    $("order-meta").textContent = `Order ${state.orderId}`;
-    $("btn-track").disabled = false;
-    connectSse(state.orderId, state.customerToken).catch((e) => {
-      if (e.name !== "AbortError") setError("order-error", e.message);
-    });
-  } catch (e) {
-    setError("order-error", e.message);
-  } finally {
-    $("btn-place-order").disabled = false;
-  }
+$("restaurant-select").addEventListener("change", (e) => {
+  state.selectedRestaurantId = e.target.value;
+  state.selectedItemId = null;
+  loadMenu().catch((err) => setError("menu-error", err.message));
+});
+
+$("btn-refresh-menu").addEventListener("click", () => {
+  setError("menu-error", null);
+  loadMenu().catch((err) => setError("menu-error", err.message));
+});
+
+// Pay is intentionally NOT disabled while a request is in flight - the Day 4
+// break depends on a real double-tap sending two overlapping POSTs.
+$("btn-pay").addEventListener("click", () => {
+  pay($("idem-mode").value);
+});
+
+$("btn-double-tap").addEventListener("click", () => {
+  const mode = $("idem-mode").value;
+  pay(mode);
+  setTimeout(() => pay(mode), 80);
+});
+
+$("btn-new-key").addEventListener("click", () => {
+  state.sharedIdemKey = newKey();
+  $("order-meta").textContent = `Shared idempotency key rotated (...${state.sharedIdemKey.slice(-8)})`;
 });
 
 $("btn-track").addEventListener("click", () => {
