@@ -138,6 +138,59 @@ public class OrdersController(
         return Ok(new PagedResponse<OrderResponse>(response, page, pageSize, totalCount));
     }
 
+    // Day 5, Beat 4 (keyset pagination): OFFSET N still makes Postgres walk and discard N rows
+    // before it can return page N+1 — cheap at page 2, expensive at page 10,000. Keyset
+    // pagination instead asks "give me the next rows AFTER this exact position" using the same
+    // (customer_id, created_at DESC) index (ADR-014) as an inequality, not a Skip — so page 2 and
+    // page 10,000 cost the same. The trade-off: no jump-to-page-N and no total count for free
+    // (computing one means scanning/counting the whole matching set — the cost this exists to
+    // avoid). Use this for infinite-scroll order history; keep GetByCustomer's OFFSET for small,
+    // page-numbered admin views where jump-to-page matters more than large-N cost.
+    [HttpGet("history")]
+    public async Task<ActionResult<CursorPageResponse<OrderResponse>>> GetByCustomerCursor(
+        [FromQuery] Guid customerId,
+        [FromQuery] string? cursor,
+        [FromQuery] int pageSize = 10)
+    {
+        pageSize = Math.Clamp(pageSize, 1, 50);
+
+        var query = _read.Orders.Include(o => o.Items)
+            .Where(o => o.CustomerId == customerId)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            DateTime createdAt;
+            Guid id;
+            try
+            {
+                (createdAt, id) = OrderCursor.Decode(cursor);
+            }
+            catch (ArgumentException)
+            {
+                // A malformed cursor is bad CLIENT input, not a server fault — a client that
+                // hand-constructs or corrupts an opaque cursor gets a 400, never a 500.
+                return Problem(detail: "Invalid cursor.", statusCode: StatusCodes.Status400BadRequest, title: "Invalid Cursor");
+            }
+            // Same tie-breaker as the ORDER BY below: strictly older, or same instant with a
+            // strictly smaller id. Matches the composite index left-to-right, no Sort node needed.
+            query = query.Where(o =>
+                o.CreatedAt < createdAt || (o.CreatedAt == createdAt && o.Id.CompareTo(id) < 0));
+        }
+
+        // +1 "lookahead" row tells us whether there IS a next page without a separate COUNT query.
+        var page = await query
+            .OrderByDescending(o => o.CreatedAt).ThenByDescending(o => o.Id)
+            .Take(pageSize + 1)
+            .ToListAsync();
+
+        var hasMore = page.Count > pageSize;
+        var items = (hasMore ? page.Take(pageSize) : page).ToList();
+        var nextCursor = hasMore ? OrderCursor.Encode(items[^1].CreatedAt, items[^1].Id) : null;
+
+        return Ok(new CursorPageResponse<OrderResponse>(items.Select(MapToResponse).ToList(), nextCursor));
+    }
+
     [HttpPatch("{id:guid}/status")]
     public async Task<ActionResult> UpdateStatus(
         Guid id,
