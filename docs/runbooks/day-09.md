@@ -56,6 +56,10 @@ docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-serv
 
 ## 4. Idempotent consumer — at-least-once is safe (ADR-028)
 
+**Inbox discipline (invariant from Day 9 forward — never unlearn this later):** consumers **check inbox → do the side effect → stamp inbox → commit Kafka offset**. Never stamp inbox *before* the work — a crash would mark the message “done” with no charge/confirm. Payment’s charge path and Ordering’s `payment-results` path both follow this. Handlers stay **idempotent** so redelivery after a mid-handler crash is safe.
+
+> **Day evolution:** Day 9 introduces Kafka/Outbox/Inbox. Day 12 will extract Restaurant and add more topics — the **inbox order does not change**. Full branch map: [`DAY-EVOLUTION.md`](DAY-EVOLUTION.md) (on `main` / day-12+; same invariant applies here).
+
 A redelivered `order-placed` does not double-charge: the **Inbox** (`payment.inbox_messages`) skips a seen message-id, and the **one-charge unique index** on `payment.payments(order_id)` is the hard guard. Replay the topic from the start with a throwaway group and watch only one payment per order:
 ```bash
 docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT order_id, count(*) FROM payment.payments GROUP BY order_id HAVING count(*) > 1;"   # 0 rows — never a double charge
