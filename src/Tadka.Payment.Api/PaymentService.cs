@@ -12,6 +12,9 @@ namespace Tadka.Payment.Api;
 /// <summary>The outcome of a charge attempt, returned to the HTTP caller (the monolith).</summary>
 public sealed record ChargeOutcome(PaymentStatus Status, string? GatewayReference, string? FailureReason);
 
+/// <summary>The outcome of a refund attempt (ADR-045).</summary>
+public sealed record RefundOutcome(PaymentStatus Status, bool Found);
+
 /// <summary>
 /// Charges an order through the Polly-wrapped gateway and records the outcome (ADR-021). This is the same
 /// logic that lived in the monolith on Day 7 — it MOVED here at extraction (ADR-024); only the caller
@@ -107,5 +110,47 @@ public sealed class PaymentService(
             logger.LogWarning("❌ Payment FAILED for order {OrderId}: {Reason}", orderId, payment.FailureReason);
             return new ChargeOutcome(PaymentStatus.Failed, null, payment.FailureReason);
         }
+    }
+
+    /// <summary>
+    /// Compensating refund after a restaurant rejects an already-paid order (ADR-045).
+    /// Idempotent: a second refund request for the same order returns the existing Refunded row.
+    /// </summary>
+    public async Task<RefundOutcome> RefundAsync(Guid orderId, string? gatewayReference, CancellationToken cancellationToken = default)
+    {
+        var payment = await db.Payments.FirstOrDefaultAsync(p => p.OrderId == orderId, cancellationToken);
+        if (payment is null)
+        {
+            logger.LogWarning("Refund requested for order {OrderId} but no payment row exists.", orderId);
+            return new RefundOutcome(PaymentStatus.Failed, Found: false);
+        }
+
+        if (payment.Status == PaymentStatus.Refunded)
+        {
+            logger.LogInformation("Payment for order {OrderId} already Refunded — idempotent return.", orderId);
+            return new RefundOutcome(PaymentStatus.Refunded, Found: true);
+        }
+
+        if (payment.Status != PaymentStatus.Completed)
+        {
+            logger.LogWarning(
+                "Refund requested for order {OrderId} but payment is {Status} (only Completed can refund).",
+                orderId, payment.Status);
+            return new RefundOutcome(payment.Status, Found: true);
+        }
+
+        var refundRef = await gateway.RefundAsync(
+            orderId,
+            gatewayReference ?? payment.GatewayReference,
+            payment.Amount,
+            cancellationToken);
+
+        payment.Status = PaymentStatus.Refunded;
+        payment.GatewayReference = refundRef;
+        payment.CompletedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation("💸 Payment REFUNDED for order {OrderId} (ref {Reference}).", orderId, refundRef);
+        return new RefundOutcome(PaymentStatus.Refunded, Found: true);
     }
 }
