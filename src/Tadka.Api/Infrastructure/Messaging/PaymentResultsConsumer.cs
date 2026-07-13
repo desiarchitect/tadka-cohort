@@ -60,19 +60,19 @@ public sealed class PaymentResultsConsumer(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
 
-        // Inbox dedup (ADR-028): if we've already processed this message-id, skip (idempotent consumer).
+        // Inbox AFTER side effect (ADR-028 Day-9 invariant): check ? work ? stamp inbox ? commit offset.
         if (await db.Set<InboxMessage>().AnyAsync(i => i.MessageId == msg.MessageId, ct))
         {
             logger.LogInformation("payment-results {MessageId} already processed — skipping (idempotent).", msg.MessageId);
             return;
         }
-        db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
-        await db.SaveChangesAsync(ct);
-
         var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
         if (string.Equals(msg.Status, "Completed", StringComparison.OrdinalIgnoreCase))
             await mediator.Publish(new PaymentCompletedEvent(msg.OrderId, msg.GatewayReference ?? ""), ct);
         else
             await mediator.Publish(new PaymentFailedEvent(msg.OrderId, msg.FailureReason ?? "Payment failed"), ct);
+
+        db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
+        await db.SaveChangesAsync(ct);
     }
 }
