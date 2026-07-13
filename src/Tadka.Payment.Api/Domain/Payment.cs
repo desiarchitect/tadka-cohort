@@ -20,6 +20,13 @@ public class Payment
     public string? FailureReason { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? CompletedAt { get; set; }
+
+    /// <summary>Opaque, one-way token (ADR-046) — never the raw card number. Null when the charge came
+    /// through without card details (e.g. a saved payment method already tokenized upstream).</summary>
+    public string? CardToken { get; set; }
+
+    /// <summary>Last 4 digits only — already public on the physical card and every receipt.</summary>
+    public string? CardLast4 { get; set; }
 }
 
 public enum PaymentStatus

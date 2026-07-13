@@ -81,7 +81,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "paym
 app.MapPost("/payments/charge", async (ChargeRequest request, PaymentService payments, CancellationToken ct) =>
 {
     var outcome = await payments.ChargeAsync(
-        request.OrderId, new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!), ct);
+        request.OrderId, new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!), ct, request.CardNumber);
     return Results.Ok(new ChargeResponse(request.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason));
 }).RequireAuthorization();
 

@@ -6,6 +6,14 @@ using Tadka.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Field-level PII encryption (ADR-045) — configured before ANY DbContext model is built (the migration
+// call below triggers that), since UserConfiguration reads FieldCipher.Enabled while building the model.
+// Dev-only default key, NEVER a real secret (same spirit as the seeded "seed-not-a-real-hash" password
+// hash below) — a real deployment supplies Demo:EncryptionKey from a secrets manager / KMS.
+Tadka.Api.Infrastructure.Security.FieldCipher.Configure(
+    builder.Configuration.GetValue("Demo:EncryptPiiAtRest", true),
+    builder.Configuration["Demo:EncryptionKey"] ?? "0EIJyWPct1+0ncRmpqJXxQ8AKEviFdz8+rw8PGqxKk0=");
+
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
 builder.Services.AddValidatorsFromAssemblyContaining<Program>();
