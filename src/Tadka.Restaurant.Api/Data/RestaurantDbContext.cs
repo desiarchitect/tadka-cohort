@@ -11,6 +11,8 @@ public class RestaurantDbContext(DbContextOptions<RestaurantDbContext> options) 
     public DbSet<Domain.Restaurant> Restaurants => Set<Domain.Restaurant>();
     public DbSet<MenuItem> MenuItems => Set<MenuItem>();
     public DbSet<OutboxMessage> OutboxMessages => Set<OutboxMessage>();
+    public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
+    public DbSet<OrderDecision> OrderDecisions => Set<OrderDecision>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +44,8 @@ public class RestaurantDbContext(DbContextOptions<RestaurantDbContext> options) 
             b.ToTable("menu_items", "restaurant");
             b.HasKey(mi => mi.Id);
             b.Property(mi => mi.Name).IsRequired().HasMaxLength(100);
+            // Expand step (ADR-038): additive nullable column; dual-write fills it; contract drops Name later.
+            b.Property(mi => mi.DisplayName).HasMaxLength(100);
             b.Property(mi => mi.Description).HasMaxLength(500);
             b.Property(mi => mi.Category).HasMaxLength(50);
             b.Property(mi => mi.IsAvailable).HasDefaultValue(true);
@@ -64,6 +68,22 @@ public class RestaurantDbContext(DbContextOptions<RestaurantDbContext> options) 
             b.Property(x => x.TraceParent).HasMaxLength(64);   // W3C traceparent (ADR-041), nullable
             b.Property(x => x.CreatedAt).HasDefaultValueSql("NOW()");
             b.HasIndex(x => x.ProcessedAt);
+        });
+
+        modelBuilder.Entity<InboxMessage>(b =>
+        {
+            b.ToTable("inbox_messages", "restaurant");
+            b.HasKey(x => x.MessageId);
+            b.Property(x => x.ConsumedAt).HasDefaultValueSql("NOW()");
+        });
+
+        modelBuilder.Entity<OrderDecision>(b =>
+        {
+            b.ToTable("order_decisions", "restaurant");
+            b.HasKey(x => x.OrderId);
+            b.Property(x => x.Status).IsRequired().HasMaxLength(20);
+            b.Property(x => x.Reason).HasMaxLength(200);
+            b.Property(x => x.DecidedAt).HasDefaultValueSql("NOW()");
         });
     }
 

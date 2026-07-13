@@ -39,11 +39,29 @@ docker exec tadka-postgres psql -U tadka -d tadka -c 'SELECT "Name","PriceAmount
 # the table is never locked; reads never block. At scale -> CDC (Debezium).
 ```
 
+## Demo 4 — Restaurant service accept/reject (ADR-062, production multi-service path)
+```powershell
+# Ordering always confirms; Restaurant.Api decides on order-confirmed.
+# Terminal A (Restaurant.Api):  Restaurant__AcceptMode=Reject
+# Terminal B (Ordering):        Restaurant__DecisionMode=Service
+# Place an order → Confirmed briefly → restaurant-response Rejected → cancel + refund-requested
+# With Saga__Mode=Orchestration, query:
+#   SELECT * FROM ordering.saga_instances ORDER BY "StartedAt" DESC LIMIT 5;
+```
+
+## Demo 5 — Expand-contract dual-write (ADR-038 live)
+```powershell
+# Demo__DualWriteDisplayName=true on Restaurant.Api, then PATCH a menu name.
+# Both Name and DisplayName columns update; MapItem prefers DisplayName when set.
+./scripts/expand-contract-demo.ps1                 # chunked backfill Name -> DisplayName
+./scripts/expand-contract-demo.ps1 -BreakGiantUpdate  # contrast: one giant UPDATE
+```
+
 ## What changed
-- NEW `src/Tadka.Restaurant.Api` — own Postgres (5436), per-service JWT, Redis cache, publishes `menu-updated` via Outbox→Kafka.
-- Monolith — dropped the `restaurant` schema; added `ordering.{restaurant_replica,menu_replica}` + `MenuUpdatedConsumer`; prices orders from `IRestaurantPricingSource` (LocalReplica/SyncHttp).
+- NEW `src/Tadka.Restaurant.Api` — own Postgres (5436), per-service JWT, Redis cache, publishes `menu-updated` via Outbox→Kafka; consumes `order-confirmed` for accept/reject (ADR-062).
+- Monolith — dropped the `restaurant` schema; added `ordering.{restaurant_replica,menu_replica}` + `MenuUpdatedConsumer`; prices orders from `IRestaurantPricingSource` (LocalReplica/SyncHttp); `RestaurantResponseConsumer` for Service decision mode.
 - Gateway — routes `/api/v1/restaurants/**` to the Restaurant service.
-- `scripts/backfill-menu-replica.ps1`; `deploy/README.md` (cloud black-box reference).
+- `scripts/backfill-menu-replica.ps1`, `expand-contract-demo.ps1`, `evolution-break.ps1`; `deploy/README.md` (cloud black-box reference).
 
 ## Ports
 monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway :8080 · postgres 5432 / replica 5433 / payment-db 5434 / delivery-db 5435 / restaurant-db 5436 · redis 6379 · kafka 9092 / kafka-ui 8090

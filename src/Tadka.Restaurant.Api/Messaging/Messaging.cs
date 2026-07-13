@@ -12,7 +12,16 @@ public static class Topics
     // Published whenever a restaurant or its menu changes. Carries the FULL current snapshot
     // (event-carried state transfer, ADR-037) so the consumer never has to call back (ADR-008).
     public const string MenuUpdated = "menu-updated";
+    public const string OrderConfirmed = "order-confirmed";       // consumed
+    public const string RestaurantResponse = "restaurant-response"; // published
 }
+
+/// <summary>Consumed from Ordering when payment settled and order confirmed.</summary>
+public sealed record OrderConfirmedMessage(Guid MessageId, Guid OrderId, double Latitude, double Longitude);
+
+/// <summary>Restaurant accept/reject decision for the order saga (ADR-062).</summary>
+public sealed record RestaurantResponseMessage(
+    Guid MessageId, Guid OrderId, string Status, string? Reason, string? GatewayReference);
 
 /// <summary>One menu item, as carried in the snapshot.</summary>
 public sealed record MenuItemSnapshot(
@@ -34,6 +43,7 @@ public sealed class KafkaOptions
 {
     public const string SectionName = "Kafka";
     public string? BootstrapServers { get; set; }
+    public string ConsumerGroup { get; set; } = "tadka-restaurant";
     public bool Enabled => !string.IsNullOrWhiteSpace(BootstrapServers);
 }
 

@@ -43,9 +43,13 @@ public sealed class ConfirmOrderOnPaymentCompleted(
             return;
         }
 
-        if (string.Equals(restaurantOptions.Value.AcceptMode, "Reject", StringComparison.OrdinalIgnoreCase))
+        // Inline (Day 11 / tests without Restaurant consumer): reject at payment-settled time.
+        // Service mode (Day 12+ production): always confirm; Restaurant.Api decides on order-confirmed.
+        if (!restaurantOptions.Value.UseServiceDecision
+            && string.Equals(restaurantOptions.Value.AcceptMode, "Reject", StringComparison.OrdinalIgnoreCase))
         {
-            await refundSaga.RejectAndCompensateAsync(order, notification.GatewayReference, restaurantOptions.Value.RefundOnReject, cancellationToken);
+            await refundSaga.RejectAndCompensateAsync(
+                order, notification.GatewayReference, restaurantOptions.Value.RefundOnReject, cancellationToken);
             return;
         }
 

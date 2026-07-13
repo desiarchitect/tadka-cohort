@@ -132,6 +132,8 @@ if (kafkaOptions?.Enabled == true)
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.MenuUpdatedConsumer>();
     // ADR-045: surface payment-refunded on the live-tracking bus after compensation settles.
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.PaymentRefundedConsumer>();
+    // ADR-062: Restaurant.Api multi-service accept/reject path (DecisionMode=Service).
+    builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.RestaurantResponseConsumer>();
 }
 
 // â”€â”€ Authentication & Authorization (ADR-030/031) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€

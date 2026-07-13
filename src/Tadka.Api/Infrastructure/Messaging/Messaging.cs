@@ -9,6 +9,7 @@ public static class Topics
     public const string MenuUpdated = "menu-updated";         // ← Restaurant publishes; Ordering updates its price replica (ADR-037)
     public const string RefundRequested = "refund-requested"; // → the restaurant rejected an already-paid order (ADR-045)
     public const string PaymentRefunded = "payment-refunded"; // ← the compensating refund settled (ADR-045)
+    public const string RestaurantResponse = "restaurant-response"; // ← Restaurant.Api accept/reject (ADR-062)
 }
 
 /// <summary>One menu item, as carried in a <see cref="RestaurantSnapshotMessage"/> (ADR-037).</summary>
@@ -41,6 +42,10 @@ public sealed record RefundRequestedMessage(Guid MessageId, Guid OrderId, string
 /// <summary>Published by the Payment service after a refund settles. Consumed by Ordering, purely to
 /// surface the outcome on the live-tracking stream — the order itself is already Cancelled by this point.</summary>
 public sealed record PaymentRefundedMessage(Guid MessageId, Guid OrderId, string Status);
+
+/// <summary>Restaurant.Api decision after order-confirmed (ADR-062). Status = Accepted | Rejected.</summary>
+public sealed record RestaurantResponseMessage(
+    Guid MessageId, Guid OrderId, string Status, string? Reason, string? GatewayReference);
 
 /// <summary>Kafka config (ADR-027). If <see cref="BootstrapServers"/> is empty, Kafka is OFF — the relay and
 /// consumers don't start and the producer is a no-op, so single-process dev and the test suite run unchanged.</summary>

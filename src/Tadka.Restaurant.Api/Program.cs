@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
+using Tadka.Restaurant.Api;
 using Tadka.Restaurant.Api.Caching;
 using Tadka.Restaurant.Api.Data;
 using Tadka.Restaurant.Api.Messaging;
@@ -34,13 +35,18 @@ else
     builder.Services.AddSingleton<ICacheService, NullCacheService>();
 }
 
-// Kafka (ADR-027): publish menu-updated via the Outbox → relay. OFF when unconfigured (tests / single-process dev).
+// Demo levers (ADR-061 canary buggy + ADR-062 accept/reject).
+builder.Services.Configure<RestaurantOptions>(builder.Configuration.GetSection(RestaurantOptions.SectionName));
+
+// Kafka (ADR-027): publish menu-updated / restaurant-response via the Outbox → relay.
+// Consume order-confirmed for accept/reject (ADR-062). OFF when unconfigured (tests / single-process dev).
 builder.Services.Configure<KafkaOptions>(builder.Configuration.GetSection(KafkaOptions.SectionName));
 var kafka = builder.Configuration.GetSection(KafkaOptions.SectionName).Get<KafkaOptions>();
 if (kafka?.Enabled == true)
 {
     builder.Services.AddSingleton<KafkaProducer>();
     builder.Services.AddHostedService<OutboxRelay>();
+    builder.Services.AddHostedService<OrderConfirmedConsumer>();
 }
 
 // Per-service JWT validation (ADR-031, defense in depth — same key as the monolith).

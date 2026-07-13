@@ -59,5 +59,5 @@ Restaurant is still **in-process** on Day 11 (extracted as its own service on Da
 - Implementation: `RefundSagaOrchestrator`, `RefundRequestedConsumer`, `PaymentService.RefundAsync`, `RestaurantAcceptanceOptions`
 
 ## Revisit when
-- Restaurant is extracted (Day 12): move AcceptMode into Restaurant.Api on `order-confirmed`.
+- Restaurant is extracted (Day 12): move AcceptMode into Restaurant.Api on `order-confirmed`. **Done — ADR-062** (`DecisionMode=Service`).
 - Refunds can fail at the gateway: model a refund-failed path + reconciliation job.

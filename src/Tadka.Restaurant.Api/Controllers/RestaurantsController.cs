@@ -21,13 +21,16 @@ namespace Tadka.Restaurant.Api.Controllers;
 /// </summary>
 [ApiController]
 [Route("api/v1/restaurants")]
-public class RestaurantsController(RestaurantDbContext db, ICacheService cache) : ControllerBase
+public class RestaurantsController(RestaurantDbContext db, ICacheService cache, IConfiguration config) : ControllerBase
 {
     private static readonly TimeSpan MenuTtl = TimeSpan.FromSeconds(60);
     private static string MenuCacheKey(Guid restaurantId) => $"restaurant:{restaurantId}:menu";
 
     // Resource-ownership (ADR-031): an owner may only touch THEIR restaurant; Admin may touch any.
     private bool OwnsOrAdmin(Guid restaurantId) => User.IsAdmin() || User.OwnedRestaurantId() == restaurantId;
+
+    /// <summary>Expand-contract dual-write lever (ADR-038): when true, Name writes also fill DisplayName.</summary>
+    private bool DualWriteDisplayName => config.GetValue("Demo:DualWriteDisplayName", false);
 
     [HttpGet]
     [ETagFilter] // ADR-048/054: conditional GET — 304 when body unchanged
@@ -123,6 +126,8 @@ public class RestaurantsController(RestaurantDbContext db, ICacheService cache) 
         {
             Id = Guid.NewGuid(), // app-generated → known before save → can stage the snapshot in the same txn
             Name = request.Name,
+            // Expand-contract dual-write (ADR-038): fill the new column while still writing the old.
+            DisplayName = DualWriteDisplayName ? request.Name : null,
             Description = request.Description,
             Price = new Money(request.Price.Amount, request.Price.Currency),
             Category = request.Category,
@@ -147,7 +152,11 @@ public class RestaurantsController(RestaurantDbContext db, ICacheService cache) 
         var item = restaurant.Menu.FirstOrDefault(m => m.Id == itemId);
         if (item is null) return NotFound();
 
-        if (request.Name is not null) item.Name = request.Name;
+        if (request.Name is not null)
+        {
+            item.Name = request.Name;
+            if (DualWriteDisplayName) item.DisplayName = request.Name;
+        }
         if (request.Description is not null) item.Description = request.Description;
         if (request.Price is not null) item.Price = new Money(request.Price.Amount, request.Price.Currency);
         if (request.Category is not null) item.Category = request.Category;
@@ -217,8 +226,9 @@ public class RestaurantsController(RestaurantDbContext db, ICacheService cache) 
         new AddressResponse(r.Address.Line1, r.Address.Line2, r.Address.City, r.Address.Pincode, r.Address.Latitude, r.Address.Longitude),
         r.IsActive, r.AvgPrepTimeMinutes, r.CreatedAt);
 
+    /// <summary>Prefer DisplayName when present (post switch-read phase of expand-contract).</summary>
     private static MenuItemResponse MapItem(MenuItem m) => new(
-        m.Id, m.Name, m.Description, new MoneyResponse(m.Price.Amount, m.Price.Currency), m.Category, m.IsAvailable, m.IsVeg);
+        m.Id, m.DisplayName ?? m.Name, m.Description, new MoneyResponse(m.Price.Amount, m.Price.Currency), m.Category, m.IsAvailable, m.IsVeg);
 
     private static Microsoft.AspNetCore.Mvc.ModelBinding.ModelStateDictionary ToModelState(FluentValidation.Results.ValidationResult result)
     {

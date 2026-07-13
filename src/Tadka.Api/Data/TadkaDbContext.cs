@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Tadka.Api.Data.Configurations;
+using Tadka.Api.Data.Messaging;
 using Tadka.Api.Data.ReadModel;
 using Tadka.Api.Domain.Delivery;
 using Tadka.Api.Domain.Orders;
@@ -38,6 +39,9 @@ public class TadkaDbContext : DbContext
     // Identity domain
     public DbSet<User> Users => Set<User>();
     public DbSet<UserAddress> UserAddresses => Set<UserAddress>();
+
+    // Messaging (Outbox/Inbox/Saga) — configuration applied via ApplyConfigurationsFromAssembly
+    public DbSet<SagaInstance> SagaInstances => Set<SagaInstance>();
 
     // NOTE: Payment is NOT here. As of Day 7 (ADR-022) it lives in its own module behind
     // PaymentDbContext (the `payment` schema, its own migration history). The core context has zero

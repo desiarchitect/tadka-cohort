@@ -28,6 +28,13 @@ public class MenuItem
 {
     public Guid Id { get; set; }
     public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Expand-contract target column (ADR-038): during dual-write, mirrors <see cref="Name"/>.
+    /// After switch-reads, clients/read paths use this; after contract, Name is dropped.
+    /// </summary>
+    public string? DisplayName { get; set; }
+
     public string? Description { get; set; }
     public Money Price { get; set; } = null!;
     public string Category { get; set; } = string.Empty;
