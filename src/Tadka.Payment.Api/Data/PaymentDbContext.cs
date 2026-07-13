@@ -41,6 +41,11 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Domain.Payment>
         builder.Property(p => p.GatewayReference).HasMaxLength(200);
         builder.Property(p => p.FailureReason).HasMaxLength(500);
 
+        // Tokenized card data (ADR-046) — no PAN column exists here, by design. CardToken is a one-way
+        // digest, not encrypted data; there is nothing to decrypt back to a card number.
+        builder.Property(p => p.CardToken).HasMaxLength(24);
+        builder.Property(p => p.CardLast4).HasMaxLength(4);
+
         builder.Property(p => p.Status)
             .HasConversion<string>()
             .HasMaxLength(20)

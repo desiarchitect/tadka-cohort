@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Tadka.Payment.Api.Data;
 using Tadka.Payment.Api.Domain;
 using Tadka.Payment.Api.Gateway;
+using Tadka.Payment.Api.Infrastructure;
 using Tadka.Payment.Api.Resilience;
 using Tadka.Telemetry;
 
@@ -28,7 +29,7 @@ public sealed class PaymentService(
     IOptionsMonitor<PaymentOptions> options,
     ILogger<PaymentService> logger)
 {
-    public async Task<ChargeOutcome> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken = default)
+    public async Task<ChargeOutcome> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken = default, string? cardNumber = null)
     {
         // Custom business span (ADR-040): auto-instrumentation gives HTTP/DB spans, but "how long does the
         // charge take?" is a business question only a custom span answers. order.id + amount go on the SPAN
@@ -52,13 +53,25 @@ public sealed class PaymentService(
             return new ChargeOutcome(existing.Status, existing.GatewayReference, existing.FailureReason);
         }
 
+        // Tokenize (ADR-046) the moment the card arrives — cardNumber itself is never logged or stored
+        // beyond this point; only the token and last 4 digits survive past this line.
+        string? cardToken = null, cardLast4 = null;
+        if (!string.IsNullOrWhiteSpace(cardNumber))
+        {
+            (cardToken, cardLast4) = CardTokenizer.Tokenize(cardNumber);
+            if (options.CurrentValue.LogRawCardNumber)
+                logger.LogWarning("DEMO LEVER (LogRawCardNumber): raw card number {CardNumber} for order {OrderId} — this must NEVER happen in real code.", cardNumber, orderId);
+        }
+
         var payment = new Domain.Payment
         {
             OrderId = orderId,
             Amount = amount,
             Method = "UPI",
             Status = PaymentStatus.Pending,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = DateTime.UtcNow,
+            CardToken = cardToken,
+            CardLast4 = cardLast4
         };
         db.Payments.Add(payment);
 

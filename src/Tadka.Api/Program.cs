@@ -1,4 +1,4 @@
-using FluentValidation;
+﻿using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using Tadka.Api.Data;
@@ -10,6 +10,14 @@ var builder = WebApplication.CreateBuilder(args);
 // Observability (ADR-040): structured JSON logs + OTEL traces/metrics over OTLP. OTLP export is gated on
 // OTEL_EXPORTER_OTLP_ENDPOINT, so the test suite + single-process dev are unchanged (no stack required).
 builder.AddTadkaTelemetry("Tadka.Api");
+
+// Field-level PII encryption (ADR-052) â€” configured before ANY DbContext model is built (the migration
+// call below triggers that), since UserConfiguration reads FieldCipher.Enabled while building the model.
+// Dev-only default key, NEVER a real secret (same spirit as the seeded "seed-not-a-real-hash" password
+// hash below) â€” a real deployment supplies Demo:EncryptionKey from a secrets manager / KMS.
+Tadka.Api.Infrastructure.Security.FieldCipher.Configure(
+    builder.Configuration.GetValue("Demo:EncryptPiiAtRest", true),
+    builder.Configuration["Demo:EncryptionKey"] ?? "0EIJyWPct1+0ncRmpqJXxQ8AKEviFdz8+rw8PGqxKk0=");
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
@@ -34,7 +42,7 @@ builder.Services.AddScoped<Tadka.Api.Domain.Orders.OrderFactory>();
 // Server-side pricing source (ADR-037). Restaurant was extracted (ADR-036), so order pricing no longer
 // reads an in-process Restaurant aggregate. Default = the local read model (available even when Restaurant
 // is down). `Ordering:RestaurantReadMode = SyncHttp` swaps in a synchronous HTTP read to demonstrate the
-// temporal coupling the read model avoids (the Day-12 "Restaurant down → orders still flow" demo).
+// temporal coupling the read model avoids (the Day-12 "Restaurant down â†’ orders still flow" demo).
 var readMode = builder.Configuration["Ordering:RestaurantReadMode"] ?? "LocalReplica";
 if (string.Equals(readMode, "SyncHttp", StringComparison.OrdinalIgnoreCase))
 {
@@ -42,7 +50,7 @@ if (string.Equals(readMode, "SyncHttp", StringComparison.OrdinalIgnoreCase))
         Tadka.Api.Infrastructure.RestaurantReadModel.HttpRestaurantPricingSource>(c =>
     {
         c.BaseAddress = new Uri(builder.Configuration["Services:Restaurant:BaseUrl"] ?? "http://localhost:5260");
-        c.Timeout = TimeSpan.FromSeconds(2); // fail fast — but a down peer still fails the order (the point)
+        c.Timeout = TimeSpan.FromSeconds(2); // fail fast â€” but a down peer still fails the order (the point)
     });
 }
 else
@@ -52,7 +60,7 @@ else
 }
 
 // In-process events via MediatR (ADR-022, supersedes the Day-4 hand-rolled dispatcher). One call
-// auto-registers every INotificationHandler<T> in the assembly — order notification + SSE backplane
+// auto-registers every INotificationHandler<T> in the assembly â€” order notification + SSE backplane
 // (ADR-020) + the Payment module's OrderPlaced handler + the order's reaction to payment settling.
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
 
@@ -64,7 +72,7 @@ builder.Services.Configure<Tadka.Api.Infrastructure.Messaging.SagaOptions>(
 builder.Services.AddScoped<Tadka.Api.Infrastructure.Messaging.RefundSagaOrchestrator>();
 
 // Redis (ADR-018/019/020): cache-aside + single-flight lock + live-tracking pub/sub.
-// Optional — if no "Redis" connection string is configured, the cache is a no-op and live
+// Optional â€” if no "Redis" connection string is configured, the cache is a no-op and live
 // tracking returns 503, so single-Postgres dev and the test suite run unchanged.
 var redisConnection = builder.Configuration.GetConnectionString("Redis");
 if (!string.IsNullOrWhiteSpace(redisConnection))
@@ -80,7 +88,7 @@ else
     builder.Services.AddSingleton<Tadka.Api.Infrastructure.Realtime.IOrderTrackingBus, Tadka.Api.Infrastructure.Realtime.NullOrderTrackingBus>();
 }
 
-// ── Payment over KAFKA, durable (ADR-027/028/029) ───────────────────────────────────────────────
+// â”€â”€ Payment over KAFKA, durable (ADR-027/028/029) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Day 9: the Day-8 synchronous HTTP bridge is replaced by an async event backbone. Order creation writes
 // an `order-placed` row to the transactional Outbox (in the order's transaction); the OutboxRelay
 // publishes it to Kafka; the Payment service consumes it, charges, and publishes `payment-results`; the
@@ -104,8 +112,8 @@ if (kafkaOptions?.Enabled == true)
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.PaymentRefundedConsumer>();
 }
 
-// ── Authentication & Authorization (ADR-030/031) ────────────────────────────────────────────────
-// Stateless JWT bearer; each service verifies the token itself (defense in depth — the Payment service
+// â”€â”€ Authentication & Authorization (ADR-030/031) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Stateless JWT bearer; each service verifies the token itself (defense in depth â€” the Payment service
 // validates the SAME key). Authorization is RBAC (the `role` claim) + resource-ownership checks done in
 // the controllers (the `sub` / `restaurantId` claims).
 builder.Services.Configure<Tadka.Api.Auth.JwtOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName));
@@ -118,7 +126,7 @@ builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer
     .AddJwtBearer(options =>
     {
         // Keep our own claim names ("role"/"sub"); don't remap to the long WS-* URIs, or
-        // [Authorize(Roles = …)] would never see the role claim from our JsonWebToken (ADR-030/031).
+        // [Authorize(Roles = â€¦)] would never see the role claim from our JsonWebToken (ADR-030/031).
         options.MapInboundClaims = false;
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {

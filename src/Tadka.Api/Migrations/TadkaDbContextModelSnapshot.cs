@@ -553,8 +553,8 @@ namespace Tadka.Api.Migrations
 
                     b.Property<string>("Phone")
                         .IsRequired()
-                        .HasMaxLength(15)
-                        .HasColumnType("character varying(15)");
+                        .HasMaxLength(250)
+                        .HasColumnType("character varying(250)");
 
                     b.Property<string>("Role")
                         .IsRequired()
@@ -569,18 +569,6 @@ namespace Tadka.Api.Migrations
                         .IsUnique();
 
                     b.ToTable("users", "identity");
-
-                    b.HasData(
-                        new
-                        {
-                            Id = new Guid("c1b2c3d4-0001-4000-8000-000000000001"),
-                            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Email = "priya@tadka.test",
-                            Name = "Priya Sharma",
-                            PasswordHash = "seed-not-a-real-hash",
-                            Phone = "+919876500001",
-                            Role = "Customer"
-                        });
                 });
 
             modelBuilder.Entity("Tadka.Api.Domain.Users.UserAddress", b =>

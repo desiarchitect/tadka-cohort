@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Tadka.Api.Domain.Users;
+using Tadka.Api.Infrastructure.Security;
 
 namespace Tadka.Api.Data.Configurations;
 
@@ -15,7 +16,16 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
 
         builder.Property(u => u.Name).IsRequired().HasMaxLength(100);
         builder.Property(u => u.Email).IsRequired().HasMaxLength(200);
-        builder.Property(u => u.Phone).HasMaxLength(15);
+
+        // Field-level PII encryption at rest (ADR-045). FieldCipher is configured once at startup from
+        // Demo:EncryptPiiAtRest (default true — the correct behaviour ships by default; the break demo
+        // flips it off). 250 chars accommodates AES-GCM's nonce+tag+ciphertext, base64-encoded, comfortably
+        // wider than any plaintext phone number ever needs, and stays fixed regardless of the flag so a
+        // toggle never requires a fresh migration.
+        var phone = builder.Property(u => u.Phone).HasMaxLength(250);
+        if (FieldCipher.Enabled)
+            phone.HasConversion(v => FieldCipher.Encrypt(v), v => FieldCipher.Decrypt(v));
+
         builder.Property(u => u.PasswordHash).IsRequired().HasMaxLength(500);
 
         builder.Property(u => u.Role)
@@ -30,17 +40,11 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
 
         builder.HasMany(u => u.SavedAddresses).WithOne().HasForeignKey(ua => ua.UserId).OnDelete(DeleteBehavior.Cascade);
 
-        // Seed one customer so POST /orders works against a fresh DB out of the box.
-        // GUID matches the docs + cohort-prep/day-03 sample payloads.
-        builder.HasData(new User
-        {
-            Id = new Guid("c1b2c3d4-0001-4000-8000-000000000001"),
-            Name = "Priya Sharma",
-            Email = "priya@tadka.test",
-            Phone = "+919876500001",
-            PasswordHash = "seed-not-a-real-hash",
-            Role = UserRole.Customer,
-            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
-        });
+        // The Day-1 seed customer (Priya, GUID matches docs + cohort-prep/day-03 sample payloads) used to
+        // be seeded here via HasData. Moved to AuthSeeder.SeedAsync (runtime, idempotent upsert) because
+        // HasData is incompatible with a non-deterministic value converter (ADR-045's AES-GCM encryption
+        // uses a fresh random nonce per write, so the encrypted seed value can never match a value frozen
+        // into a migration snapshot — EF detects "model changes every time it's built" and refuses to
+        // start). AuthSeeder already creates every other demo user this way; Priya is no longer a special case.
     }
 }
