@@ -35,6 +35,7 @@ var kafkaOptions = builder.Configuration.GetSection(KafkaOptions.SectionName).Ge
 if (kafkaOptions?.Enabled == true)
 {
     builder.Services.AddSingleton<KafkaProducer>();
+    builder.Services.AddHostedService<OutboxRelay>(); // ADR-028: payment-results / payment-refunded / DLQ
     builder.Services.AddHostedService<OrderPlacedConsumer>();
     // ADR-045: compensating refund when restaurant rejects an already-paid order.
     builder.Services.AddHostedService<RefundRequestedConsumer>();

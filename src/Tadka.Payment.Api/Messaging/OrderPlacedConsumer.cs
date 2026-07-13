@@ -120,9 +120,17 @@ public sealed class OrderPlacedConsumer(
         var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
         var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct);
 
-        // Reply on payment-results (the Saga), then record the inbox row, then the loop commits the offset.
-        await producer.PublishAsync(Topics.PaymentResults, msg.OrderId.ToString(),
-            new PaymentResultMessage(Guid.NewGuid(), msg.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason), ct);
+        // Transactional Outbox (ADR-028): payment-results + inbox in the SAME SaveChanges as the charge
+        // path's last write — no dual-write to Kafka. OutboxRelay publishes; crash mid-publish republishes.
+        var result = new PaymentResultMessage(
+            Guid.NewGuid(), msg.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason);
+        db.OutboxMessages.Add(new OutboxMessage
+        {
+            Topic = Topics.PaymentResults,
+            Key = msg.OrderId.ToString(),
+            Payload = JsonSerializer.Serialize(result),
+            TraceParent = TadkaTrace.CurrentTraceParent()
+        });
 
         db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
         await db.SaveChangesAsync(ct);

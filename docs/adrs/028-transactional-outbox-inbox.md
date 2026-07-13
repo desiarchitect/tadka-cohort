@@ -45,7 +45,7 @@ Outbox + Inbox are patterns, not tools: **MassTransit/NServiceBus** ship both ou
 ## References
 - ADR-011 (idempotency-key — the same idea, client side), ADR-023 (the non-durable in-memory queue this replaces), ADR-027 (Kafka), ADR-029 (Saga)
 - `cohort-prep/day-09/break-kit-day-09.md` (outbox crash-safety; redelivery → one charge)
-- Implementation: monolith `Data/Outbox/*` + `OutboxRelay`; both consumers' `inbox_messages` + dedup check
+- Implementation: Ordering `Data/Messaging/Outbox*` + `OutboxRelay`; Payment `payment.outbox_messages` + `OutboxRelay` (payment-results / payment-refunded); Restaurant outbox for menu-updated / restaurant-response; each consumer's `inbox_messages` + dedup check
 
 ## Revisit When
 At high volume, replace the polling relay with **CDC (Debezium)** or adopt **MassTransit**'s outbox. Add an outbox/inbox **pruning** job. Add a **DLQ** when a real poison-message case appears (Week 5 stretch / Week 7 resilience).

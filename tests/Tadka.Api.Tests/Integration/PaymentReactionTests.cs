@@ -104,6 +104,72 @@ public class PaymentReactionTests(TadkaApiFactory factory) : IClassFixture<Tadka
         }
     }
 
+    [Fact]
+    public async Task ServiceMode_PaymentCompleted_confirms_even_when_AcceptMode_Reject()
+    {
+        // ADR-062: DecisionMode=Service defers the restaurant decision — Inline AcceptMode is ignored.
+        var factory = _factory.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Restaurant:DecisionMode", "Service");
+            b.UseSetting("Restaurant:AcceptMode", "Reject");
+            b.UseSetting("Restaurant:RefundOnReject", "true");
+        });
+        var client = factory.CreateClient();
+        var orderId = await PlaceOrderWithClientAsync(client);
+
+        using (var scope = factory.Services.CreateScope())
+            await scope.ServiceProvider.GetRequiredService<IMediator>()
+                .Publish(new PaymentCompletedEvent(orderId, "FAKEPAY-TEST-SERVICE-1"));
+
+        Assert.Equal(OrderStatus.Confirmed, await OrderStatusWithFactoryAsync(factory, orderId));
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
+            Assert.True(await db.Set<Tadka.Api.Data.Messaging.OutboxMessage>()
+                .AnyAsync(o => o.Topic == "order-confirmed" && o.Key == orderId.ToString()));
+            Assert.False(await db.Set<Tadka.Api.Data.Messaging.OutboxMessage>()
+                .AnyAsync(o => o.Topic == "refund-requested" && o.Key == orderId.ToString()));
+        }
+    }
+
+    [Fact]
+    public async Task ServiceMode_RestaurantResponse_Rejected_compensates_with_refund_outbox()
+    {
+        // Full multi-service path without Kafka: confirm first, then restaurant-response Rejected.
+        var factory = _factory.WithWebHostBuilder(b =>
+        {
+            b.UseSetting("Restaurant:DecisionMode", "Service");
+            b.UseSetting("Restaurant:RefundOnReject", "true");
+        });
+        var client = factory.CreateClient();
+        var orderId = await PlaceOrderWithClientAsync(client);
+
+        using (var scope = factory.Services.CreateScope())
+            await scope.ServiceProvider.GetRequiredService<IMediator>()
+                .Publish(new PaymentCompletedEvent(orderId, "FAKEPAY-TEST-SERVICE-2"));
+
+        Assert.Equal(OrderStatus.Confirmed, await OrderStatusWithFactoryAsync(factory, orderId));
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var handler = scope.ServiceProvider.GetRequiredService<Tadka.Api.Infrastructure.Messaging.RestaurantResponseHandler>();
+            await handler.HandleAsync(new Tadka.Api.Infrastructure.Messaging.RestaurantResponseMessage(
+                Guid.NewGuid(), orderId, "Rejected", "demo reject", "FAKEPAY-TEST-SERVICE-2"));
+        }
+
+        Assert.Equal(OrderStatus.Cancelled, await OrderStatusWithFactoryAsync(factory, orderId));
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
+            Assert.Single(await db.Set<Tadka.Api.Data.Messaging.OutboxMessage>()
+                .AsNoTracking()
+                .Where(o => o.Topic == "refund-requested" && o.Key == orderId.ToString())
+                .ToListAsync());
+        }
+    }
+
     // --- harness -------------------------------------------------------------
 
     private async Task<Guid> PlaceOrderWithClientAsync(HttpClient client)

@@ -84,6 +84,7 @@ builder.Services.Configure<Tadka.Api.Domain.Restaurants.RestaurantAcceptanceOpti
 builder.Services.Configure<Tadka.Api.Infrastructure.Messaging.SagaOptions>(
     builder.Configuration.GetSection(Tadka.Api.Infrastructure.Messaging.SagaOptions.SectionName));
 builder.Services.AddScoped<Tadka.Api.Infrastructure.Messaging.RefundSagaOrchestrator>();
+builder.Services.AddScoped<Tadka.Api.Infrastructure.Messaging.RestaurantResponseHandler>();
 
 // Redis (ADR-018/019/020): cache-aside + single-flight lock + live-tracking pub/sub.
 // Optional â€” if no "Redis" connection string is configured, the cache is a no-op and live

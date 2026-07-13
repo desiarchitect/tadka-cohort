@@ -4,17 +4,17 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Tadka.Payment.Api.Data;
 using Tadka.Payment.Api.Domain;
+using Tadka.Telemetry;
 
 namespace Tadka.Payment.Api.Messaging;
 
 /// <summary>
 /// Compensating consumer (ADR-045): restaurant rejected an already-paid order → Ordering published
-/// <c>refund-requested</c> via Outbox → we refund the charge and publish <c>payment-refunded</c>.
-/// Same production shape as <see cref="OrderPlacedConsumer"/>: Inbox dedup, manual commit, idempotent domain.
+/// <c>refund-requested</c> via Outbox → we refund the charge and Outbox <c>payment-refunded</c>.
+/// Same production shape as <see cref="OrderPlacedConsumer"/>: Inbox + Outbox + manual commit.
 /// </summary>
 public sealed class RefundRequestedConsumer(
     IServiceScopeFactory scopeFactory,
-    KafkaProducer producer,
     IOptions<KafkaOptions> options,
     ILogger<RefundRequestedConsumer> logger) : BackgroundService
 {
@@ -67,8 +67,14 @@ public sealed class RefundRequestedConsumer(
         var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
         var outcome = await payments.RefundAsync(msg.OrderId, msg.GatewayReference, ct);
 
-        await producer.PublishAsync(Topics.PaymentRefunded, msg.OrderId.ToString(),
-            new PaymentRefundedMessage(Guid.NewGuid(), msg.OrderId, outcome.Status.ToString()), ct);
+        var refunded = new PaymentRefundedMessage(Guid.NewGuid(), msg.OrderId, outcome.Status.ToString());
+        db.OutboxMessages.Add(new OutboxMessage
+        {
+            Topic = Topics.PaymentRefunded,
+            Key = msg.OrderId.ToString(),
+            Payload = JsonSerializer.Serialize(refunded),
+            TraceParent = TadkaTrace.CurrentTraceParent()
+        });
 
         db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
         await db.SaveChangesAsync(ct);

@@ -2,7 +2,7 @@
 
 Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself**. One file per day; each reflects that day's branch state (the system grows as you go — Day 3 has no cache/replica yet, Day 5 adds the replica, Day 6 adds Redis, Day 12 extracts Restaurant). Every architectural move is *earned by a failure you can reproduce* — these runbooks show you how.
 
-**Confused why Day 6 ≠ Day 12?** Read **[DAY-EVOLUTION.md](DAY-EVOLUTION.md)** first — the branch map and invariants. Full stack: `main` or `day-16`. Smoke: `./scripts/cohort-smoke.ps1`.
+**Confused why Day 6 ≠ Day 12?** Read **[DAY-EVOLUTION.md](DAY-EVOLUTION.md)** first — the branch map and invariants. Inbox rule: **[INBOX-DISCIPLINE.md](INBOX-DISCIPLINE.md)**. Full stack: `main` or `day-16`. Smoke: `scripts/cohort-smoke.ps1`. Instructor walkthrough: `scripts/demo-break-kit.ps1`.
 
 | Day | What you build & verify | Runbook |
 |----|----|----|
