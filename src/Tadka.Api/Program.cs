@@ -51,6 +51,13 @@ else
 // (ADR-020) + the Payment module's OrderPlaced handler + the order's reaction to payment settling.
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssemblyContaining<Program>());
 
+// Day 11 refund saga levers (ADR-045/046): restaurant accept/reject + choreography vs orchestration naming.
+builder.Services.Configure<Tadka.Api.Domain.Restaurants.RestaurantAcceptanceOptions>(
+    builder.Configuration.GetSection(Tadka.Api.Domain.Restaurants.RestaurantAcceptanceOptions.SectionName));
+builder.Services.Configure<Tadka.Api.Infrastructure.Messaging.SagaOptions>(
+    builder.Configuration.GetSection(Tadka.Api.Infrastructure.Messaging.SagaOptions.SectionName));
+builder.Services.AddScoped<Tadka.Api.Infrastructure.Messaging.RefundSagaOrchestrator>();
+
 // Redis (ADR-018/019/020): cache-aside + single-flight lock + live-tracking pub/sub.
 // Optional — if no "Redis" connection string is configured, the cache is a no-op and live
 // tracking returns 503, so single-Postgres dev and the test suite run unchanged.
@@ -88,6 +95,8 @@ if (kafkaOptions?.Enabled == true)
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.PaymentResultsConsumer>();
     // Keep the local price replica fresh from the Restaurant service's menu-updated events (ADR-037).
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.MenuUpdatedConsumer>();
+    // ADR-045: surface payment-refunded on the live-tracking bus after compensation settles.
+    builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.PaymentRefundedConsumer>();
 }
 
 // ── Authentication & Authorization (ADR-030/031) ────────────────────────────────────────────────
