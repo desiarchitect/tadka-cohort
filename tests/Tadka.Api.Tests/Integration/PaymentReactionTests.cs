@@ -108,7 +108,9 @@ public class PaymentReactionTests(TadkaApiFactory factory) : IClassFixture<Tadka
 
     private async Task<Guid> PlaceOrderWithClientAsync(HttpClient client)
     {
-        var (restaurantId, menuItemId) = await DiscoverSeedWithClientAsync(client);
+        // Day 12+: restaurants live on Restaurant.Api. Ordering prices from the seeded menu replica
+        // (ADR-037) — same fixed seed IDs as PlaceOrderAsync (do not GET /api/v1/restaurants on the monolith).
+        var (restaurantId, menuItemId) = await DiscoverSeedAsync();
         var request = new CreateOrderRequest(
             CustomerId: Guid.NewGuid(),
             RestaurantId: restaurantId,
@@ -126,20 +128,6 @@ public class PaymentReactionTests(TadkaApiFactory factory) : IClassFixture<Tadka
         using var scope = factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
         return (await db.Orders.AsNoTracking().SingleAsync(o => o.Id == orderId)).Status;
-    }
-
-    private async Task<(Guid RestaurantId, Guid MenuItemId)> DiscoverSeedWithClientAsync(HttpClient client)
-    {
-        using var rDoc = JsonDocument.Parse(await client.GetStringAsync("/api/v1/restaurants"));
-        var restaurantId = Unwrap(rDoc.RootElement).EnumerateArray().First().GetProperty("id").GetGuid();
-
-        using var mDoc = JsonDocument.Parse(await client.GetStringAsync($"/api/v1/restaurants/{restaurantId}/menu"));
-        foreach (var item in Unwrap(mDoc.RootElement).EnumerateArray())
-        {
-            var available = !item.TryGetProperty("isAvailable", out var a) || a.GetBoolean();
-            if (available) return (restaurantId, item.GetProperty("id").GetGuid());
-        }
-        throw new InvalidOperationException("No available menu item found.");
     }
 
 
