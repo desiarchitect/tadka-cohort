@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  One-shot smoke for a cold cohort laptop: health → login → order → (optional wait) status.
+  One-shot smoke for a cold cohort laptop: health -> login -> order -> (optional wait) status.
 
 .DESCRIPTION
   Hits gateway if up (:8080), else Ordering (:5224). Does not require Kafka for a 201 on POST /orders.
@@ -35,12 +35,11 @@ Write-Host "== Cohort smoke against $BaseUrl ==" -ForegroundColor Cyan
 $health = Invoke-RestMethod "$BaseUrl/health"
 Write-Host "health: $($health.status)" -ForegroundColor Green
 
-$readyUrl = "$BaseUrl/health/ready"
 try {
-  $ready = Invoke-RestMethod $readyUrl
+  $ready = Invoke-RestMethod "$BaseUrl/health/ready"
   Write-Host "ready:  $($ready.status) (service=$($ready.service))" -ForegroundColor Green
 } catch {
-  Write-Host "ready:  (not available on this entry — ok for gateway-only)" -ForegroundColor Yellow
+  Write-Host "ready:  (not available on this entry - ok for gateway-only)" -ForegroundColor Yellow
 }
 
 $login = Invoke-RestMethod -Method Post -Uri "$BaseUrl/api/v1/auth/login" `
