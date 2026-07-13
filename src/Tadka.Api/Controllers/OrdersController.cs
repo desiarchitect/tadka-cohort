@@ -176,6 +176,54 @@ public class OrdersController(
         return Ok(new PagedResponse<OrderResponse>(response, page, pageSize, totalCount));
     }
 
+    /// <summary>
+    /// Keyset (cursor) pagination for infinite-scroll history (ADR-057). OFFSET stays on <see cref="GetByCustomer"/>
+    /// for small page-numbered views; this endpoint keeps page-N cost flat.
+    /// </summary>
+    [HttpGet("history")]
+    public async Task<ActionResult<CursorPageResponse<OrderResponse>>> GetByCustomerCursor(
+        [FromQuery] Guid? customerId,
+        [FromQuery] string? cursor,
+        [FromQuery] int pageSize = 10)
+    {
+        pageSize = Math.Clamp(pageSize, 1, 50);
+
+        // Ownership: customers only see their own history; Admin may pass customerId.
+        if (!User.IsAdmin())
+            customerId = User.UserId();
+        if (!customerId.HasValue)
+            return BadRequest(new { error = "customerId required for Admin history queries." });
+
+        var query = _read.Orders.Include(o => o.Items)
+            .Where(o => o.CustomerId == customerId.Value)
+            .AsQueryable();
+
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            try
+            {
+                var (createdAt, id) = OrderCursor.Decode(cursor);
+                query = query.Where(o =>
+                    o.CreatedAt < createdAt || (o.CreatedAt == createdAt && o.Id.CompareTo(id) < 0));
+            }
+            catch (ArgumentException)
+            {
+                return Problem(detail: "Invalid cursor.", statusCode: StatusCodes.Status400BadRequest, title: "Invalid Cursor");
+            }
+        }
+
+        var pageRows = await query
+            .OrderByDescending(o => o.CreatedAt).ThenByDescending(o => o.Id)
+            .Take(pageSize + 1)
+            .ToListAsync();
+
+        var hasMore = pageRows.Count > pageSize;
+        var items = (hasMore ? pageRows.Take(pageSize) : pageRows).ToList();
+        var nextCursor = hasMore ? OrderCursor.Encode(items[^1].CreatedAt, items[^1].Id) : null;
+
+        return Ok(new CursorPageResponse<OrderResponse>(items.Select(MapToResponse).ToList(), nextCursor));
+    }
+
     [Authorize(Roles = "RestaurantOwner,DeliveryAgent,Admin")] // kitchen/rider/ops advance status — not customers (ADR-031)
     [HttpPatch("{id:guid}/status")]
     public async Task<ActionResult> UpdateStatus(

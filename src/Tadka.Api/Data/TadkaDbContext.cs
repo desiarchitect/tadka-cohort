@@ -23,6 +23,8 @@ public class TadkaDbContext : DbContext
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
     public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
+    public DbSet<Coupon> Coupons => Set<Coupon>();
+    public DbSet<CouponRedemption> CouponRedemptions => Set<CouponRedemption>();
 
     // Restaurant read model (ADR-037): Ordering's OWN local price replica, fed by the Restaurant service's
     // `menu-updated` events. NOT the Restaurant aggregate — that was extracted into its own service (ADR-036).
