@@ -6,7 +6,7 @@
 
 ## Context
 
-As Tadka grows past its Bangalore launch (1 lakh orders/day) toward 3–4 cities (~4 lakh/day), the `orders` table accumulates rows fast. During the dinner rush, the order-history query `WHERE customer_id = ? ORDER BY created_at DESC` runs a **sequential scan** — Postgres reads every row, every time. At a few hundred rows nobody notices; at a few hundred thousand it takes seconds, and under concurrency those slow queries hold connections open long enough to exhaust the pool (ADR-015). We saw it: `EXPLAIN ANALYZE` shows `Seq Scan`, and the k6 dinner-rush profile blows the p99 < 300ms NFR.
+As Tadka grows past its launch toward 3–4 cities, the `orders` table accumulates rows fast. During the dinner rush, the order-history query `WHERE customer_id = ? ORDER BY created_at DESC` runs a **sequential scan** — Postgres reads every row, every time. At a few hundred rows nobody notices; at a few hundred thousand it takes seconds, and under concurrency those slow queries hold connections open long enough to exhaust the pool (ADR-015). We saw it: `EXPLAIN ANALYZE` shows `Seq Scan`, and the production profile blows the p99 < 300ms NFR.
 
 We need indexes — but indexes are not free. Every index is updated on every write and consumes disk and memory. The discipline is to add indexes **earned by a real query pattern**, not one per column "just in case."
 
@@ -37,13 +37,13 @@ Near-zero: a code-first migration (`AddPerformanceIndexes`) and a few minutes. T
 
 ## Alternatives Considered
 - **Index every foreign key / column "just in case"** — write throughput collapses (a real startup saw −40% INSERT after 12 indexes, 3 used). Rejected.
-- **Wait for production to complain** — your first thousand users eat slow queries; reactive firefighting. Rejected (we pre-plan from known patterns).
+- **Wait for user complaints** — your first thousand users eat slow queries; reactive firefighting. Rejected (we pre-plan from known patterns).
 - **Materialized views / denormalized read tables** — heavier; reserved for queries an index genuinely can't serve. Not needed at this scale.
 
 ## References
 - ADR-008 (no cross-schema FKs — why these columns have no auto-index), ADR-015 (the pool exhaustion the seq scans triggered), ADR-012 (xmin)
-- `docs/database/indexing-strategy.md`, `docs/scaling-decision-tree.md`, `docs/demo-scripts/01-explain-orders-by-customer.sql`
+- `docs/database/indexing-strategy.md`, `docs/scaling-decision-tree.md`, `docs/performance/01-explain-orders-by-customer.sql`
 - `Data/Configurations/OrderConfiguration.cs`, `Migrations/*AddPerformanceIndexes*`
 
 ## Revisit When
-When a **new query pattern** appears (then add the index it needs — e.g. a restaurant dashboard would justify `orders(restaurant_id, created_at)`), or when `pg_stat_user_indexes` shows an index with `idx_scan = 0` (drop it), or when an index-optimized query still shows >100ms p95 — at which point caching (Day 6) or partitioning (ADR-017) is the next cheapest move, not more indexes.
+When a **new query pattern** appears (then add the index it needs — e.g. a restaurant dashboard would justify `orders(restaurant_id, created_at)`), or when `pg_stat_user_indexes` shows an index with `idx_scan = 0` (drop it), or when an index-optimized query still shows >100ms p95 — at which point caching or partitioning (ADR-017) is the next cheapest move, not more indexes.

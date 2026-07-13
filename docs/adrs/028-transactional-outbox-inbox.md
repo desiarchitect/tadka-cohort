@@ -8,7 +8,7 @@
 
 Kafka (ADR-027) decouples services in time, but it introduces two classic correctness gaps:
 
-1. **The dual-write problem (producer side).** "Save the order to Postgres, then publish `order-placed` to Kafka" is **two writes to two systems with no shared transaction**. If the process crashes between them, the order exists but the event never publishes → the order is never charged (a silent lost charge — exactly Day-8's wound, just relocated). You cannot atomically commit a DB row *and* a Kafka message.
+1. **The dual-write problem (producer side).** "Save the order to Postgres, then publish `order-placed` to Kafka" is **two writes to two systems with no shared transaction**. If the process crashes between them, the order exists but the event never publishes → the order is never charged (a silent lost charge — exactly the previous temporal coupling wound, just relocated). You cannot atomically commit a DB row *and* a Kafka message.
 2. **At-least-once redelivery (consumer side).** Kafka redelivers on a crash-before-offset-commit, so a consumer can see the same `order-placed` twice → a double charge if naive.
 
 ## Decision
@@ -44,8 +44,8 @@ Outbox + Inbox are patterns, not tools: **MassTransit/NServiceBus** ship both ou
 
 ## References
 - ADR-011 (idempotency-key — the same idea, client side), ADR-023 (the non-durable in-memory queue this replaces), ADR-027 (Kafka), ADR-029 (Saga)
-- `cohort-prep/day-09/break-kit-day-09.md` (outbox crash-safety; redelivery → one charge)
+- `docs/incidents/inc-108-outbox-crash.md` (outbox crash-safety; redelivery → one charge)
 - Implementation: Ordering `Data/Messaging/Outbox*` + `OutboxRelay`; Payment `payment.outbox_messages` + `OutboxRelay` (payment-results / payment-refunded); Restaurant outbox for menu-updated / restaurant-response; each consumer's `inbox_messages` + dedup check
 
 ## Revisit When
-At high volume, replace the polling relay with **CDC (Debezium)** or adopt **MassTransit**'s outbox. Add an outbox/inbox **pruning** job. Add a **DLQ** when a real poison-message case appears (Week 5 stretch / Week 7 resilience).
+At high volume, replace the polling relay with **CDC (Debezium)** or adopt **MassTransit**'s outbox. Add an outbox/inbox **pruning** job. Add a **DLQ** when a real poison-message case appears (future resilience phase).

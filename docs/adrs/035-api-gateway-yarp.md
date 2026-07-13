@@ -1,4 +1,4 @@
-# ADR-035: API Gateway (YARP) — one entry point for the services
+# ADR-035: API Gateway
 
 **Date:** 2026-06-05
 **Status:** Accepted
@@ -6,42 +6,32 @@
 
 ## Context
 
-After extracting Payment (Day 8) and Delivery (ADR-033), a client faces **three hosts** — monolith `:5224`, Payment `:5240`, Delivery `:52xx`. That means three base URLs to configure, CORS/port sprawl, no single place for cross-cutting edge concerns (rate-limiting, a uniform auth challenge, request logging, TLS termination), and the internal topology leaks to clients (every extraction breaks them). A single front door is now earned.
+As we extract domains from the monolith into independent microservices (Payment, Delivery, etc.), the external topology becomes fractured. Client applications (mobile apps, web frontends) are forced to communicate with multiple distinct hostnames and ports. This distributed surface area makes it difficult to enforce cross-cutting edge concerns uniformly, such as rate limiting, TLS termination, CORS policies, and centralized request logging. Furthermore, exposing the internal microservice topology directly to clients creates tight coupling, breaking clients whenever a new service is extracted or internal routing changes.
 
 ## Decision
 
-**Introduce an API gateway with YARP (`Tadka.Gateway`)** — a reverse proxy that is the **one public entry point** (e.g. `:8080`):
-- **Routing:** `/api/v1/payments/**` → Payment, `/api/v1/deliveries/**` → Delivery, everything else (`/orders`, `/restaurants`, `/auth`, `/users`) → the monolith. Clients know **one** host; the topology is hidden behind the gateway.
-- **Edge concerns:** **rate-limiting** (ASP.NET `RateLimiter`) and a uniform place for request logging / TLS; the `Authorization` header is forwarded.
-- **Defense in depth preserved:** the gateway is **not** a trust boundary — **per-service JWT validation (ADR-031) remains the floor.** The gateway may *also* validate at the edge (fail fast), but a service never trusts "the gateway already checked it."
+We will introduce an **API Gateway** as the single public entry point for all client traffic.
+
+- **Routing:** The gateway will route traffic based on path prefixes (e.g., `/api/v1/payments/**` to the Payment service, `/api/v1/deliveries/**` to the Delivery service, and default traffic to the monolithic core).
+- **Abstraction:** Clients will interact with a single unified API surface. Internal architectural changes and extractions will remain transparent to external consumers.
+- **Edge Policies:** The gateway will centralize edge concerns, including global rate limiting, request logging, and TLS termination.
+- **Trust Boundary:** The API Gateway will **not** serve as a definitive trust boundary. While it may reject blatantly invalid traffic, all downstream services must continue to perform independent JWT validation and resource authorization (as defined in ADR-031).
 
 ## Consequences
 
 ### Positive
-- One client-facing URL; internal extractions/moves don't break clients (route changes are gateway-side).
-- A single home for edge rate-limiting, logging, TLS, CORS, and (later) request aggregation.
-- Smooth path to the cloud equivalent (ALB + API Gateway) — same role, managed.
+- **Decoupled Topology:** Internal service extractions and refactoring can proceed without requiring coordinated client application updates.
+- **Centralized Edge Security:** A single enforcement point for DDoS mitigation, rate limiting, and global observability.
+- **Simplified Client Logic:** Frontends interact with a single domain, avoiding complex CORS configurations and host management.
 
-### Negative / Risks
-- **A new hop** (latency + one more thing to run and make HA — a gateway outage is a front-door outage).
-- Tempting to make it a **trust boundary** (validate-only-at-edge) → the forge-the-header breach (ADR-031). We explicitly keep per-service validation.
-- Tempting to stuff business logic into the gateway → it must stay a thin edge (routing + cross-cutting only).
-
-### Cost (₹ / effort)
-A small YARP project + a routes config; near-zero locally. In the cloud it's a managed **ALB / API Gateway / App Gateway + APIM** (real cost — justify; sized by traffic).
+## Negative / Risks
+- **Single Point of Failure:** The gateway becomes a critical infrastructure component. If it goes down, the entire system is inaccessible. It must be highly available.
+- **Increased Latency:** Introduces an additional network hop for all API requests.
+- **Scope Creep:** There is a constant temptation to push domain business logic (e.g., data aggregation, complex orchestration) into the gateway layer, which leads to an unmaintainable "enterprise service bus" anti-pattern.
 
 ## Alternatives Considered
-- **No gateway (clients hit each service):** simplest, but leaks topology + no single edge for cross-cutting concerns; rejected at 3 services.
-- **nginx / Envoy / Kong / Traefik:** all valid reverse proxies/gateways; YARP chosen because it's .NET-native (one stack, code-reviewable config) for the cohort — the *pattern* is identical. Kong/Envoy add a plugin/policy ecosystem when you outgrow a thin proxy.
-- **Cloud-managed (AWS ALB + API Gateway, Azure App Gateway + APIM):** the production target — see the option-space; the *deployable* black-box lands on the Day-12 deploy day (needs a cloud account).
-
-## Cross-stack equivalents
-YARP ≈ **Spring Cloud Gateway** (Java) · **Express Gateway** / a Node proxy · **Kong / Envoy / Traefik / nginx** (any stack) · cloud-managed **AWS ALB + API Gateway**, **Azure Application Gateway + APIM**, **GCP**. "One thin edge for routing + cross-cutting; never a trust boundary" is the language-neutral rule.
-
-## References
-- ADR-024/033 (the extractions that create multiple hosts), ADR-031 (per-service validation stays the floor)
-- `cohort-prep/day-11/option-space.md` (gateway options + cloud map + Terraform sketch), `break-kit-day-11.md`
-- Implementation: `src/Tadka.Gateway` (YARP routes + rate-limiting)
+- **Direct Client-to-Service Communication:** Rejected because it tightly couples clients to internal architecture and scatters edge security policies across multiple codebases.
+- **Backend-For-Frontend (BFF):** A pattern where specific gateways are built for specific clients (e.g., Web vs. Mobile). Rejected as premature; our current client needs are uniform enough for a single API Gateway.
 
 ## Revisit When
-Move auth/rate-limit/TLS to a **cloud-managed gateway** at deployment (Day 12 / production). Adopt **Kong/Envoy** if you need a rich plugin/policy ecosystem or a service mesh. Add request aggregation / BFF only when a client genuinely needs it (don't pre-build).
+As traffic scales in production, we will transition from a custom code-based gateway to a managed cloud native solution (e.g., AWS ALB + API Gateway, or Azure Application Gateway + APIM) for enhanced performance and managed high availability. We will consider the BFF pattern if client data requirements drastically diverge.

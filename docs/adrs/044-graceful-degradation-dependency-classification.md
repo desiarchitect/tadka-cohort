@@ -8,7 +8,7 @@
 
 A circuit breaker (ADR-043) handles a *down external dependency* on the request path. But Tadka has several dependencies with very different failure consequences, and "add a circuit breaker" is the wrong reflex for most of them. We need a **policy**: for each dependency, what happens when it's down for five minutes, and is degrading even *safe*?
 
-The chaos scenarios make this concrete:
+Consider these production scenarios:
 - **Redis down.** The menu cache (ADR-018) is gone. Should orders fail? No — cache-aside is designed to **fall through to Postgres**: correct answers, just slower (DB read-load + p95 rise). Redis is a **performance** dependency, not a **correctness** one. The danger is the *opposite* reflex — making Redis HA and treating it as a hard dependency turns a performance aid into a new failure domain.
 - **Hot key.** One celebrity-restaurant menu key expires and the herd stampedes Postgres at the TTL boundary. The single-flight lock (ADR-019) collapses the herd to ~1 refresh. Degradation here is about *not amplifying* load.
 - **Postgres down.** There is no graceful degradation — you cannot accept an order without the order store. A circuit breaker here adds complexity and saves nothing. This is a **correctness** dependency.
@@ -24,18 +24,18 @@ The chaos scenarios make this concrete:
 **Rules:**
 1. **Per-feature degradation, not all-or-nothing.** Payment down → browsing, menus, order history still work (Kafka makes the order itself wait, ADR-027); only the paid step is affected. A dependency failure degrades *its* feature, not the whole app.
 2. **Never degrade money to stale.** Financial state is never served from cache/fallback as if fresh; a wrong "paid" is worse than an honest "try again."
-3. **Protect yourself, not just downstream.** Beyond breakers (downstream protection), use the existing **backpressure** signal (Kafka consumer lag, Day 9 — pause/scale, don't silently fall behind) and **edge load-shedding** (the YARP gateway's rate-limit/429, ADR-035 — *a 503 in 50 ms beats a 200 in 30 s*; shed at the edge, not half-way through a request chain).
+3. **Protect yourself, not just downstream.** Beyond breakers (downstream protection), use the existing **backpressure** signal (Kafka consumer lag — pause/scale, don't silently fall behind) and **edge load-shedding** (the YARP gateway's rate-limit/429, ADR-035 — *a 503 in 50 ms beats a 200 in 30 s*; shed at the edge, not half-way through a request chain).
 4. **Every dependency carries a one-line degradation rule** in the owning service's docs; a new dependency without an answer to "what happens if this is down 5 minutes?" isn't done.
 
 ## Consequences
 
 ### Positive
-- A clear, teachable decision per dependency — no reflexive "breaker on everything."
+- A clear, simple decision matrix per dependency — no reflexive "breaker on everything."
 - Redis can stay a **simple, non-HA** performance aid (cheaper, fewer failure modes) because the system is proven to survive its loss.
 - Forbidding stale-money degradation prevents the worst class of incident (paying-for-unpaid-orders).
 
 ### Negative / Risks
-- Requires sizing Postgres for the **cache-cold** read load (or accepting a measured p95 hit during a Redis outage) — a real capacity decision, surfaced by the chaos demo.
+- Requires sizing Postgres for the **cache-cold** read load (or accepting a measured p95 hit during a Redis outage) — a real capacity decision.
 - Per-feature degradation needs each feature to declare its rule; an unclassified dependency is a latent surprise.
 
 ### Cost (₹ / effort)
@@ -58,17 +58,20 @@ Mostly design + documentation cost. The infra cost is the choice it *avoids*: yo
 - Cons: stale **money** state = real financial harm.
 - Why rejected: availability theatre that causes paying-for-unpaid incidents.
 
-## Teaching fields
+## Implementation Notes
 
-- **Topic:** resilience is a *policy*, not a pattern — classify dependencies (performance vs correctness) and decide degradation per feature; protect yourself with backpressure + load-shedding.
-- **Options:** HA-everything · fail-completely · cache-everything-stale · **classify + per-feature degrade, fail honestly on money (chosen)**.
-- **Choice:** Redis/replica = performance (fall through to DB); Postgres/money = correctness (fail honestly, no breaker, no stale); shed at the edge; backpressure on Kafka lag.
-- **Why:** keeps cheap things cheap (non-HA Redis) by proving the DB survives their loss; protects the user from both downtime *and* wrong money data.
-- **Trade-off:** must size the DB for cache-cold load (or accept a p95 hit); every feature must declare a degradation rule.
-- **Failure mode** (2 AM dinner rush): a team made Redis a hard dependency "for speed" — Redis hiccuped and took the whole menu/order path down, the exact outage cache-aside exists to prevent. Or a team cached payment status and served stale "successful" during a gateway outage → cooked 200 unpaid orders.
-- **Revisit when:** any new dependency (write its rule), or when the measured cache-down p95 breaches the order SLO (then, and only then, make Redis HA).
-- **Cross-stack equivalents:** the classification is language-agnostic. Cache-aside fall-through = Spring `@Cacheable` with a DB fallback / any cache client guarded by a null-object; backpressure = reactive streams (Project Reactor/RxJava), Kafka consumer-lag alerts, or Go channel bounds; edge load-shedding = gateway/Envoy rate-limit + 429/503 with `Retry-After`. The decision (performance vs correctness, never-stale-money) travels unchanged.
+- **Topic:** Resilience is a *policy*, not a pattern — classify dependencies (performance vs correctness) and decide degradation per feature; protect yourself with backpressure + load-shedding.
+- **Rule:** Redis/replica = performance (fall through to DB); Postgres/money = correctness (fail honestly, no breaker, no stale); shed at the edge; backpressure on Kafka lag.
+- **Failure mode:** A team made Redis a hard dependency "for speed" — Redis hiccuped and took the whole menu/order path down, the exact outage cache-aside exists to prevent. Or a team cached payment status and served stale "successful" during a gateway outage → cooked 200 unpaid orders.
+- **Cross-stack equivalents:** The classification is language-agnostic. Cache-aside fall-through = Spring `@Cacheable` with a DB fallback / any cache client guarded by a null-object; backpressure = reactive streams (Project Reactor/RxJava), Kafka consumer-lag alerts, or Go channel bounds; edge load-shedding = gateway/Envoy rate-limit + 429/503 with `Retry-After`.
+
+## Revisit When
+Any new dependency is added (write its rule), or when the measured cache-down p95 breaches the order SLO (then, and only then, make Redis HA).
 
 ## References
-- ADR-018 (cache-aside + Redis-down fall-through), ADR-019 (single-flight stampede lock — the hot-key bound), ADR-037 (local read replica — another performance dependency that degrades gracefully), ADR-043 (circuit breaker — the downstream-protection half), ADR-035 (gateway edge rate-limit = load-shedding), ADR-027 (Kafka — why a down Payment makes the order *wait*, the per-feature degradation in action), ADR-040/042 (the chaos impact is *measured* on the Day-13 dashboards).
-- `cohort-prep/day-14/option-space.md`, `break-kit-day-14.md`, `docs/runbooks/day-14.md`.
+- ADR-018 (Cache-aside + Redis-down fall-through)
+- ADR-019 (Single-flight stampede lock — the hot-key bound)
+- ADR-037 (Local read replica)
+- ADR-043 (Circuit breaker)
+- ADR-035 (Gateway edge rate-limit)
+- ADR-027 (Kafka — why a down Payment makes the order *wait*)

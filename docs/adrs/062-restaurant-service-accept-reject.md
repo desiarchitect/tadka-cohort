@@ -6,15 +6,15 @@
 
 ## Context
 
-ADR-045 implemented restaurant reject + refund compensation with the decision **inline** in Ordering at payment-settled time — correct for Day 11 while Restaurant was still in-process.
+ADR-045 implemented restaurant reject + refund compensation with the decision **inline** in Ordering at payment-settled time.
 
-After Restaurant extraction (ADR-036), production ownership of "will we cook this order?" belongs to **Restaurant.Api**, not Ordering. Keeping AcceptMode only on the monolith couples the teaching lever to the wrong service boundary and skips a real Kafka hop students must see: `order-confirmed` → Restaurant decision → `restaurant-response` → Ordering compensation.
+After Restaurant extraction (ADR-036), production ownership of "will we cook this order?" belongs to **Restaurant.Api**, not Ordering. Keeping AcceptMode only on the monolith couples the acceptance logic to the wrong service boundary and skips a critical asynchronous decision flow: `order-confirmed` → Restaurant decision → `restaurant-response` → Ordering compensation.
 
 ## Decision
 
 1. **Decision modes** (`Restaurant:DecisionMode` on Ordering)
-   - `Inline` (default) — Ordering applies `AcceptMode` at payment-settled time (tests / no Restaurant consumer). ADR-045 path.
-   - `Service` — Ordering always confirms after payment; Restaurant.Api decides on `order-confirmed`.
+   - `Inline` (legacy/fallback) — Ordering applies `AcceptMode` at payment-settled time. (ADR-045 path).
+   - `Service` (production) — Ordering always confirms after payment; Restaurant.Api decides asynchronously on `order-confirmed`.
 
 2. **Restaurant.Api path** (`Restaurant:AcceptMode` on Restaurant service)
    - Consume `order-confirmed` (Inbox dedup).
@@ -32,22 +32,17 @@ After Restaurant extraction (ADR-036), production ownership of "will we cook thi
 ## Consequences
 
 ### Positive
-- Production multi-service ownership of accept/reject.
-- Same compensation machinery as ADR-045; only the trigger moves.
-- Tests stay fast: default remains Inline without Kafka/Restaurant.Api.
+- True multi-service ownership of accept/reject, aligning with domain boundaries.
+- Reuses the existing compensation machinery from ADR-045; only the trigger point moves.
 
 ### Negative / Risks
-- Service mode needs Kafka + Restaurant.Api running; misconfigured DecisionMode=Service without the consumer leaves Confirmed orders forever if restaurant never answers.
-- Delivery also consumes `order-confirmed` — rejection after assign is a later reconciliation topic (out of scope here).
+- Service mode relies on Kafka messaging and Restaurant.Api availability; a misconfiguration or outage where the restaurant never answers could leave orders in a Confirmed state indefinitely.
+- Delivery also consumes `order-confirmed` — rejection after rider assignment is a later reconciliation topic (out of scope here).
 
 ## Alternatives considered
-- Always Service mode — rejected; unit/integration tests would require Kafka + Restaurant.Api.
-- HTTP call Ordering → Restaurant for decision — rejected; reintroduces Day-8 temporal coupling on the hot path.
+- Always enforce Service mode — rejected; maintaining the Inline mode facilitates simpler integration testing environments where full infrastructure isn't required.
+- Synchronous HTTP call Ordering → Restaurant for decision — rejected; reintroduces temporal coupling on the hot path.
 
 ## References
 - ADR-045 (inline reject + refund), ADR-028 (Outbox/Inbox), ADR-029/033 (`order-confirmed`), ADR-036 (Restaurant extract)
 - Implementation: `OrderConfirmedConsumer` (Restaurant), `RestaurantResponseConsumer` (Ordering), `RestaurantAcceptanceOptions.DecisionMode`, `ordering.saga_instances`
-
-## Revisit when
-- Restaurant needs human-in-the-loop SLA timers (auto-reject after N minutes).
-- Rejection after rider assignment requires Delivery cancel + customer messaging.

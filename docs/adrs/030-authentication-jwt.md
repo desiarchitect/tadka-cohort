@@ -1,4 +1,4 @@
-# ADR-030: Authentication — JWT (chosen from the full mechanism menu)
+# ADR-030: Authentication — JWT Bearer Tokens
 
 **Date:** 2026-06-05
 **Status:** Accepted
@@ -6,43 +6,34 @@
 
 ## Context
 
-Through Day 9 Tadka has **no authentication**: every endpoint (place/cancel order, edit menu, the Payment service's HTTP endpoints) is callable by anyone. The `User` model exists (`Email`, `Phone`, `PasswordHash`, `Role`) but nothing issues or checks identity. We must answer "**who is calling?**" — and we choose deliberately from the whole menu, not by reflex.
-
-## The mechanism menu (teach the map, then pick)
-
-| Mechanism | How it works | Best for | Why-not here |
-|---|---|---|---|
-| **Session / cookie** | server stores session, cookie holds id | a single web server / monolith | stateful → needs a shared session store across our extracted services |
-| **JWT (bearer)** ✅ | signed, self-contained token; stateless verify | APIs, mobile, **multi-service** | revocation is harder (mitigated by short TTL + refresh rotation) |
-| **OAuth2 / OIDC** | delegate identity to Google/Apple/… | "Sign in with X", third-party | overkill as the *primary* store for Tadka's own users (we'd still issue our own token after) |
-| **API keys** | a static secret per client | server-to-server, public APIs | no user identity; coarse |
-| **mTLS** | client cert proves identity | service-to-service in a mesh | heavy PKI; we're not in a mesh yet |
-| **Passwordless / magic-link** | email/SMS one-time link | low-friction consumer login | a UX choice layered *on top* of token issuance |
-| **Passkeys / WebAuthn (FIDO2)** | device-bound public-key cred | phishing-resistant future default | client/device support + flows beyond today's scope |
-| **SSO / SAML** | enterprise IdP federation | B2B/enterprise | not Tadka's consumer model |
+The Tadka platform previously lacked a formal authentication mechanism; internal endpoints were callable without identity verification. As the system scales into a distributed architecture with multiple independent services (Ordering, Payment, etc.), we need a robust, scalable way to securely verify the identity of the caller ("who is calling?") across process boundaries without introducing a centralized bottleneck.
 
 ## Decision
 
-**Issue JWTs from an auth endpoint in the monolith.** `POST /api/v1/auth/register` + `/login` validate credentials (password hashed with `PasswordHasher<User>`) and return a signed JWT whose claims carry `sub` (userId), `role`, and `restaurantId` (for owners). Services verify the token statelessly with a shared signing key.
+We will implement stateless authentication using **JSON Web Tokens (JWT)**. 
 
-- **Why JWT:** stateless verification works across the monolith **and** the extracted Payment service with **no shared session store** — each service checks the signature itself (the multi-service property sessions lack). Mobile/SPA-friendly.
-- **Token strategy:** short-lived **access token (15 min)** + a **refresh token (7 days, stored server-side, rotated on use)**. A stolen access token is dangerous for ~15 min, not a day; refresh rotation detects reuse and revokes the chain.
-- **Signing:** **HS256 (symmetric) now** for simplicity; **migration path to RS256 (asymmetric)** noted — the auth service holds the private key, every other service verifies with the public key, so a compromised service can verify but not mint tokens.
-- Never store plaintext passwords; never put secrets/PII in the JWT payload (it's signed, not encrypted — it's readable).
+- **Token Issuance:** An authentication service/module will expose endpoints (`POST /api/v1/auth/register` and `/login`) to validate credentials against hashed passwords and issue signed JWTs.
+- **Payload:** The JWT will contain essential claims: `sub` (User ID), `role` (Customer, Owner, Admin), and `restaurantId` (where applicable).
+- **Verification:** Services will verify tokens statelessly using a shared signing key, meaning no service needs to call back to a central identity provider or database to validate a request.
+- **Token Lifecycle:** We will use short-lived access tokens (e.g., 15 minutes) paired with longer-lived refresh tokens (e.g., 7 days). Refresh tokens will be stored server-side and rotated upon use to mitigate token theft.
+- **Cryptography:** We will initially use HS256 (symmetric) for simplicity, with a planned migration to RS256 (asymmetric) to allow services to verify tokens without possessing the signing key.
 
 ## Consequences
-**Positive:** stateless, scales horizontally, one verification path reused by every service; short TTL bounds the blast radius of a leaked token. **Negative/Risks:** JWT revocation before expiry is awkward (you wait out the 15 min or maintain a denylist); the signing key is now a critical secret (→ RS256 + a secrets manager); refresh-token storage + rotation is extra code. **Cost:** library + a refresh-token table; near-zero infra.
+
+### Positive
+- **Stateless Verification:** Services can validate requests locally, preventing the identity system from becoming a single point of failure or performance bottleneck.
+- **Horizontal Scalability:** Perfectly suited for our expanding microservices landscape and external client applications (mobile/web).
+- **Bounded Blast Radius:** Short expiration times limit the window of vulnerability if an access token is compromised.
+
+### Negative / Risks
+- **Revocation Complexity:** Stateless tokens cannot be easily revoked before expiration. We mitigate this via the short 15-minute TTL.
+- **Secret Management:** The symmetric signing key (HS256) becomes a highly sensitive secret that must be securely distributed to all verifying services.
+- **Refresh Token Overhead:** Managing the storage, validation, and rotation of refresh tokens introduces stateful complexity to the authentication service.
 
 ## Alternatives Considered
-Sessions (rejected: stateful across services); OAuth2/OIDC (great for delegated "Sign in with Google", but we still mint our own token — add later as an *identity source*, not the core); API keys / mTLS (service-to-service, not user auth — relevant for the gateway/mesh later); passkeys (the phishing-resistant future — revisit when client support and flows are in scope).
-
-## Cross-stack equivalents
-ASP.NET `AddAuthentication().AddJwtBearer()` ≈ **Spring Security** (`oauth2ResourceServer().jwt()`) · **Node** Passport-JWT / **NextAuth** / `jsonwebtoken` · **Go** `golang-jwt` + middleware. Managed alternatives everywhere: **Keycloak / Auth0 / Cognito / Entra ID** (issue + rotate tokens for you). The *concept* — a signed, stateless, short-lived bearer token verified at each service — is identical.
-
-## References
-- ADR-031 (authorization on top of these claims), ADR-032 (PII — don't leak it in tokens/logs), ADR-024/026 (the extracted Payment service that must also verify)
-- `cohort-prep/day-10/option-space.md` (the full mechanism + model menus), `break-kit-day-10.md`
-- Implementation: monolith `Auth/*` (endpoints, token service, `PasswordHasher`), JWT validation in both services
+- **Stateful Sessions (Cookies):** Rejected because it requires a shared session store (like Redis) across all microservices, coupling them to a central infrastructure piece.
+- **OAuth2/OIDC (Delegated Auth):** Considered overkill for the primary internal auth mechanism at this stage. It remains a valid addition later for "Sign in with Google/Apple" features.
+- **API Keys / mTLS:** Best suited for machine-to-machine communication, not for passing end-user context across services.
 
 ## Revisit When
-Move to **RS256 + a secrets manager** before production / when a 2nd service mints-or-verifies independently. Add **OAuth2/OIDC** when "Sign in with Google" is needed, **passkeys** when phishing-resistance is prioritized. Add a token **denylist** if immediate revocation becomes a requirement.
+We will migrate to asymmetric signing (RS256) with a proper Secrets Manager before production release. If immediate token revocation becomes a strict compliance requirement, we will implement a centralized token denylist. We will evaluate passkeys/WebAuthn when prioritizing phishing-resistant authentication.

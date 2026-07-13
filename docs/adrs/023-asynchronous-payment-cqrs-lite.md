@@ -18,8 +18,8 @@ There's also a correctness angle. Payment is a **side-effect of an order existin
 
 - **The write path splits (CQRS-lite).** `POST /orders` does its existing work — validate, server-side price, persist the order (`Created`), record idempotency — then publishes `OrderPlaced` (ADR-022) and **returns 201 right away**. It no longer calls the gateway. This is the *intro* to CQRS: the place-order **command** is separated from the payment write; it is **not** a full read-model/projection split (that's later, if a read need earns it).
 - **A background payment processor does the charge.** The Payment module's `INotificationHandler<OrderPlaced>` enqueues the order onto an in-process **`Channel<T>`**; a `BackgroundService` drains it and charges via the **Polly-wrapped gateway** (ADR-021). On success it writes a `Completed` payment row and publishes `PaymentCompleted`; on failure/timeout it writes `Failed` and publishes `PaymentFailed`, and the order reacts (a failed payment **cancels** the order via the existing state machine). The processor is **idempotent** — a unique constraint on `payment(order_id)` means a redelivery can't double-charge.
-- **Status converges, and the customer sees it.** The order is briefly "payment pending"; when payment settles, the status change rides the **Day-6 SSE stream** (ADR-020) straight to the customer's screen. The mechanism we built for live tracking is exactly what makes async payment feel instant.
-- **The `Payment:Mode` toggle stays in the code** (`Synchronous` | `Async`) purely as the **teaching lever**: `Synchronous` reproduces the brownout for the lab; `Async` is the shipped default. Real systems wouldn't keep both; the cohort keeps it to *show* the before/after.
+- **Status converges, and the customer sees it.** The order is briefly "payment pending"; when payment settles, the status change rides the **SSE stream** (ADR-020) straight to the customer's screen. The mechanism we built for live tracking is exactly what makes async payment feel instant.
+- **The `Payment:Mode` toggle stays in the code** (`Synchronous` | `Async`) purely as a **feature flag for load testing**: `Synchronous` reproduces the brownout scenario for resilience testing; `Async` is the shipped default. Real systems wouldn't necessarily keep both in production forever, but we keep it to validate our fallback mechanisms and latency limits.
 
 ## Consequences
 
@@ -30,7 +30,7 @@ There's also a correctness angle. Payment is a **side-effect of an order existin
 
 ### Negative / Risks
 - **Eventual payment status.** The order exists before payment settles — the UI must show "payment processing", and downstream logic must not assume paid-on-create. New states/edges to reason about (pending → paid / pending → cancelled-on-failure).
-- **The in-memory `Channel` is not durable.** If the process crashes with items queued (or mid-charge), that payment is lost — the order is stuck pending. Acceptable as the *right-sized* step today (single-process, low volume, visible in logs); the **durable** version is **Kafka + the Outbox pattern (Week 5)**, where the event is committed in the same transaction as the order and survives a crash.
+- **The in-memory `Channel` is not durable.** If the process crashes with items queued (or mid-charge), that payment is lost — the order is stuck pending. Acceptable as the *right-sized* step today (single-process, low volume, visible in logs); the **durable** version is **Kafka + the Outbox pattern (planned for a future phase)**, where the event is committed in the same transaction as the order and survives a crash.
 - A background worker is now part of the system to operate, observe, and reason about (back-pressure, poison messages) — more than a straight-line request handler.
 
 ### Cost (₹ / effort)
@@ -38,14 +38,14 @@ Zero infra (in-process `Channel` + `BackgroundService`, no broker yet). Cost is 
 
 ## Alternatives Considered
 - **Synchronous payment with just a timeout (ADR-021 alone):** simpler, but the order still can't be placed while the gateway is down, and every order pays the gateway's latency. Fail-fast shrinks the wound; async removes it.
-- **Durable queue / Kafka + outbox now:** the correct *destination*, but it's Week 5 — it earns its operational weight when events cross service boundaries and must survive crashes. An in-process channel is the honest intermediate that teaches the decoupling without prematurely buying a broker.
+- **Durable queue / Kafka + outbox now:** the correct *destination*, but it earns its operational weight when events cross service boundaries and must survive crashes. An in-process channel is the pragmatic intermediate that establishes decoupling without prematurely buying a broker.
 - **Two-phase "reserve then confirm" / payment-first:** heavier protocol, and it re-introduces the coupling (the customer waits on the bank). Wrong trade-off for a food order where the order is the source of truth.
 - **Fire-and-forget `Task.Run` instead of a Channel + BackgroundService:** no back-pressure, dies with the request scope, unobservable. The Channel gives a bounded, drainable queue with a single owner — the minimum that's actually operable.
 
 ## References
 - ADR-021 (timeout + bulkhead around the gateway the processor calls), ADR-022 (the Payment module + `OrderPlaced` event it consumes), ADR-020 (SSE — how the converged status reaches the customer), ADR-011 (idempotency — the no-double-charge principle, here as a unique `order_id`)
 - Implementation: `Modules/Payments/PaymentProcessor.cs` (Channel + BackgroundService), `PayForOrderOnOrderPlaced` handler, `PaymentCompleted/PaymentFailed` events
-- `cohort-prep/day-07/break-kit-day-07.md` (sync brownout → async recovery), Week 5 (Kafka + Outbox — the durable successor)
+- `docs/incidents/inc-104-payment-gateway-brownout.md` (sync brownout → async recovery)
 
 ## Revisit When
-**Week 5:** replace the in-process `Channel` with **Kafka + the Outbox pattern** so the `OrderPlaced` event is committed atomically with the order and survives a crash (at-least-once delivery, consumer idempotency, DLQ for poison payments). At that point the processor becomes a real consumer in (or feeding) the extracted Payment service. Revisit the order state model if product wants explicit "payment failed, retry" UX rather than auto-cancel.
+**When scaling asynchronous processing:** replace the in-process `Channel` with **Kafka + the Outbox pattern** so the `OrderPlaced` event is committed atomically with the order and survives a crash (at-least-once delivery, consumer idempotency, DLQ for poison payments). At that point the processor becomes a real consumer in (or feeding) the extracted Payment service. Revisit the order state model if product wants explicit "payment failed, retry" UX rather than auto-cancel.

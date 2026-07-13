@@ -11,7 +11,7 @@ When an order is confirmed, *things should happen*: notify the customer, (later)
 1. **A side-effect failure corrupts the core operation.** If sending the SMS throws, do we roll back the confirmation? The order *is* confirmed — the customer's food should be cooked regardless of whether one notification went out. Coupling makes a trivial failure (notification) able to undo a critical one (the order).
 2. **The aggregate accretes dependencies.** `Order` would need a notification client, a payment client, a delivery client — it would know about half the system. That is the opposite of the clean module boundaries we are protecting for extraction (ADR-003, ADR-008).
 
-We need a way for the order to *announce* "I was confirmed" and let interested parties react **independently**, without the order knowing who they are. And we want the mechanism to be the **monolith-shaped rehearsal** of what becomes cross-service messaging in Week 5.
+We need a way for the order to *announce* "I was confirmed" and let interested parties react **independently**, without the order knowing who they are. And we want the mechanism to be an in-process foundation that seamlessly transitions to cross-service messaging during future service extraction.
 
 ## Decision
 
@@ -24,24 +24,20 @@ We need a way for the order to *announce* "I was confirmed" and let interested p
 
 The shapes are chosen deliberately: an **event** (past tense, "something happened") and **independent handlers** are exactly an *event + its consumers* on a message bus. At extraction the dispatcher is swapped for a broker producer (Kafka) and the handlers become consumers in other services — **the domain code does not change**.
 
-## Interview framing
-
-On a Swiggy HLD board, say **"raise a domain event after commit; handlers react without coupling the aggregate"**. Do not name MediatR or dispatcher interfaces. The Week 5 answer is the same pattern on Kafka.
-
 ## Consequences
 
 ### Positive
 - **Side-effects are decoupled from the transition.** A notification failure does not undo a confirmed order.
 - **The aggregate stays clean.** `Order` knows about *events*, not about notification/payment/delivery clients. Module boundaries stay sharp for extraction.
 - **Fan-out for free.** Adding a second reaction (e.g. analytics) is a new handler, zero changes to the order flow.
-- **Honest seam for Week 5.** Students see the in-process version, then watch only the *transport* change — the most important "earned" moment of the extraction story.
+- **Seamless extraction path.** The team builds the in-process version now, allowing for a straightforward transition where only the transport changes during service extraction.
 
 ### Negative
-- **Synchronous dispatch is still in the request path.** A slow handler slows the response. Acceptable now (handlers are trivial/local); the fix (async/outbox) is a later, *earned* step.
+- **Synchronous dispatch is still in the request path.** A slow handler slows the response. Acceptable now (handlers are trivial/local); the fix (async/outbox) is a later step.
 - **"After SaveChanges" is at-most-once.** If the process crashes between commit and dispatch, the event is lost — there is no delivery guarantee yet.
 
 ### Risks
-- **The crash window.** Commit succeeds, dispatch never runs → a missed notification. **Mitigation (future):** the **transactional outbox** pattern — persist events in the same transaction, dispatch from the outbox with retries. Deliberately deferred so the *need* for it is felt, not assumed.
+- **The crash window.** Commit succeeds, dispatch never runs → a missed notification. **Mitigation (future):** the **transactional outbox** pattern — persist events in the same transaction, dispatch from the outbox with retries. Deliberately deferred so the *need* for it is proven, not assumed.
 - **Handlers doing too much.** A handler that does heavy/remote work blocks the response. **Mitigation:** keep handlers thin now; move to background/async when a handler grows.
 
 ### Cost (₹ / effort)
@@ -52,23 +48,22 @@ Zero infrastructure — a dispatcher, an interface, and a handler, all in-proces
 ### Option A: Inline side-effects in the controller / `Transition()`
 - Pros: simplest to read; no indirection.
 - Cons: couples critical and trivial operations; bloats the aggregate with clients; rewrites the call sites at extraction.
-- Why rejected: it builds in exactly the coupling we will pay to remove in Week 5.
+- Why rejected: it builds in exactly the coupling we will pay to remove during extraction.
 
-### Option B: A message broker now (Kafka/RabbitMQ from Day 4)
+### Option B: A message broker now (Kafka/RabbitMQ)
 - Pros: real delivery guarantees; the "final" architecture immediately.
 - Cons: a broker cluster to run, monitor, and reason about (eventual consistency, idempotent consumers, consumer lag) — for a single-process app with ~1.2 orders/s.
-- Why rejected: resume-driven over-engineering. The broker is *earned* in Week 5 when there are real services to decouple; until then it is cost with no benefit (see `cohort-prep/day-03/api-style-selection.md`, Kafka).
+- Why rejected: Premature optimization. The broker is justified only when there are actual separate services to decouple; until then it adds cost without benefit.
 
 ### Option C: MediatR (in-process mediator library)
 - Pros: batteries-included notifications/handlers; popular.
-- Cons: a dependency and a programming model to teach for what a ~30-line hand-rolled dispatcher does transparently.
-- Why rejected: for one event and one handler, a tiny explicit dispatcher is more teachable and dependency-free. Revisit if the in-process event surface grows large.
+- Cons: a dependency and a programming model to adopt for what a ~30-line hand-rolled dispatcher does transparently.
+- Why rejected: for one event and one handler, a tiny explicit dispatcher is cleaner and dependency-free. Revisit if the in-process event surface grows large.
 
 ## References
 - ADR-002: monolith-first · ADR-003: schema-per-domain · ADR-008: no cross-schema FKs
 - `Domain/Common/IDomainEvent.cs`, `IDomainEventHandler.cs`, `DomainEventDispatcher.cs`
 - `Domain/Orders/Events/*`, `Domain/Orders/Events/Handlers/OrderConfirmedNotificationHandler.cs`
-- `cohort-prep/day-03/api-style-selection.md` (Kafka / async messaging — the Week-5 transport)
 
 ## Revisit When
-At **service extraction (Week 5)**: swap the in-process dispatcher for a **broker producer** and turn handlers into **independent consumers**. Before that, if the **crash window** matters for a critical reaction, introduce the **transactional outbox** so events survive a crash and are delivered at-least-once.
+At **service extraction**: swap the in-process dispatcher for a **broker producer** and turn handlers into **independent consumers**. Before that, if the **crash window** matters for a critical reaction, introduce the **transactional outbox** so events survive a crash and are delivered at-least-once.

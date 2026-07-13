@@ -6,17 +6,11 @@
 
 ## Context
 
-No JWT exists yet (Day 10 adds auth), so the only caller identity available is IP. More
-importantly: under the Day 6 scale-out profile (ADR-047), a rate limiter that counts in local
-process memory would give every caller 3x the intended limit — one independent counter per
-replica, none of them aware of the others. A limit that isn't enforced consistently across every
-replica isn't really a limit.
+Currently, the primary caller identity available at the edge is IP address. Under a horizontally scaled deployment (ADR-047), a rate limiter that counts in local process memory would give every caller N× the intended limit — one independent counter per replica, none of them aware of the others. A limit that isn't enforced consistently across every replica isn't really a limit and exposes the system to abuse.
 
 ## Decision
 
-**Add a per-IP, Redis-backed rate-limiting middleware, with the counting algorithm selectable
-via config (`RateLimit:Algorithm=FixedWindow` default, or `SlidingWindow`) so the break kit can
-run the identical load pattern against both and compare.**
+**Implement a per-IP, Redis-backed rate-limiting middleware, with the counting algorithm selectable via config (`RateLimit:Algorithm=FixedWindow` default, or `SlidingWindow`).**
 
 - **Fixed window** (`RedisFixedWindowRateLimiter`): `INCR` a counter keyed by
   `(identity, current-60s-bucket)`, `EXPIRE` on first hit. One Redis round trip via a Lua script
@@ -35,23 +29,15 @@ run the identical load pattern against both and compare.**
 ## Consequences
 
 ### Positive
-- The limit is real across every replica — this is a direct, demoable payoff of the scale-out
-  profile: run the SAME limiter as in-process-memory (a version students can imagine wiring
-  themselves) vs Redis-backed, and only one of them actually enforces the stated number under 3
-  replicas.
-- Algorithm choice is a config flag, not a rewrite — the comparison IS the deliverable, not a
-  chosen "winner."
-- `Retry-After` is honest per-algorithm, not a fixed guess — a well-behaved client backs off for
-  exactly as long as it actually needs to.
+- The limit is strictly enforced globally across all replicas.
+- Algorithm choice is a config flag, allowing us to tune burst tolerance vs. Redis CPU overhead per endpoint.
+- `Retry-After` is honest per-algorithm, not a fixed guess — a well-behaved client backs off for exactly as long as it actually needs to.
 
 ### Negative
 - Sliding window costs more per check (ZADD/ZREMRANGEBYSCORE/ZCARD vs one INCR) and more memory
   (one sorted-set entry per allowed request within the window, vs one integer).
-- IP-based limiting is coarse: NAT'd users behind one IP share a limit; Day 10's JWT makes
-  per-user limiting possible as an upgrade to this same lever, not a different mechanism.
-- Fixed window's boundary-burst is a real, demonstrable gap — documented here rather than hidden;
-  it's the correct default ONLY because it's cheaper and the burst window is short-lived, not
-  because it's more "correct."
+- IP-based limiting is coarse: NAT'd users behind one IP share a limit; when user authentication is introduced, per-user limiting becomes possible as an upgrade to this same lever.
+- Fixed window's boundary-burst is a real gap; it's the correct default ONLY because it's cheaper and the burst window is short-lived, not because it's more "correct."
 
 ### Risks
 - A Redis outage currently means the app can't rate-limit at all (the middleware would need
@@ -64,25 +50,16 @@ run the identical load pattern against both and compare.**
 
 ### Option A: Per-instance in-memory limiter (no Redis)
 - Simplest, zero extra infrastructure.
-- Rejected as the demonstrated BREAK: under 3 replicas this silently multiplies the effective
-  limit by the replica count — exactly the bug this ADR exists to prevent, not a viable option.
+- Rejected: Under horizontal scale, this silently multiplies the effective limit by the replica count — failing the core requirement of a global rate limit.
 
 ### Option B: Token bucket
-- Smooths bursts better than either window approach (allows a burst up to the bucket size, then a
-  steady refill rate) and is what the pre-existing `rate-limiter-toy` demonstrates conceptually.
-- Not implemented as a third live algorithm here: the break kit's comparison is specifically
-  about the *boundary-burst* difference between fixed and sliding windows (the failure mode this
-  ADR's evidence captures); token bucket solves a different problem (burst tolerance) and stays a
-  concept-only comparison via the toy, to avoid diluting the specific lesson with a third axis.
+- Smooths bursts better than either window approach (allows a burst up to the bucket size, then a steady refill rate).
+- Not implemented yet: Fixed/Sliding window algorithms are simpler to build as a starting point. Token bucket solves burst tolerance more elegantly and will be considered if Fixed Window burst issues become a production problem.
 
 ## References
-- ADR-018/019/020 (the optional-infra pattern this follows), ADR-047 (scale-out - the reason a
-  distributed limiter is necessary here, not optional polish)
-- `Infrastructure/RateLimiting/*`, `Middleware/RateLimitingMiddleware.cs`
-- `toydemo/day-06-cache-realtime/rate-limiter-toy/` (token bucket, concept-only comparison)
-- Break kit: `cohort-prep/day-06/break-kit-day-06.md`
+- ADR-018/019/020 (The optional-infra pattern this follows)
+- ADR-047 (Scale-out - the reason a distributed limiter is necessary here)
+- Implementation: `Infrastructure/RateLimiting/*`, `Middleware/RateLimitingMiddleware.cs`
 
 ## Revisit When
-Day 10 adds JWT auth -> upgrade the limiter's identity key from IP to authenticated user id
-(same Redis-backed mechanism, different key). A real burst-tolerance requirement -> implement
-token bucket for real, not just as a toy comparison.
+When JWT/Authentication is rolled out, upgrade the limiter's identity key from IP to authenticated user id. If we get a real burst-tolerance requirement, implement a true token bucket algorithm.

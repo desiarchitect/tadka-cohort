@@ -6,77 +6,47 @@
 
 ## Context
 
-Every day so far has run Tadka as a single process. Day 3's own architecture note already
-promised "session storage" and "multi-instance" would matter once the app scales beyond one box
-— this is where that promise is paid off, using the Day 6 tools already in hand (Redis) rather
-than waiting for Day 11's YARP gateway. Two questions a single instance can't answer: (1) does a
-crashed/redeploying instance actually take the app down, and (2) does anything the app does
-secretly depend on staying on the SAME instance across requests (in-memory session, in-process
-cache, local queue)?
+To achieve high availability and handle increased traffic, Tadka must scale beyond a single instance. Running a single instance hides two critical architectural flaws:
+1. **Lack of fault tolerance:** A crashed or redeploying instance takes the entire app down.
+2. **Hidden stateful dependencies:** In-memory sessions, in-process caches, or local queues silently work on a single instance but break when requests are distributed across multiple instances.
+
+We need to enforce statelessness across the application tier by scaling out behind a load balancer, utilizing our existing externalized state (Redis, Postgres, Kafka).
 
 ## Decision
 
-**Add a `scale-out` docker-compose profile: 3 explicit monolith replicas (`api-1`/`api-2`/`api-3`,
-same image, same code) behind an nginx load balancer, off by default.**
+**Deploy 3 explicit monolith replicas (`api-1`/`api-2`/`api-3`, same image, same code) behind an nginx load balancer.**
 
-- `docker compose --profile scale-out up` — a plain `docker compose up` is unaffected (no
-  behavior change on any earlier day's workflow).
-- **3 explicit services, not `docker compose --scale`.** nginx's health-check eviction
-  (`max_fails`/`fail_timeout`) needs stable, known backend addresses to track down/up state
-  against — a dynamically resolved single DNS name (what `--scale` produces) doesn't give nginx
-  anything stable to evict.
-- **`least_conn` load balancing**, `proxy_next_upstream` on error/timeout/5xx so a request that
-  hits a dead replica gets retried against a live one instead of failing outright.
-- Every response carries `X-Tadka-Instance` (set from the `INSTANCE_NAME` env var, container-side)
-  so a demo can show exactly which replica answered.
+- **Explicit services over dynamic scaling:** nginx's health-check eviction (`max_fails`/`fail_timeout`) requires stable, known backend addresses to track up/down state. Dynamically resolved single DNS names don't allow nginx to evict individual sick backends effectively without additional configuration.
+- **`least_conn` load balancing:** Distribute traffic based on active connections rather than strict round-robin, preventing slow requests from piling up on one instance.
+- **`proxy_next_upstream`:** On error/timeout/5xx, a request that hits a dead replica is automatically retried against a live one instead of failing outright.
+- **Debugging header:** Every response carries `X-Tadka-Instance` (set from the `INSTANCE_NAME` env var) to simplify tracking which replica served a request during production incidents.
 
 ## Consequences
 
 ### Positive
-- Proves fault tolerance a single-instance setup can't: kill one replica mid-load, requests keep
-  succeeding (nginx evicts it, routes around it, re-admits it once healthy again).
-- Surfaces hidden state immediately: the very first thing 3 replicas expose is that the
-  in-process cache fallback (see ADR-048's sibling discussion below) silently disagrees with
-  itself across replicas — a bug a single instance can never show you.
-- Reuses infrastructure this day already introduced (Redis) instead of pulling forward Day 11's
-  gateway early.
+- **Fault tolerance:** Instances can be killed or rolled over; requests keep succeeding as nginx evicts and routes around them.
+- **Surfaces hidden state:** Exposes any accidental in-process caching or session affinity bugs immediately.
 
 ### Negative
-- A second HTTP hop (nginx -> app) that single-instance dev doesn't have — negligible latency,
-  but real infrastructure a student now has to reason about.
-- 3x the database/Redis connection pool pressure from one host, compounding with the pool
-  lessons on Day 5 (ADR-015) if a class runs the dinner-rush profile against `scale-out`.
-- All 3 replicas run `db.Database.Migrate()` on startup (a Day-1 dev convenience); simultaneous
-  first-boot migration attempts are possible. Acceptable for a local demo profile (`restart:
-  unless-stopped` recovers); a real deployment runs migrations as a separate release step, not
-  app-startup code — that discipline starts mattering for real at Day 12's zero-downtime migration.
-
+- **Network Hop:** Adds a second HTTP hop (nginx -> app). The latency is negligible, but it adds infrastructure complexity.
+- **Connection Pool Pressure:** 3x the database/Redis connection pool pressure from the application tier.
+- **Startup Migrations:** If replicas run `db.Database.Migrate()` on startup, simultaneous first-boot migration attempts are possible. Migrations must be decoupled into a separate pre-release step (zero-downtime migration pipeline).
 ### Risks
-- Explicit replica services mean adding a 4th replica is a compose-file edit, not a flag. Accepted
-  for a teaching demo capped at "prove the concept with 3"; production autoscaling is a different
-  (cloud-native) problem, covered as a black box at Day 12.
+- Manual replica definitions in compose/config files don't scale automatically. This is acceptable for our current baseline, but true auto-scaling requires a cloud-native compute platform (like ECS, handled in ADR-039).
 
 ## Alternatives Considered
 
-### Option A: `docker compose --scale api=3` against one service definition
-- Simpler compose file, no repeated blocks.
-- Rejected for THIS demo: nginx needs to track known backend health, and a single dynamically
-  resolved DNS name doesn't give it stable per-replica state to evict/readmit against — the
-  killed-replica demo either doesn't work cleanly or needs extra nginx `resolver` plumbing that
-  adds complexity without adding a lesson.
+### Option A: Dynamic `--scale` / Auto-discovery
+- Simpler configuration, no repeated blocks.
+- Rejected for our nginx setup because it requires stable backend tracking for `proxy_next_upstream` and health checks. Relying solely on DNS resolution for backends hides the health state from the load balancer.
 
-### Option B: Pull the Day 11 YARP gateway forward instead of nginx
-- Rejected: Day 11's gateway is introduced when there are multiple SERVICES to route between
-  (Payment, Delivery, Restaurant) — using it here, a week before any service exists, teaches the
-  wrong trigger for "why a gateway." nginx here is doing exactly one job (load balance N
-  replicas of ONE service), which is the Day 6 lesson.
+### Option B: Use YARP Gateway directly
+- We will eventually use YARP as our API Gateway to route between *different* microservices (Payment, Delivery, Restaurant). 
+- Rejected for simple replica load-balancing: nginx is an industry standard, lightweight, and purpose-built for basic L4/L7 load balancing across replicas of the *same* service.
 
 ## References
-- ADR-016 (read replica — the other place "which backend answered" already mattered)
-- `docker-compose.yml` (`scale-out` profile), `docker/nginx/lb.conf`, `src/Tadka.Api/Dockerfile`
-- Break kit: `cohort-prep/day-06/break-kit-day-06.md`
+- ADR-016 (Read replica — another place where knowing "which backend answered" matters)
+- ADR-039 (Cloud deployment targeting ECS auto-scaling, the production evolution of this pattern)
 
 ## Revisit When
-Day 11 introduces the YARP gateway once there are multiple services to route between — this
-nginx LB is a Day 6-scoped teaching tool, not the production answer (that becomes the cloud
-load balancer in front of the gateway, discussed black-box at Day 12).
+We move fully to a cloud-managed load balancer (e.g., AWS ALB) where explicit manual replica registration is replaced by target group auto-registration via ECS/EKS.

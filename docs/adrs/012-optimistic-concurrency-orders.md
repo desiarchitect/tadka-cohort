@@ -12,7 +12,7 @@ We need to guarantee that concurrent writers cannot clobber each other unknowing
 - An **illegal transition** (e.g. `Created → Delivered`) is a *domain-rule* violation — already a **422** (ADR-006). The request was wrong.
 - A **concurrency conflict** is *not* a wrong request — the request was legal, you simply lost a race. The correct, standard answer is **409 Conflict**: reload and retry.
 
-This is the monolith-phase warm-up for the distributed version of the same problem (Week 5+), where the racers are different services and the answer becomes distributed locking or saga compensation.
+This establishes the pattern before we tackle the distributed version of this problem during future service extraction, where the racers are different services and the answer becomes distributed locking or saga compensation.
 
 ## Decision
 
@@ -48,7 +48,7 @@ Effectively zero infrastructure and zero schema cost — `xmin` is already there
 ### Option A: No concurrency control (last-write-wins)
 - Pros: nothing to build.
 - Cons: silent lost updates — the most expensive kind of bug because nothing errors.
-- Why rejected: the break is real and demoable; "silent" makes it worse, not acceptable.
+- Why rejected: the failure is well-documented in production incidents; "silent" makes it worse, not acceptable.
 
 ### Option B: Pessimistic locking (`SELECT … FOR UPDATE`)
 - Pros: conflicts impossible; the second writer waits.
@@ -67,4 +67,4 @@ Effectively zero infrastructure and zero schema cost — `xmin` is already there
 - Npgsql concurrency-token documentation
 
 ## Revisit When
-When an order row becomes **genuinely hot** (many concurrent writers — unlikely for a single order, possible for a shared aggregate), switch that path to **pessimistic locking or a serialized queue**. And at **service extraction (Week 5+)**, where the racers are separate services: single-row optimistic concurrency no longer spans the boundary, and the problem becomes **distributed locking / saga compensation**.
+When an order row becomes **genuinely hot** (many concurrent writers — unlikely for a single order, possible for a shared aggregate), switch that path to **pessimistic locking or a serialized queue**. And at **service extraction**, where the racers are separate services: single-row optimistic concurrency no longer spans the boundary, and the problem becomes **distributed locking / saga compensation**.

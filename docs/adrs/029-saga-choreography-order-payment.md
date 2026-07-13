@@ -6,47 +6,39 @@
 
 ## Context
 
-In the monolith, "create order + charge payment" was one **local database transaction** — if payment failed, everything rolled back. Now order and payment live in **separate services with separate databases** (ADR-024/026), so there is no transaction spanning both. We can end up in an inconsistent state: order created, payment failed (or vice-versa). This is the **distributed transaction problem**, and **two-phase commit (2PC) is not the answer** — it's slow, blocks resources, and doesn't scale across independently-deployed services.
+In our initial monolithic architecture, the "create order + charge payment" flow was executed as a single local database transaction. If the payment failed, the entire operation rolled back atomically. Following the extraction of the Payment service into its own process and database (ADR-024/026), there is no longer a transaction boundary spanning both domains. This introduces the risk of inconsistent states (e.g., an order created but the payment fails, or vice versa). Two-phase commit (2PC) is not a viable solution due to its performance overhead, resource locking, and poor scalability across independently deployed services.
 
 ## Decision
 
-**Model order↔payment as a Saga, using choreography** (no central orchestrator):
+We will model the order↔payment flow as a Saga using the **choreography** pattern (without a central orchestrator).
 
-1. Order created (`pending`) → monolith emits `order-placed` (via the Outbox, ADR-028).
-2. Payment service consumes it, performs its **local transaction** (charge + persist), and emits `payment-results` (`Completed`/`Failed`).
-3. Monolith consumes the result and runs its **local transaction**: `Completed` → confirm the order; `Failed` → **compensating action**: cancel the order (the Day-7/8 `PaymentFailed` → `order.Cancel()` reaction, now driven by a Kafka event).
+1. Order is created in a `pending` state. The Ordering service emits an `order-placed` domain event via the Outbox pattern (ADR-028).
+2. The Payment service consumes this event, executes its local transaction (attempting the charge and persisting the result), and emits a `payment-results` event (`Completed` or `Failed`).
+3. The Ordering service consumes the result event and executes a local transaction: 
+   - `Completed` → transitions the order to a confirmed state.
+   - `Failed` → triggers a compensating action to cancel the order.
 
-Each step is a local ACID transaction; cross-step consistency is **eventual**, reached by events + compensations. **Choreography** (services react to events) is chosen over **orchestration** (a central coordinator) because there are only two participants and the flow is linear — a coordinator would be ceremony. We note the trade-off: choreography's flow is implicit (you read it across handlers), which gets hard to follow as participants grow.
+Each step operates as a local ACID transaction. Cross-service consistency is achieved eventually via events and compensations. We choose choreography over orchestration because the current flow involves only two participants and is strictly linear. An orchestrator would introduce unnecessary complexity at this stage.
 
 ## Consequences
 
 ### Positive
-- **No 2PC, no distributed locks** — each service commits independently and stays autonomous.
-- Compensation (cancel-on-failure) is explicit and already modelled by the order state machine — the Saga just drives it via events.
-- Naturally durable + idempotent on top of Outbox/Inbox (ADR-028).
+- **No Distributed Locks:** Services commit independently without 2PC, maintaining high availability and autonomy.
+- **Explicit Compensations:** The "cancel on failure" logic maps naturally to the existing order state machine.
+- **Resilience:** The approach is inherently durable and idempotent, leveraging the existing Outbox/Inbox infrastructure.
 
 ### Negative / Risks
-- **Eventual consistency window:** the order is briefly `pending` before it converges to `Confirmed`/`Cancelled` (surfaced live on the Day-6 SSE stream).
-- **Choreography is implicit:** with many participants the end-to-end flow is hard to trace (→ a light trace view now, full observability Week 7). At that point, consider orchestration.
-- **Compensations are business logic, not rollbacks:** "cancel the order" may need to also refund a successful charge in richer flows (the "timeout ≠ didn't charge" reconciliation problem, ADR-023) — modelled as a compensating event, not a DB rollback.
+- **Eventual Consistency Window:** Orders exist briefly in a `pending` state before resolving. This state must be accurately reflected in client-facing UIs.
+- **Implicit Flow:** Choreography scatters the business process across multiple event handlers. As more participants join, tracing the end-to-end flow becomes difficult.
+- **Complex Compensations:** Business logic for compensations (e.g., refunding a charge if a subsequent step fails) must be carefully designed to handle edge cases like timeouts.
 
-### Cost (₹ / effort)
-Code only (event handlers + the existing state machine). The saving: correctness across services without the latency/fragility of 2PC.
+### Cost
+Implementation is limited to application code (event handlers and state machine updates). The architectural payoff is robust cross-service consistency without the latency penalties of distributed transactions.
 
 ## Alternatives Considered
-- **2PC / distributed transactions:** rejected — blocking, slow, poor availability, doesn't fit independently-deployed services.
-- **Orchestration (a saga coordinator / state machine service):** better for *complex, many-step* sagas (clear central flow, easier to trace/operate). Overkill for two linear participants today; revisit when Delivery/Restaurant join the flow.
-- **No saga (hope it succeeds):** leaves inconsistent state on partial failure. Rejected.
-
-## Cross-stack equivalents
-Saga is a pattern: choreography = services reacting to domain events anywhere (**Spring** `@KafkaListener` + events, **NestJS** event handlers, **Go** consumers). Orchestration frameworks: **MassTransit Saga State Machine / NServiceBus Sagas** (.NET) ≈ **Axon / Camunda / Temporal** (Java/poly) ≈ **Temporal** (Go/poly). Compensating transactions are the universal alternative to 2PC for cross-service consistency.
-
-## References
-- ADR-024/026 (separate service + DB — why no shared transaction), ADR-027 (Kafka), ADR-028 (Outbox/Inbox), ADR-012/013 (order state machine + events the compensation reuses)
-- `cohort-prep/day-09/break-kit-day-09.md` (decline → compensating cancel)
-- Implementation: the `payment-results` consumer → `PaymentCompletedEvent`/`PaymentFailedEvent` → existing order reaction handlers
+- **Two-Phase Commit (2PC):** Rejected due to blocking behavior, latency, and incompatibility with autonomous microservices.
+- **Saga Orchestration:** Introducing a central coordinator (e.g., Temporal, MassTransit Saga State Machine) was rejected as overkill for a two-step linear process. This will be revisited if the workflow expands.
+- **Ignore Partial Failures:** Relying on simple retries without compensation leaves inconsistent data on failure. Rejected.
 
 ## Revisit When
-When a third participant joins the order flow (Delivery/Restaurant, Week 6) and the choreography becomes hard to follow → consider **orchestration** (a saga coordinator, e.g. MassTransit state machine / Temporal). When compensation must refund real charges → model the refund saga explicitly.
-
-> **Day-11 update (3rd participant joined):** Delivery is now the 3rd Kafka participant, so this "revisit" trigger fired. We deliberately **stay choreography** at 3 linear steps (an orchestrator for 3 steps is its own anti-pattern), but the full treatment — choreography vs orchestration on the *same* flow + the implementation landscape (MassTransit/Temporal/Camunda/Axon/Step Functions/Durable Functions) + when to switch — is taught in `cohort-prep/day-11/saga-deep-dive.md`. The CTO "choreography trap" caution (4+ services → implicit, unobservable flow) is exactly the switch signal documented there.
+We will evaluate transitioning to Saga Orchestration when a third or fourth participant (e.g., Delivery, Restaurant integration) joins the flow, making the implicit choreography too difficult to trace, monitor, or maintain.

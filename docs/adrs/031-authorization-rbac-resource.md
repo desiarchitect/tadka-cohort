@@ -1,4 +1,4 @@
-# ADR-031: Authorization — RBAC + Resource-Ownership, validated per-service
+# ADR-031: Authorization — RBAC + Resource Ownership
 
 **Date:** 2026-06-05
 **Status:** Accepted
@@ -6,41 +6,30 @@
 
 ## Context
 
-Authentication (ADR-030) answers "who are you?"; now "**what may you do?**" A role check alone is not enough: a `RestaurantOwner` is allowed to edit menus *in general*, but must not edit **another** restaurant's menu; a `Customer` may view orders, but only **their own**. And there's a second question — **where** is authorization enforced (we have no gateway).
-
-## The model menu (teach the map, then pick)
-
-| Model | Decides on | Best for | Why-not (yet) here |
-|---|---|---|---|
-| **RBAC** (roles) ✅ | the user's role | coarse capabilities (4 roles) | "which restaurant?" needs more than a role |
-| **Resource-based / ownership** ✅ | does this subject own this object? | "my order / my restaurant" | — (paired with RBAC) |
-| **ABAC** (attributes/context) | subject+resource+env attributes | rules like "approve > ₹10k only 9–5" | overkill for 4 roles + ownership; needs an attribute/policy evaluator |
-| **ReBAC** (relationship graph) | relationships (Google Zanzibar / OpenFGA) | deep sharing/hierarchy ("folder → doc → viewer") | Tadka's relationships are shallow |
-| **PBAC / policy engine (OPA + Rego)** | externalized policy | policy owned by non-engineers, many services, audited | premature; 1–2 services, simple rules |
-| **ACL** (per-object lists) | explicit allow/deny per object | fine-grained sharing | maintenance heavy; ownership covers us |
+With authentication in place (ADR-030) to establish identity, the system must enforce authorization ("what may you do?"). Simple Role-Based Access Control (RBAC) is insufficient. While a user might have a `RestaurantOwner` role, they must only be allowed to edit their *own* restaurant's menu. A `Customer` must only view their *own* orders. Furthermore, in a distributed architecture, we must define exactly where these authorization checks occur.
 
 ## Decision
 
-**RBAC + resource-based ownership, validated independently in every service.**
-- **RBAC:** `[Authorize(Roles=…)]` from the JWT `role` claim gates capabilities (Customer/RestaurantOwner/DeliveryAgent/Admin).
-- **Resource-ownership:** ASP.NET `IAuthorizationHandler`s answer "does *this* user own *this* resource?" — an order's `CustomerId` must match `sub`; a menu's restaurant must match the owner's `restaurantId` claim; `Admin` bypasses. Returns **403** (authenticated but not allowed) vs **401** (not authenticated).
-- **Validation location (sub-decision):** **per-service**, not gateway-only. Options were (a) gateway validates + forwards `X-User-Id`, (b) **every service validates the JWT itself**, (c) hybrid. We choose (b): the Payment service verifies the same token on its own HTTP endpoints. **Defense in depth** — the network is not a trust boundary; if someone reaches a service directly (no gateway exists yet anyway), it's still protected.
+We will implement a hybrid authorization model utilizing **RBAC combined with Resource-Based Ownership**, validated independently at each service boundary.
+
+1. **RBAC:** The `role` claim in the JWT will be used for coarse-grained capability checks (e.g., `Customer`, `RestaurantOwner`, `DeliveryAgent`, `Admin`).
+2. **Resource-Ownership:** Service-level authorization handlers will evaluate ownership rules. For example, when fetching an order, the `CustomerId` on the resource must match the `sub` claim in the JWT. For menu updates, the resource's `RestaurantId` must match the owner's `restaurantId` claim. Access violations will return `403 Forbidden`.
+3. **Per-Service Validation:** Authorization will be enforced directly within each microservice (e.g., Ordering, Payment) rather than solely relying on an API Gateway to forward user context. Every service must validate the JWT signature and evaluate claims itself.
 
 ## Consequences
-**Positive:** roles cover 80% with one attribute; ownership handlers cover the "whose data?" 20% without a policy engine; per-service validation means no service implicitly trusts a header or the network. **Negative/Risks:** every resource-ownership rule is custom code (fine for 4 roles; becomes a maintenance load at many-roles scale → that's the ABAC/OPA trigger); the shared signing key is in every service (→ RS256). **Failure mode (the classic):** a team validates only at the gateway and forwards a plain `X-User-Id` header; an attacker who reaches a service on the internal network forges the header → full access. Per-service JWT verification kills that. **Cost:** code only.
+
+### Positive
+- **Defense in Depth:** The network is not treated as a trust boundary. If a malicious actor bypasses the edge or issues internal requests, services still independently reject unauthorized traffic.
+- **Simplicity:** Roles handle broad capabilities, while explicit ownership checks cover the critical multi-tenant data isolation requirements without the overhead of a complex policy engine.
+
+### Negative / Risks
+- **Custom Code:** Resource ownership rules require custom logic in each service. As the number of roles or resource types grows, this can become a maintenance burden.
+- **Distributed Configuration:** All services must have access to the JWT signing keys (pushing the urgency for asymmetric RS256 keys).
 
 ## Alternatives Considered
-- **Gateway-only validation:** convenient, but the gateway is a reverse proxy, not a trust boundary; rejected (defense in depth).
-- **ABAC / OPA now:** powerful (context rules, externalized policy) but adds an evaluator + latency for rules we don't have yet; rejected until a real attribute/context rule or non-engineer-owned policy appears.
-- **ReBAC (OpenFGA/Zanzibar):** for deep relationship graphs (Drive-style sharing); Tadka's relationships are shallow; rejected.
-
-## Cross-stack equivalents
-ASP.NET roles + `IAuthorizationHandler` ≈ **Spring Security** `@PreAuthorize` + `PermissionEvaluator` · **Node** middleware / **CASL** / NestJS Guards · **Go** middleware. Policy engines (stack-neutral): **OPA/Rego**, **OpenFGA/Zanzibar** (ReBAC), **Casbin** (RBAC/ABAC lib for many languages). RBAC→ABAC→ReBAC is the same escalation ladder everywhere.
-
-## References
-- ADR-030 (the JWT claims this reads), ADR-032 (PII access is itself an authz concern), ADR-024 (the Payment service that must validate too)
-- `cohort-prep/day-10/option-space.md`, `break-kit-day-10.md` (403 cross-owner; forged-token rejected per-service)
-- Implementation: monolith authorization policies + `IAuthorizationHandler`s; JWT bearer in the Payment service
+- **Gateway-Only Authorization:** Terminating auth at a gateway and forwarding an `X-User-Id` header was rejected. This creates a critical vulnerability where internal network access allows full system compromise via header forgery.
+- **Attribute-Based Access Control (ABAC) / Policy Engines (OPA):** Rejected as premature optimization. While externalized policy engines (like Open Policy Agent) are powerful, they introduce unnecessary operational complexity for our current access patterns.
+- **Relationship-Based Access Control (ReBAC):** Tools like OpenFGA or Google Zanzibar are designed for deep hierarchical sharing (e.g., Google Drive). Tadka's ownership model is flat and does not warrant this complexity.
 
 ## Revisit When
-Adopt **ABAC** when a real context rule appears (amount/time/geo); **OPA/PBAC** when policy must be owned/audited outside code or spans many services; **ReBAC (OpenFGA)** if sharing/hierarchy graphs appear. Re-evaluate gateway-vs-service validation when the **API gateway** lands (keep per-service as the floor).
+We will adopt a centralized Policy Engine (e.g., OPA/Rego) or ABAC when authorization rules become highly contextual (e.g., time-of-day restrictions, transaction amount limits) or when compliance requires policies to be audited and managed outside of application code.

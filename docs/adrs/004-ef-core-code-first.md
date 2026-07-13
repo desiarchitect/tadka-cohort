@@ -6,17 +6,13 @@
 
 ## Context
 
-Tadka's domain model is already defined in C# (Day 2). We need an ORM strategy to persist these domain objects to PostgreSQL. The choice affects development speed, query performance, and how well domain concepts (value objects, aggregates) map to the database.
+Tadka's domain model is already defined in C#. We need an ORM strategy to persist these domain objects to PostgreSQL. The choice affects development speed, query performance, and how well domain concepts (value objects, aggregates) map to the database.
 
-Our team prioritizes development velocity over raw query performance at this stage. We're building a teaching codebase where students need to focus on domain logic, not SQL syntax. Tadka's initial scale (seed data, then maybe 1 lakh orders/day) is well within EF Core's performance ceiling.
+Our team prioritizes development velocity over raw query performance at this stage. We need an approach where engineers can focus on domain logic, not SQL syntax. Tadka's initial scale (seed data, then 100k orders/day) is well within EF Core's performance ceiling.
 
 ## Decision
 
 Use EF Core with Npgsql (PostgreSQL provider) in Code-First mode. Domain entity classes are the source of truth for the database schema. Migrations are generated from C# code and version-controlled. Use `OwnsOne` for value object mapping (Money, Address).
-
-## Interview framing
-
-On a 45-min Swiggy HLD board, say **"ORM with versioned migrations"** or **"code-first schema"**. Do not debate EF Core vs Hibernate vs GORM. The decision is relational + migrations in the repo, not the library name.
 
 ## Consequences
 
@@ -26,7 +22,7 @@ On a 45-min Swiggy HLD board, say **"ORM with versioned migrations"** or **"code
 - **Value object support via OwnsOne.** `Order.TotalAmount` (a Money value object) maps to `total_amount` and `currency` columns on the orders table without a separate table or JOIN. Clean DDD mapping.
 - **LINQ for queries.** Developers write C# queries, not SQL strings. Compile-time type checking catches column name typos, type mismatches, and missing properties. IntelliSense works.
 - **Migrations as code.** Every developer who runs `dotnet ef database update` gets the exact same schema. No "run this SQL script, then that one, in order" coordination.
-- **Teaching advantage.** Students focus on domain logic instead of writing INSERT/UPDATE/SELECT by hand. EF Core handles the boring parts.
+- **Developer productivity.** Engineers focus on domain logic instead of writing INSERT/UPDATE/SELECT by hand. EF Core handles the boring parts.
 
 ### Negative
 
@@ -36,9 +32,9 @@ On a 45-min Swiggy HLD board, say **"ORM with versioned migrations"** or **"code
 
 ### Risks
 
-- **Risk:** Developers treat EF Core as a black box, never look at generated SQL, and ship slow queries. **Mitigation:** Enable SQL logging in development. Day 5 (indexing) will teach query analysis using EXPLAIN ANALYZE.
+- **Risk:** Developers treat EF Core as a black box, never look at generated SQL, and ship slow queries. **Mitigation:** Enable SQL logging in development. We will incorporate query analysis using `EXPLAIN ANALYZE` during performance tuning.
 - **Risk:** Migrations diverge across developer machines. **Mitigation:** Single migration history in source control. Never generate migrations without pulling latest. CI pipeline validates migration consistency.
-- **Risk:** EF Core's query translation chokes on complex LINQ expressions. **Mitigation:** Drop to raw SQL or Dapper for read-optimized paths. Day 7 (CQRS) will introduce Dapper for read models.
+- **Risk:** EF Core's query translation chokes on complex LINQ expressions. **Mitigation:** Drop to raw SQL or Dapper for read-optimized paths. We will introduce Dapper for read models as part of CQRS implementation when performance dictates.
 
 ## Alternatives Considered
 
@@ -50,12 +46,12 @@ On a 45-min Swiggy HLD board, say **"ORM with versioned migrations"** or **"code
 ### Option B: Dapper (Micro ORM)
 - Pros: 10-15% faster query execution. Full control over SQL. No query translation surprises. Simpler mental model (write SQL, get objects).
 - Cons: Every query is hand-written SQL. No migration support (need a separate tool like FluentMigrator or DbUp). Manual mapping for value objects. More code for the same CRUD operations.
-- Why rejected: For a teaching project with 6 engineers, writing every INSERT/UPDATE/SELECT by hand is slow. We'll introduce Dapper for read models in Day 7 (CQRS) where EF Core's overhead matters.
+- Why rejected: For a startup team of 6 engineers on a tight 3-month timeline, writing every INSERT/UPDATE/SELECT by hand is slow. We will introduce Dapper for read models when EF Core's overhead becomes a bottleneck.
 
 ### Option C: Raw ADO.NET
 - Pros: Maximum performance, zero abstraction overhead, full control.
 - Cons: Enormous boilerplate. Manual connection management, parameterized queries, result set mapping. No migration support. Every CRUD operation is 20-30 lines of code.
-- Why rejected: We're building a domain-rich application, not squeezing microseconds. The productivity cost is unacceptable for a team of 6 on a 3-month timeline.
+- Why rejected: We're building a domain-rich application, not squeezing microseconds. The productivity cost is unacceptable for a small team.
 
 ## References
 

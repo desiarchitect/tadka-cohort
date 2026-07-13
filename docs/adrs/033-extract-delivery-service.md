@@ -1,4 +1,4 @@
-# ADR-033: Extract the Delivery Service (the 3rd service — a different scaling profile)
+# ADR-033: Extracting the Delivery Service
 
 **Date:** 2026-06-05
 **Status:** Accepted
@@ -6,41 +6,32 @@
 
 ## Context
 
-The `Delivery` domain (agents, assignments, live location) has existed since Day 2 but nothing uses it — orders never get a rider. Now we build real-time delivery, and its **workload is fundamentally different** from order creation: rider location updates arrive **every few seconds per active agent** (high-frequency), only the **latest** position matters (low durability), and tracking reads must be **sub-millisecond**. Mixing that into the monolith's Postgres + shared connection pool would have location writes contending with order creation — different access pattern, different scaling and durability profile.
+The Delivery domain manages delivery agents, assignments, and real-time live location tracking. As the platform prepares to enable real-time tracking, the workload profile for this domain fundamentally changes. Rider location updates arrive at a high frequency (every few seconds per active agent). These updates require extremely fast, low-durability writes (only the latest location matters) and sub-millisecond read latency for customer tracking.
 
-This is a **third, distinct extraction trigger**: not fault/PCI isolation (Payment, ADR-024) and not org/deploy coupling (Week 6 Conway) — but a **scaling/durability-profile mismatch**.
+Mixing this high-frequency ephemeral data stream into the core Ordering relational database (Postgres) would cause severe resource contention, exhausting connection pools and degrading the performance of critical business flows like order creation. The Delivery domain exhibits a completely different scaling and durability profile compared to transactional ordering.
 
 ## Decision
 
-**Build delivery, then extract `Tadka.Delivery.Api`** (a move, not a rewrite — the same pattern as Payment, Day 8): its own process, own database (`delivery-db`), own migration history, per-service JWT (ADR-031), and Kafka-driven over the Day-9 backbone. The monolith publishes **`order-confirmed`** (via the Outbox, carrying the orderId + delivery lat/long) when an order auto-confirms after payment; Delivery **consumes** it, assigns an available agent, and **publishes `delivery-assigned`**. Live location lives in **Redis-geo** (ADR-034); the durable assignment/history lives in the Delivery service's Postgres. The monolith **drops** the delivery schema/domain (it owns it no longer).
+We will extract the Delivery domain into its own independent service (`Tadka.Delivery.Api`). 
+
+1. **Independent Infrastructure:** The service will have its own process, deployment lifecycle, and dedicated databases suitable for its workload.
+2. **Event-Driven Integration:** The monolithic Ordering service will no longer directly manage delivery state. Instead, when an order is confirmed, Ordering publishes an `order-confirmed` event via the Outbox pattern. Delivery consumes this event, assigns an agent, and publishes a `delivery-assigned` event.
+3. **Polyglot Persistence:** Delivery will utilize multiple datastores optimized for specific access patterns (detailed in ADR-034): an in-memory store for high-frequency location pings, and a relational DB for durable assignment history.
 
 ## Consequences
 
 ### Positive
-- Location's high-frequency writes hit **Redis**, never the order-path Postgres pool — no contention with order creation.
-- A 3rd independent failure domain: kill Delivery → ordering, payment, browsing are all unaffected (only live tracking degrades).
-- Delivery can scale on its own (location ingestion) independent of order intake.
+- **Fault Isolation:** The high-volume telemetry ingestion for live locations will never impact or throttle order intake or payment processing.
+- **Independent Scaling:** The Delivery service can scale horizontally to handle thousands of concurrent rider telemetry streams without requiring the monolithic database to scale.
+- **Resilience:** If the Delivery service fails, core ordering and payment functionality remains available (customers can place orders, though live tracking degrades).
 
 ### Negative / Risks
-- A 4th datastore to run (delivery Postgres) + Redis-geo. More operational surface.
-- The order→payment→**delivery** flow is now a **3-participant Saga** — choreography still works but the implicit flow is growing (ADR-029 revisit: orchestration becomes worth considering; see `saga-deep-dive.md`).
-- Eventual consistency extends another hop (order Confirmed → rider assigned moments later).
-
-### Cost (₹ / effort)
-A new service + DB + Redis usage; low *because* the Kafka backbone, Inbox/idempotency, and per-service JWT already exist (reused). The saving: location load never threatens the order path.
+- **Operational Complexity:** Introduces a new service and additional datastores to provision, monitor, and maintain.
+- **Expanded Distributed Transactions:** The order fulfillment flow now spans Ordering, Payment, and Delivery, stretching the Saga choreography further and increasing the time for eventual consistency to resolve.
 
 ## Alternatives Considered
-- **Keep Delivery in the monolith:** location writes pressure the order path's pool; rejected once tracking is real-time.
-- **Extract but keep location in Postgres/PostGIS:** see ADR-034 — table/index bloat at 200 writes/s; rejected for live location (kept for history).
-- **Extract everything at once (Delivery + Restaurant now):** Restaurant is read-heavy + already cached (no bottleneck) — no earned trigger today; deferred to Day 12.
-
-## Cross-stack equivalents
-A new service is a new Spring Boot app / Nest app / Go service everywhere; the *trigger* (a workload with a different scaling/durability profile → its own service + the right datastore) is the language-neutral lesson. Kafka-driven assignment ≈ spring-kafka listener / kafkajs / kafka-go consumer.
-
-## References
-- ADR-024 (Payment extraction — a *different* trigger), ADR-027/028 (Kafka + Outbox/Inbox reused), ADR-029 (Saga — now 3 participants), ADR-034 (Redis-geo), ADR-035 (gateway)
-- `cohort-prep/day-11/break-kit-day-11.md`, `saga-deep-dive.md`
-- Implementation: `src/Tadka.Delivery.Api/*`; monolith `order-confirmed` outbox publish
+- **Keep Delivery in the Monolith:** Rejected. High-frequency location updates would overwhelm the primary database, putting revenue-generating order traffic at risk.
+- **Extract but Use Only Postgres:** Storing ephemeral location pings in a relational database leads to massive table bloat and vacuuming overhead. Rejected.
 
 ## Revisit When
-Restaurant extraction (Day 12) completes the canonical **4 services + gateway**. Revisit the Saga to **orchestration** if a 4th participant or complex branching appears (`saga-deep-dive.md`). Add location **history** export (Redis → a time-series/analytics store) if "average delivery time by zone" analytics are needed.
+We will re-evaluate the overall system architecture once the final core domain (Restaurant/Catalog) is extracted. If the distributed workflow (Ordering -> Payment -> Delivery) becomes too complex to trace or manage via choreography, we will evaluate introducing Saga Orchestration.

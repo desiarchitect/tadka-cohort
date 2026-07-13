@@ -6,10 +6,7 @@
 
 ## Context
 
-Two independent, cheap wins for the exact same read paths Day 6 already made fast (Redis
-cache-aside, ADR-018): shrinking what goes over the wire, and skipping the transfer entirely when
-the client already has the current copy. Neither needs new infrastructure — both are standard
-ASP.NET Core middleware/filters on top of what already exists.
+While Redis cache-aside (ADR-018) speeds up database reads, we need two independent, cheap wins for our HTTP responses: shrinking what goes over the wire, and skipping the transfer entirely when the client already has the current copy. Neither needs new infrastructure — both are standard ASP.NET Core middleware/filters on top of what already exists.
 
 ## Decision
 
@@ -36,16 +33,9 @@ ASP.NET Core middleware/filters on top of what already exists.
   `If-None-Match` -> normal 200) — no breaking change to any existing client.
 
 ### Negative
-- ETag freshness is bounded by request rate, not push: the FIRST request after a change still
-  gets a full 200 (correct — the client's cached copy really is stale). This is complementary to,
-  not a replacement for, the Redis cache-aside TTL/invalidation (ADR-018) — different layers,
-  different jobs (ETag saves the client a download; Redis saves the server a DB query).
-- The action-filter approach buffers and hashes the WHOLE response body before deciding — cheap
-  at Tadka's payload sizes, would need a different (streaming) approach for genuinely large
-  responses.
-- An edge cache in front of this (see the CDN-emulation beat) does NOT automatically respect this
-  ETag — it has its own, separate TTL-based freshness story. Two caches, two invalidation
-  mechanisms, is itself a lesson (see the edge-cache ADR).
+- ETag freshness is bounded by request rate, not push: the FIRST request after a change still gets a full 200 (correct — the client's cached copy really is stale). This is complementary to, not a replacement for, the Redis cache-aside TTL/invalidation (ADR-018) — different layers, different jobs (ETag saves the client a download; Redis saves the server a DB query).
+- The action-filter approach buffers and hashes the WHOLE response body before deciding — cheap at Tadka's payload sizes, would need a different (streaming) approach for genuinely large responses.
+- An edge cache (CDN) in front of this does NOT automatically respect this ETag — it has its own, separate TTL-based freshness story. Two caches, two invalidation mechanisms, requires careful ops coordination (see ADR-050).
 
 ### Risks
 - None material at this scale. If action-filter hashing ever shows up in a profile, the fix is
@@ -69,5 +59,5 @@ ASP.NET Core middleware/filters on top of what already exists.
 
 ## References
 - ADR-018: Redis cache-aside (the server-side cache this complements, not replaces)
-- `Filters/ETagFilterAttribute.cs`, `Program.cs` (`AddResponseCompression`)
-- Break kit: `cohort-prep/day-06/break-kit-day-06.md`
+- ADR-050: Edge Caching (CDN behavior)
+- Implementation: `Filters/ETagFilterAttribute.cs`, `Program.cs` (`AddResponseCompression`)

@@ -19,7 +19,7 @@ Use REST (resource-oriented, HTTP verbs) for all client-facing API endpoints. Us
 ### Positive
 
 - **Natural CRUD mapping.** `GET /api/restaurants`, `POST /api/orders`, `DELETE /api/payments/{id}` maps directly to CRUD operations. 80% of endpoints write themselves.
-- **Team familiarity.** Every developer on the team has built REST APIs. Zero learning curve. Students in the cohort know REST from prior experience.
+- **Team familiarity.** The engineering team has extensive experience with REST. Zero learning curve.
 - **Tooling support.** Scalar UI generates interactive docs from OpenAPI. REST clients (Postman, Insomnia, curl) work out of the box. Browser dev tools show requests clearly.
 - **Cacheability.** GET requests are naturally cacheable. HTTP caching headers work as expected. CDN integration for public endpoints is straightforward.
 - **Debuggability.** Every request is human-readable. `GET /api/orders/550e8400-...` is self-documenting. No binary protocols to decode.
@@ -32,8 +32,8 @@ Use REST (resource-oriented, HTTP verbs) for all client-facing API endpoints. Us
 
 ### Risks
 
-- **Risk:** REST's fixed response shapes lead to multiple "view-specific" endpoints as the frontend evolves. **Mitigation:** Design response shapes to include what most consumers need. Add sparse fieldsets (`?fields=id,name,status`) if it becomes a problem. Consider BFF (Backend for Frontend) pattern in Week 3.
-- **Risk:** Internal service-to-service calls using REST are chatty and slow. **Mitigation:** Internal services will use gRPC (Week 3). REST is for external clients only.
+- **Risk:** REST's fixed response shapes lead to multiple "view-specific" endpoints as the frontend evolves. **Mitigation:** Design response shapes to include what most consumers need. Add sparse fieldsets (`?fields=id,name,status`) if it becomes a problem. Consider BFF (Backend for Frontend) pattern as the client ecosystem grows.
+- **Risk:** Internal service-to-service calls using REST are chatty and slow. **Mitigation:** Internal services will use gRPC for high-performance communication. REST is for external clients only.
 
 ## Alternatives Considered
 
@@ -45,7 +45,7 @@ Use REST (resource-oriented, HTTP verbs) for all client-facing API endpoints. Us
 ### Option B: gRPC
 - Pros: Binary protocol (protobuf), excellent performance, strongly typed contracts, bidirectional streaming.
 - Cons: Not browser-friendly (needs gRPC-Web proxy). Protobuf messages are not human-readable. Tooling for debugging is weaker than REST. Overkill for CRUD.
-- Why rejected: Perfect for internal service-to-service calls (Week 3), terrible for browser clients. Tadka's web app needs a browser-friendly API.
+- Why rejected: Perfect for internal service-to-service calls (in future service extraction phases), terrible for browser clients. Tadka's web app needs a browser-friendly API.
 
 ### Option C: JSON-RPC
 - Pros: Simple method-based calls (`{"method": "createOrder", "params": {...}}`). No URL design needed.

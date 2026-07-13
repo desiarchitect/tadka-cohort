@@ -6,7 +6,7 @@
 
 ## Context
 
-Day 5's read replica spread read *volume* across two boxes, but it didn't remove *repeated* work. During the dinner rush every customer opens the same handful of popular restaurant menus, so the database (primary or replica) runs the **identical** `GET /restaurants/{id}/menu` query thousands of times a second. The menu changes maybe twice a day; re-reading it from a database on every request is the definition of read amplification. This is the next rung on the cheapest-first ladder (`scaling-decision-tree.md`), and the last optimization before we even consider extracting services.
+The read replica spread read *volume* across two boxes, but it didn't remove *repeated* work. During the dinner rush every customer opens the same handful of popular restaurant menus, so the database (primary or replica) runs the **identical** `GET /restaurants/{id}/menu` query thousands of times a second. The menu changes maybe twice a day; re-reading it from a database on every request is the definition of read amplification. This is the next rung on the cheapest-first ladder (`scaling-decision-tree.md`), and the last optimization before we even consider extracting services.
 
 We need an in-memory cache for hot, read-heavy, rarely-changing data — and a discipline for *what* to cache and *how to keep it correct*.
 
@@ -16,8 +16,8 @@ We need an in-memory cache for hot, read-heavy, rarely-changing data — and a d
 
 - **Client:** **StackExchange.Redis** — one client for everything Redis (cache get/set, the stampede lock in ADR-019, and the pub/sub backplane in ADR-020). Wrapped behind a small **`ICacheService`** (`GetOrSetAsync<T>`, `RemoveAsync`) so call sites stay clean and tests can swap it.
 - **Cache-aside flow:** check Redis → on miss, query the DB, populate Redis with a **TTL (~60s)**, return. On hit, the DB never sees the request.
-- **Graceful no-op:** if no `Redis` connection string is configured, `ICacheService` becomes a pass-through (always-miss → DB). Single-Postgres dev and the test suite run unchanged — same pattern as the Day-5 replica fallback (ADR-016).
-- **What to cache (the matrix):** cache only when **read:write ≫ 1 AND staleness is tolerable**. The **menu** qualifies (read constantly, written rarely, 60s stale is harmless). **Order status and payment do NOT** — they change often and staleness causes the exact duplicate-order / read-your-writes bug we guarded against on Day 4/5.
+- **Graceful no-op:** if no `Redis` connection string is configured, `ICacheService` becomes a pass-through (always-miss → DB). Single-Postgres local dev and the test suite run unchanged — same pattern as the replica fallback (ADR-016).
+- **What to cache (the matrix):** cache only when **read:write ≫ 1 AND staleness is tolerable**. The **menu** qualifies (read constantly, written rarely, 60s stale is harmless). **Order status and payment do NOT** — they change often and staleness causes the exact duplicate-order / read-your-writes bug we guarded against earlier.
 - **Invalidation: delete-on-write + TTL safety net.** When a menu item, its availability, or the restaurant changes (the existing PATCH/POST endpoints), **delete** the cache key; the next read repopulates from the DB. TTL bounds staleness if a delete is ever missed.
 
 ## Consequences
@@ -31,9 +31,9 @@ We need an in-memory cache for hot, read-heavy, rarely-changing data — and a d
 - A second datastore to run, monitor, and reason about (memory limits, eviction). Acceptable: it's the cheapest fix for the proven bottleneck.
 - Stale window up to the TTL after a *missed* invalidation. Bounded and acceptable for the menu.
 
-### Failure modes (CTO review — "Staff engineers live in the failure modes")
-- **Redis down / partitioned.** Cache-aside MUST fall through to the DB, not error — the no-op fallback above makes Redis a *performance* dependency, not a correctness one. The catch: when Redis is down the DB suddenly takes 100% of read traffic (the load Redis was absorbing). Mitigation: the DB must be sized to survive a full cache outage (or Redis goes HA and becomes a hard dependency — see Revisit). *Demo:* kill Redis → menu still served, latency up, no errors (Day 14 chaos battery).
-- **Hot key (a celebrity restaurant).** One menu (e.g. a viral biryani place) is read far more than any other; on a miss the whole herd hits one key → the stampede of ADR-019 (single-flight lock collapses it), and at extreme scale that single key/connection becomes the limit. Mitigations beyond single-flight: a tiny in-process **L1** cache in front of Redis, or **key replication/sharding** (cache `menu:{id}:{copy}` across replicas). *Demo:* hammer one key (Day 14).
+### Failure Modes
+- **Redis down / partitioned.** Cache-aside MUST fall through to the DB, not error — the no-op fallback above makes Redis a *performance* dependency, not a correctness one. The catch: when Redis is down the DB suddenly takes 100% of read traffic (the load Redis was absorbing). Mitigation: the DB must be sized to survive a full cache outage (or Redis goes HA and becomes a hard dependency — see Revisit). *Incident simulation:* kill Redis → menu still served, latency up, no errors.
+- **Hot key (a celebrity restaurant).** One menu (e.g. a viral biryani place) is read far more than any other; on a miss the whole herd hits one key → the stampede of ADR-019 (single-flight lock collapses it), and at extreme scale that single key/connection becomes the limit. Mitigations beyond single-flight: a tiny in-process **L1** cache in front of Redis, or **key replication/sharding** (cache `menu:{id}:{copy}` across replicas). *Incident simulation:* hammer one key.
 - **Cache poisoning.** A cache only ever stores what we computed from our own DB and validated input — never raw, attacker-controlled, or unvalidated payloads, and the key is derived from validated route params (`{id}`), never from a header/body an attacker controls. Poisoning is an authn/validation failure that the cache then *amplifies*.
 
 ### Cost (₹ / effort)
@@ -47,8 +47,8 @@ One small Redis instance (cheap) + a thin cache service + a `DEL` (<1ms) on each
 
 ## References
 - ADR-016 (read replica — the rung below), ADR-004 (Postgres source of truth), ADR-013 (in-process events — reused for invalidation/backplane)
-- `cohort-prep/day-02/datastore-selection.md` (Redis in the option space), `docs/scaling-decision-tree.md`, `docs/tadka-growth-story.md` (Week 2/3 caching)
+- `docs/scaling-decision-tree.md`
 - Implementation: `Infrastructure/Caching/ICacheService.cs` + `RedisCacheService.cs`, `Controllers/RestaurantsController.cs`
 
 ## Revisit When
-Move invalidation to **event-driven (Kafka)** once an event bus exists (Week 5) — a `MenuUpdated` event a cache-invalidation consumer reacts to, decoupling the write path from cache concerns. Reconsider TTLs per data type if staleness complaints appear. Reconsider the no-op fallback if the DB can no longer survive a full cache outage (then Redis becomes a hard dependency and needs HA).
+Move invalidation to **event-driven (Kafka)** once an event bus exists — a `MenuUpdated` event a cache-invalidation consumer reacts to, decoupling the write path from cache concerns. Reconsider TTLs per data type if staleness complaints appear. Reconsider the no-op fallback if the DB can no longer survive a full cache outage (then Redis becomes a hard dependency and needs HA).

@@ -8,11 +8,11 @@
 
 ADR-040 sends metrics to **Prometheus**. Prometheus (like every time-series database) stores **one independent time series per unique combination of metric name + label values**. Each series carries its own in-memory index entry and chunk buffer (~1–3 KB of RAM resident, plus disk). This makes **label cardinality the single most dangerous knob in metrics** — and the trap is seductive, because high-cardinality labels are exactly the ones engineers reach for when debugging ("let me just add `order_id` so I can find this order's latency").
 
-Do that and the math turns hostile fast. Tadka's canon is **1 lakh orders/day**, growing toward lakhs of users. Put `user_id` on a handful of metrics across the 4 services:
+Do that and the math turns hostile fast. Tadka's capacity planning accounts for **1 lakh orders/day**, growing toward lakhs of users. Put `user_id` on a handful of metrics across the 4 services:
 
 > 1,00,000 users × 4 services × ~5 metrics = **20 lakh time series**. At ~3 KB/series that is **~6 GB of RAM just for series metadata** — Prometheus OOMs, restarts, loses data, and now *your monitoring needs monitoring*. The very label you added to debug an incident **causes** the next incident.
 
-This is not hypothetical; it is the most common way self-hosted Prometheus dies. The CTO review #2 flagged it explicitly. We need a hard rule before anyone ships a metric label.
+This is not hypothetical; it is the most common way self-hosted Prometheus dies. We need a hard organizational rule before anyone ships a metric label.
 
 ## Decision
 
@@ -33,15 +33,15 @@ Worst-case combination: 5 × 5 × 20 × 5 = **~2,500 series** — trivial. Custo
 
 ### Positive
 - Prometheus stays small and fast (thousands of series, not lakhs) — no OOM, predictable RAM.
-- Clear, teachable rule any engineer can apply at code-review time ("is this label bounded?").
+- Clear, simple rule any engineer can apply at code-review time ("is this label bounded?").
 - Forces ids onto traces/logs, which is where they belong and where they're actually more useful (full context, not just a number).
 
 ### Negative / Risks
 - **You cannot ask "P95 latency for user X" in Prometheus** — that question must be a Jaeger/log query. Engineers used to "just add a label" must relearn the boundary.
-- Requires discipline on every new metric; a single careless label can still slip in (mitigated by the demo that *shows* the blowup, plus code review).
+- Requires discipline on every new metric; a single careless label can still slip in and cause an OOM (mitigated by automated CI checks on metric registries where possible, plus code review).
 
-### Cost (₹ / effort)
-Effectively ₹0 to follow; **large ₹ to violate** — a cardinality blowup is unplanned RAM (bigger Prometheus instance) plus the incident time to find and migrate the offending label (the war story below cost a team ~2 weeks). The cheap path is to never add the label.
+### Cost
+Effectively ₹0 to follow; **large cost to violate** — a cardinality blowup requires unplanned RAM (bigger Prometheus instance) plus the incident time to find and migrate the offending label. The cheap path is to never add the label.
 
 ## Alternatives Considered
 
@@ -60,18 +60,18 @@ Effectively ₹0 to follow; **large ₹ to violate** — a cardinality blowup is
 - Cons: complexity; still wrong to push per-entity data into a TSDB when traces/logs exist for it.
 - Why rejected: over-engineering for Tadka; the pillar separation is simpler and correct.
 
-## Teaching fields
+## Implementation Notes
 
-- **Topic:** Why cardinality is the fundamental constraint of time-series metrics, the RAM math behind a blowup, and the three-pillars division of labour (aggregate metrics vs per-entity traces/logs).
-- **Options:** label-everything · label-nothing · **low-cardinality-only + ids on traces/logs (chosen)** · collector aggregation.
-- **Choice:** allow only `service.name`/`http.method`/`http.route`(template)/`status_code` (+ bounded business labels like `payment.status`); ban `user_id`/`order_id`/etc. as labels; route per-entity questions to Jaeger attributes / log `trace_id`.
-- **Why:** keeps Prometheus from OOMing; matches each pillar to what it's good at.
-- **Trade-off:** can't do per-user/per-order queries in Prometheus — that's a trace/log query by design.
-- **Failure mode** (2 AM dinner rush): an engineer adds `order_id` to a metric during an incident "to debug faster"; over the next hours Prometheus RAM climbs, it OOM-restarts, and you lose the metrics during the very incident you were debugging. Caught here by the live cardinality-blowup demo (watch the series count jump, then revert).
-- **Revisit when:** **never** for Prometheus labels — this is a TSDB invariant, not a scale decision you grow out of. (If you genuinely need high-cardinality *metrics*, that's a different tool — e.g. a columnar store — not a Prometheus label.)
-- **Cross-stack equivalents:** identical constraint in every metrics ecosystem — **Spring/Micrometer**: tags blow up the same registry (Micrometer even ships a `MeterFilter` cardinality limiter); **Node**: `prom-client` label values create series the same way; **Go**: `prometheus.Labels` likewise. Datadog/New Relic bill by **custom-metric cardinality**, so the same mistake there is a surprise *invoice* instead of an OOM. The rule travels: **keep TSDB labels bounded; ids belong on traces and logs.**
+- **Topic:** Cardinality is the fundamental constraint of time-series metrics. Aggregate metrics vs per-entity traces/logs.
+- **Rule:** Allow only `service.name`/`http.method`/`http.route`(template)/`status_code` (+ bounded business labels like `payment.status`). Ban `user_id`/`order_id`/etc. Route per-entity questions to Jaeger attributes / log `trace_id`.
+- **Failure mode:** An engineer adds `order_id` to a metric during an incident "to debug faster"; over the next hours Prometheus RAM climbs, it OOM-restarts, and you lose the metrics during the very incident you were debugging. 
+- **Cross-stack equivalents:** Identical constraint in every metrics ecosystem — **Spring/Micrometer**: tags blow up the same registry (Micrometer ships a `MeterFilter` cardinality limiter). Datadog/New Relic bill by **custom-metric cardinality**, so the same mistake there is a surprise invoice instead of an OOM.
+
+## Revisit When
+**Never** for Prometheus labels — this is a TSDB invariant, not a scale decision you grow out of. (If you genuinely need high-cardinality *metrics*, that requires a different tool like a columnar analytics store, not a Prometheus label.)
 
 ## References
-- ADR-040 (Prometheus is the metrics backend), ADR-041 (ids live on span attributes — where high cardinality is cheap), ADR-032 (PII: another reason not to label with `email`/phone).
-- `cohort-prep/day-13/option-space.md` (metrics backends + cardinality), `break-kit-day-13.md` (the live blowup demo + before/after series count), `docs/runbooks/day-13.md`.
-- Implementation: custom `Meter` with bounded labels; the demo toggle that adds/removes an `order_id` label to show the series jump.
+- ADR-040 (Prometheus is the metrics backend)
+- ADR-041 (IDs live on span attributes — where high cardinality is cheap)
+- ADR-032 (PII constraints)
+- Implementation: custom `Meter` with bounded labels.

@@ -1,4 +1,4 @@
-# ADR-039: Cloud Deployment (Terraform + ECS + ALB / API Gateway) — Taught as a Black-Box
+# ADR-039: Cloud Deployment (Terraform + ECS + ALB + API Gateway)
 
 **Date:** 2026-06-05
 **Status:** Accepted
@@ -6,64 +6,58 @@
 
 ## Context
 
-Tadka now runs as **4 services + a gateway** plus Postgres ×4, Redis, and Kafka — locally via `docker compose`. The natural next question is "how does this run in the cloud?" — load balancing, service discovery, network hops, blast radius, release cadence, and **cost (₹)**. But two hard constraints shape *how we teach it*:
+Tadka consists of 4 services, an API gateway, 4 PostgreSQL databases, Redis, and Kafka. As we move from local development (`docker compose`) to a production cloud environment, we need to define our target deployment architecture. The natural questions involve load balancing, service discovery, network hops, blast radius, release cadence, and **cost**. 
 
-1. **It is not laptop-reproducible.** A real deploy needs a cloud account, IAM, a VPC, and **real money** — we cannot make every student stand up an ECS cluster behind an ALB at the Day-4–7 demo bar, and we cannot verify a live cloud deploy in this cohort's environment.
-2. **The Terraform-distraction trap (CTO review #2).** Handing students raw HCL to run reliably burns sessions on "my IAM state is broken" Level-1 AWS support instead of on *architecture*. The lesson is the **shape and the results** (how requests route, where the hops are, what it costs), not HCL syntax.
+We have two hard constraints shaping our deployment strategy:
+1. **Operational overhead vs. Control:** We are a lean engineering team. We cannot afford to dedicate multiple full-time engineers to manage a complex orchestration control plane.
+2. **Developer Experience (The "IaC Distraction" Trap):** We want product engineers focused on business logic and architecture, not debugging IAM roles, VPC subnets, or raw HCL syntax. The platform should abstract the boilerplate so teams focus on the *shape and results* of their deployments (routing, cost, blast radius).
 
 ## Decision
 
-Teach cloud deployment as a **black-box: results, not HCL.** Concretely:
-- **Model**: each service is a container → an **ECS (Fargate) task/service**; an **Application Load Balancer (ALB)** does L7 routing + health checks + per-service target groups; an **API Gateway**/edge sits in front for auth/throttling/WAF; **CloudFront/CDN** for static assets; managed **RDS Postgres**, **ElastiCache Redis**, **MSK (Kafka)**. IaC via **Terraform** (modules per service).
-- **Taught via**: a topology diagram + a **read-only sample Terraform/ECS+ALB template** shipped under `tadka/deploy/` as *reference only* (not a run-in-session step), and a "magic-button" path (`terraform apply` / a CDK stack) for the rare student **with** an account who wants the real thing on their own time.
-- **In-session focus**: read the **results** — ALB request routing to target groups, the extra network hop the gateway adds, auto-scaling per service, blast radius per task, and a **cost model in ₹/month** (the same $250–270 budget framing). We analyze the running shape; we do not debug HCL live.
-- **The YARP gateway (ADR-035) stays the runnable local stand-in** for the edge — students get the real routing/rate-limit feel on a laptop; the cloud ALB/API-Gateway is the production mapping of that same role.
+We will deploy our services using **Amazon ECS (Fargate)** with **Terraform** managed by a central platform approach. Concretely:
+
+- **Compute Model**: Each service is built as a container and deployed as an **ECS (Fargate) task/service**. An **Application Load Balancer (ALB)** handles L7 routing, health checks, and per-service target groups.
+- **Edge Layer**: An **API Gateway** sits in front for auth, throttling, and WAF. **CloudFront/CDN** is used for static assets.
+- **Stateful Services**: We will use managed services rather than self-hosting: **RDS Postgres**, **ElastiCache Redis**, and **Amazon MSK (Kafka)**.
+- **Infrastructure as Code**: The platform team will maintain standard **Terraform** modules. Product teams will consume these modules as a "black box" abstraction. They will supply standard inputs (CPU, RAM, env vars) rather than writing raw HCL, preventing configuration drift and security misconfigurations.
+- **Local Dev vs Cloud**: YARP gateway remains our local edge abstraction, matching the routing and rate-limiting behavior of the cloud API Gateway/ALB, ensuring developer environments accurately reflect production topologies.
 
 ## Consequences
 
 ### Positive
-- Students learn the cloud **architecture and economics** without a cloud bill or an IAM rabbit hole.
-- Session time stays on architecture (routing, hops, blast radius, cost), per the CTO guardrail.
-- Account-holders still get a real, deployable reference.
+- **Low Operational Burden:** Fargate and managed stateful services eliminate OS patching and node management.
+- **Developer Focus:** Standardized Terraform modules prevent engineers from falling down IAM/VPC rabbit holes. Teams focus on architecture and economics.
+- **Clear Routing & Blast Radius:** Dedicated ALBs and isolated ECS tasks provide a clear topology with isolated failure domains.
 
 ### Negative / Risks
-- No hands-on "I deployed it live" for most students (mitigated: the local YARP + compose stack is the hands-on; the cloud is the map).
-- A sample template can drift from cloud-provider changes — it's reference, dated, not a maintained product.
+- **Platform Team Bottleneck:** Changes to the underlying infrastructure capabilities require updates to the central Terraform modules.
+- **Vendor Lock-in:** Heavy reliance on AWS managed services (ECS, MSK, API Gateway).
 
-### Cost (₹ / effort)
-Authoring the diagram + sample template + cost model — modest. Running it: **₹0 for the cohort** (black-box); the real deploy's cost (~₹20–60k/month at this shape, dominated by RDS/MSK/NAT) is itself a teaching artifact.
+### Cost
+The managed database tier (RDS, MSK, NAT Gateways) will dominate our initial AWS bill. The compute tier (Fargate) scales linearly with load. The cost modeling is transparently shared with product teams so they understand the financial impact of adding new services.
 
 ## Alternatives Considered
 
-### Option A: Hands-on Terraform for everyone
-- Pros: real muscle memory.
-- Cons: cloud account + $ + IAM/VPC debugging eats sessions; not reproducible at the demo bar.
-- Why rejected: the CTO "Terraform distraction" trap; not laptop-reproducible.
+### Option A: Product Teams Write Raw Terraform
+- **Pros:** Maximum flexibility for each team.
+- **Cons:** High risk of security misconfigurations, fragmented IAM/VPC setups, and lost engineering cycles debugging HCL.
+- **Why rejected:** The "Terraform distraction" trap; we want consistency and speed.
 
-### Option B: Skip cloud entirely (compose is enough)
-- Pros: simplest.
-- Cons: students never connect the architecture to LB/hops/blast-radius/cost — the Staff-level questions.
-- Why rejected: the *analysis* (results) is core curriculum even if the *apply* is not.
+### Option B: Kubernetes (Amazon EKS)
+- **Pros:** Highly portable, the industry standard for large-scale container orchestration, rich ecosystem.
+- **Cons:** Significant cognitive load (control plane, ingress controllers, operators, Helm) which is overkill for 4 services.
+- **Why rejected:** ECS/Fargate offers a much smaller cognitive load to achieve the exact same operational goals at our current scale. EKS is reserved as a future migration path if we outgrow ECS or require extreme multi-cloud portability.
 
-### Option C: Kubernetes (EKS) instead of ECS
-- Pros: portable, the industry lingua franca.
-- Cons: far more concepts (control plane, ingress, operators) for the same teaching goal at this scale.
-- Why rejected *for the default path*: ECS/Fargate is the smaller cognitive load to show the shape; k8s is **named** in the option-space as the "when you outgrow ECS / want portability" choice.
+### Option C: EC2 VMs with Docker Compose
+- **Pros:** Mirrors local development exactly.
+- **Cons:** Zero auto-scaling, manual instance management, no built-in blast-radius control.
+- **Why rejected:** Lacks the resilience, auto-scaling, and managed health checks required for production workloads.
 
-## Teaching fields
+## Implementation Notes
 
-- **Topic:** How deployment shape determines routing, network hops, blast radius, release cadence, and cost — taught as **results, not HCL**.
-- **Options:** hands-on Terraform-for-all · skip cloud · **black-box results + reference template (chosen)** · EKS vs ECS.
-- **Choice:** ECS/Fargate + ALB + API-Gateway + managed RDS/Redis/MSK, Terraform reference template read-only; analyze the running shape + ₹ cost; YARP stays the local edge.
-- **Why:** not laptop-reproducible + the Terraform-distraction trap; the architecture/economics are the lesson, not the syntax.
-- **Trade-off:** no universal hands-on cloud apply; reference template can date.
-- **Failure mode** (2 AM dinner rush): a single-AZ ALB or one ECS task with no auto-scaling → an AZ blip or a traffic spike takes the whole front door down. The teaching point: multi-AZ + per-service auto-scaling + health checks = blast-radius control — read from the topology, not from HCL.
-- **Revisit when:** the org standardizes on Kubernetes (→ EKS + ingress) or serverless (→ Lambda/API-Gateway for spiky services); or when multi-region/DR enters scope (Week 8+).
-- **Cross-stack equivalents:** the deployment model is language-neutral — any container (Spring Boot jar / Node / Go binary) is an ECS task / k8s pod the same way. Terraform ≈ AWS CDK / Pulumi / CloudFormation; ECS ≈ Cloud Run / Azure Container Apps / k8s Deployment; ALB ≈ GCP HTTPS LB / Azure App Gateway / nginx-ingress.
-
-## References
-- ADR-035 (YARP gateway — the local stand-in for the cloud edge), ADR-026 (database-per-service → managed RDS per service), CTO review #2 (Terraform-distraction guardrail; results-not-HCL)
-- `cohort-prep/day-12/option-space.md` (deploy-options matrix + ₹ cost), `tadka/deploy/README.md` (black-box reference)
+- **Resilience:** Services must span multiple AZs, with auto-scaling policies tied to CPU/memory metrics. Health checks must be configured at the ALB level to ensure traffic is only routed to healthy tasks.
+- **Failure Mode:** A misconfigured single-AZ deployment or a hardcoded single ECS task means an AZ blip or traffic spike takes the service down. Multi-AZ + auto-scaling + health checks are mandatory parameters in the Terraform modules.
+- **Cross-stack equivalents:** This containerized deployment model is language-neutral. Any container (Spring Boot jar / Node / Go binary) maps to an ECS task. The infrastructure logic is conceptually similar to using GCP Cloud Run + HTTPS LB, or Azure Container Apps.
 
 ## Revisit When
-When the cohort adds a dedicated deploy/SRE module, or when a real production target is chosen — at which point the sample template becomes a maintained, environment-specific artifact rather than read-only reference.
+We outgrow the capabilities of ECS (e.g., needing complex service mesh routing, custom operators, or reaching a scale of 50+ microservices), at which point a migration to EKS will be evaluated.
