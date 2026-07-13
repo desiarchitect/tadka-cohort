@@ -7,6 +7,7 @@ using Tadka.Restaurant.Api.Caching;
 using Tadka.Restaurant.Api.Contracts;
 using Tadka.Restaurant.Api.Data;
 using Tadka.Restaurant.Api.Domain;
+using Tadka.Restaurant.Api.Filters;
 using Tadka.Restaurant.Api.Messaging;
 
 namespace Tadka.Restaurant.Api.Controllers;
@@ -28,6 +29,7 @@ public class RestaurantsController(RestaurantDbContext db, ICacheService cache) 
     private bool OwnsOrAdmin(Guid restaurantId) => User.IsAdmin() || User.OwnedRestaurantId() == restaurantId;
 
     [HttpGet]
+    [ETagFilter] // ADR-048/054: conditional GET — 304 when body unchanged
     public async Task<ActionResult<PagedResponse<RestaurantResponse>>> GetAll(
         [FromQuery] string? city, [FromQuery] int page = 1, [FromQuery] int pageSize = 10)
     {
@@ -52,6 +54,7 @@ public class RestaurantsController(RestaurantDbContext db, ICacheService cache) 
     }
 
     [HttpGet("{id:guid}/menu")]
+    [ETagFilter] // ADR-048/054: conditional GET — 304 when body unchanged
     public async Task<ActionResult<List<MenuItemResponse>>> GetMenu(
         Guid id, [FromQuery] string? category, [FromQuery] bool? vegOnly)
     {

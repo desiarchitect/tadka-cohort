@@ -87,10 +87,33 @@ data: {"orderId":"…","status":"Preparing", …}
 ```
 > Each status change is published to Redis channel `order:{id}`; the SSE endpoint (subscribed) streams it — so an update from *any* app instance reaches the connection held by *another* instance. Push, not poll.
 
-## 6. Run the tests
+## 6. Scale-out: 3 replicas + nginx LB, HTTP efficiency, rate limiting, edge cache, signed URLs (Beats 4-10)
 
 ```bash
-dotnet test      # 19/19 — tests run with the no-op cache (no Redis dependency), so they stay deterministic
+docker compose --profile scale-out up -d     # builds src/Tadka.Api/Dockerfile, starts api-1/2/3 + nginx on :8090
+curl -i http://localhost:8090/health          # X-Tadka-Instance shows which replica answered
+docker stop tadka-api-2-1                     # kill one — requests keep succeeding (nginx evicts + retries)
+docker start tadka-api-2-1                    # rejoins the rotation within ~20s
+```
+
+- **Compression + ETag (ADR-048):** `curl -H "Accept-Encoding: gzip" -D - http://localhost:8090/api/v1/restaurants` → `Content-Encoding: gzip`; repeat with `If-None-Match: <etag>` → `304`.
+- **Rate limiting (ADR-049):** default 120/min, Redis-shared across all 3 replicas. `RateLimit:Algorithm=FixedWindow|SlidingWindow`, `RateLimit:WindowSeconds` (short window for a fast classroom demo of the boundary burst).
+- **State divergence (ADR-047):** set `Cache:Mode=InMemory` on the 3 replicas (see `scripts/` or a compose override) to watch per-replica cache divergence after a price update — the default (Redis) mode stays consistent.
+- **Edge cache (ADR-050):** `X-Edge-Cache: MISS|HIT` header on `/api/v1/restaurants*` responses. 30s TTL.
+- **Signed URLs (ADR-050):** `POST /api/v1/orders/{id}/invoice/sign` → time-limited link; `GET .../invoice?sig=&exp=`.
+- **SSE reconnect (ADR-051):** reconnect with `Last-Event-ID: <seq>` to replay missed status transitions.
+
+Full click-by-click sequences with captured numbers: `cohort-prep/day-06/break-kit-day-06.md` (Beats 4-10 + Bonus).
+
+```bash
+docker compose --profile scale-out down       # tear down when done (plain `docker compose down` for the base stack)
+```
+
+## 7. Run the tests
+
+```bash
+dotnet test      # 27/27 — the shared factory (ETag tests included) runs Redis-free and deterministic;
+                  # RateLimiterTests spin up their own dedicated Redis Testcontainer, so no scale-out stack needed
 ```
 
 ## ✅ Done when
@@ -100,7 +123,10 @@ dotnet test      # 19/19 — tests run with the no-op cache (no Redis dependency
 - [ ] A menu write deletes the key (`EXISTS`→0), and the next GET repopulates it fresh.
 - [ ] With Redis **stopped**, the menu still returns `200` (no-op fallback).
 - [ ] The SSE stream prints `Created → Confirmed → Preparing` as you PATCH the status.
-- [ ] `dotnet test` → 19/19.
+- [ ] `docker compose --profile scale-out up -d`: kill one replica mid-load, 0 client-visible failures; it rejoins after restart.
+- [ ] Gzip/brotli `Content-Encoding` present; matching `If-None-Match` → `304`.
+- [ ] 150 rapid requests → some `429`s with a real `Retry-After`, shared across all 3 replicas.
+- [ ] `dotnet test` → 27/27.
 
 ## Troubleshooting
 
