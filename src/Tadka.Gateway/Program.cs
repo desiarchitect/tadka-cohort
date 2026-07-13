@@ -1,11 +1,17 @@
 using System.Threading.RateLimiting;
+using Tadka.Gateway.Canary;
 using Tadka.Telemetry;
+using Yarp.ReverseProxy.LoadBalancing;
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Observability (ADR-040): the gateway is the trace ROOT — its server span is the parent of the whole
 // request, and HttpClient instrumentation propagates traceparent to the service it forwards to (ADR-041).
 builder.AddTadkaTelemetry("Tadka.Gateway");
+
+// Canary % for restaurant cluster (ADR-061). Hot-reload via IOptionsMonitor.
+builder.Services.Configure<CanaryOptions>(builder.Configuration.GetSection(CanaryOptions.SectionName));
+builder.Services.AddSingleton<ILoadBalancingPolicy, WeightedCanaryPolicy>();
 
 // YARP reverse proxy (ADR-035): one public entry point; routes load from config (ReverseProxy section).
 builder.Services.AddReverseProxy().LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"));

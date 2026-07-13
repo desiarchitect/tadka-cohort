@@ -3,6 +3,7 @@ using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Tadka.Restaurant.Api.Caching;
 using Tadka.Restaurant.Api.Contracts;
 using Tadka.Restaurant.Api.Data;
@@ -33,6 +34,10 @@ public class RestaurantsController(RestaurantDbContext db, ICacheService cache) 
     public async Task<ActionResult<PagedResponse<RestaurantResponse>>> GetAll(
         [FromQuery] string? city, [FromQuery] int page = 1, [FromQuery] int pageSize = 10)
     {
+        // Canary break lever (ADR-061): when true, fail reads so gateway canary % produces visible errors.
+        if (HttpContext.RequestServices.GetRequiredService<IConfiguration>().GetValue("Restaurant:Buggy", false))
+            return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Canary restaurant is buggy (demo)." });
+
         pageSize = Math.Clamp(pageSize, 1, 50);
         page = Math.Max(1, page);
 

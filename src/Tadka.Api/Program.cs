@@ -194,6 +194,13 @@ else
     builder.Services.AddSingleton<Tadka.Api.Infrastructure.RateLimiting.IRateLimiter, Tadka.Api.Infrastructure.RateLimiting.NullRateLimiter>();
 }
 
+// Feature flags (ADR-058): percentage rollout with stable hashing; Redis override Flags:{name}.
+builder.Services.AddSingleton<Tadka.Api.Infrastructure.FeatureFlags.IFeatureFlagService>(sp =>
+    new Tadka.Api.Infrastructure.FeatureFlags.FeatureFlagService(
+        sp.GetRequiredService<IConfiguration>(),
+        sp.GetService<StackExchange.Redis.IConnectionMultiplexer>(),
+        sp.GetRequiredService<ILogger<Tadka.Api.Infrastructure.FeatureFlags.FeatureFlagService>>()));
+
 var app = builder.Build();
 
 // Apply migrations on startup, then idempotently seed known demo users with real password hashes + roles
@@ -221,6 +228,9 @@ if (app.Environment.IsDevelopment())
 
 app.UseResponseCompression();
 app.UseMiddleware<ExceptionHandlingMiddleware>();
+// Order: shed first (cheap 503), then admit (concurrency), then rate-limit (per-IP).
+app.UseMiddleware<Tadka.Api.Middleware.LoadSheddingMiddleware>();
+app.UseMiddleware<Tadka.Api.Middleware.BackpressureMiddleware>();
 app.UseMiddleware<RateLimitingMiddleware>();
 app.UseHttpsRedirection();
 app.UseAuthentication();

@@ -48,7 +48,7 @@ Requires the `scale-out` compose profile (3 monolith replicas behind nginx, Day 
 
 ## Day 11 - Refund compensation payoff (ADR-052)
 
-1. Set `Restaurant:AcceptMode=Reject` (Day 11 kit)
+1. Set `Restaurant:AcceptMode=Reject` and optionally `Restaurant:RefundOnReject=false` for the money-stuck break (Day 11 kit, ADR-045). Real levers on Tadka.Api — not documentation-only.
 2. Pay -> Payment pill goes **Completed** (charge landed)
 3. Restaurant rejects -> watch the pill flip to **Refunded** (purple) and the timeline show
    **Cancelled** - the compensation in real time
