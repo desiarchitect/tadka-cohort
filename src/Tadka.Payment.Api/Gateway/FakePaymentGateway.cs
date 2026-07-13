@@ -37,4 +37,18 @@ public sealed class FakePaymentGateway(IOptionsMonitor<PaymentOptions> options, 
 
         return $"FAKEPAY-{Guid.NewGuid():N}"[..20].ToUpperInvariant();
     }
+
+    public async Task<string> RefundAsync(
+        Guid orderId, string? originalGatewayReference, Money amount, CancellationToken cancellationToken)
+    {
+        var g = options.CurrentValue.Gateway;
+        // Refunds stay Fast by default — the compensation path must be reliable for the demo.
+        // (A failing refund is a separate reconciliation problem, not the Day-11 headline.)
+        await Task.Delay(TimeSpan.FromMilliseconds(g.FastDelayMs), cancellationToken);
+        var refCode = $"FAKEREF-{Guid.NewGuid():N}"[..20].ToUpperInvariant();
+        logger.LogInformation(
+            "💸 FakeGateway REFUND for order {OrderId} (original {Original}) → {RefundRef}.",
+            orderId, originalGatewayReference ?? "(none)", refCode);
+        return refCode;
+    }
 }
