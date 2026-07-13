@@ -7,8 +7,12 @@ public static class Topics
     public const string PaymentResults = "payment-results";
 }
 
-/// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.</summary>
-public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency);
+/// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.
+/// <see cref="Version"/> is the envelope version (ADR-050): schema evolution is additive-only — new optional
+/// fields with defaults may be appended, but an existing field is never renamed or removed. System.Text.Json
+/// ignores unknown JSON properties by default, so an older consumer reading a newer message (extra field) is
+/// safe with zero code changes; the version number is for humans reading logs/payloads, not a runtime switch.</summary>
+public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, int Version = 1);
 
 /// <summary>Published by the Payment service after it settles a charge. Consumed by Ordering (the Saga reaction).</summary>
 public sealed record PaymentResultMessage(Guid MessageId, Guid OrderId, string Status, string? GatewayReference, string? FailureReason);
