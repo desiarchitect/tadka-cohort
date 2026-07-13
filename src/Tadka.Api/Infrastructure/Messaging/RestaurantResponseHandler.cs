@@ -20,7 +20,7 @@ public sealed class RestaurantResponseHandler(
 {
     public async Task HandleAsync(RestaurantResponseMessage msg, CancellationToken ct = default)
     {
-        // Inbox AFTER side effects (ADR-028 Day-9 invariant).
+        // Inbox AFTER side effects, same DB transaction (ADR-028).
         if (await db.Set<InboxMessage>().AnyAsync(i => i.MessageId == msg.MessageId, ct))
         {
             logger.LogInformation("restaurant-response {MessageId} already processed — skip.", msg.MessageId);
@@ -42,13 +42,26 @@ public sealed class RestaurantResponseHandler(
             return;
         }
 
-        await refundSaga.RejectAndCompensateAsync(
-            order, msg.GatewayReference, restaurantOptions.Value.RefundOnReject, ct);
-
-        if (!await db.Set<InboxMessage>().AnyAsync(i => i.MessageId == msg.MessageId, ct))
+        // Compensation (cancel + refund-requested outbox) + inbox in ONE transaction so we never
+        // cancel without stamping inbox (or stamp inbox without cancel) across a crash boundary.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
         {
-            db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
-            await db.SaveChangesAsync(ct);
+            await refundSaga.RejectAndCompensateAsync(
+                order, msg.GatewayReference, restaurantOptions.Value.RefundOnReject, ct);
+
+            if (!await db.Set<InboxMessage>().AnyAsync(i => i.MessageId == msg.MessageId, ct))
+            {
+                db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
+                await db.SaveChangesAsync(ct);
+            }
+
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
         }
     }
 }

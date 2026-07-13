@@ -12,13 +12,28 @@ var builder = WebApplication.CreateBuilder(args);
 // OTEL_EXPORTER_OTLP_ENDPOINT, so the test suite + single-process dev are unchanged (no stack required).
 builder.AddTadkaTelemetry("Tadka.Api");
 
-// Field-level PII encryption (ADR-052) â€” configured before ANY DbContext model is built (the migration
-// call below triggers that), since UserConfiguration reads FieldCipher.Enabled while building the model.
-// Dev-only default key, NEVER a real secret (same spirit as the seeded "seed-not-a-real-hash" password
-// hash below) â€” a real deployment supplies Demo:EncryptionKey from a secrets manager / KMS.
-Tadka.Api.Infrastructure.Security.FieldCipher.Configure(
-    builder.Configuration.GetValue("Demo:EncryptPiiAtRest", true),
-    builder.Configuration["Demo:EncryptionKey"] ?? "0EIJyWPct1+0ncRmpqJXxQ8AKEviFdz8+rw8PGqxKk0=");
+// Field-level PII encryption (ADR-052) — configured before ANY DbContext model is built (migrations
+// trigger model build), since UserConfiguration reads FieldCipher while building the model.
+// Key lives in appsettings.Development.json only (not hardcoded here). Non-Development requires an
+// explicit Demo:EncryptionKey (or EncryptPiiAtRest=false) — secrets manager / KMS in real deploys.
+{
+    var encryptPii = builder.Configuration.GetValue("Demo:EncryptPiiAtRest", false);
+    var encryptionKey = builder.Configuration["Demo:EncryptionKey"];
+    if (encryptPii && string.IsNullOrWhiteSpace(encryptionKey))
+    {
+        if (builder.Environment.IsDevelopment())
+        {
+            // Local misconfig: prefer clear failure over a silent hardcoded key in source.
+            throw new InvalidOperationException(
+                "Demo:EncryptPiiAtRest is true but Demo:EncryptionKey is missing. " +
+                "Set it in appsettings.Development.json (dev-only key) or set EncryptPiiAtRest=false.");
+        }
+        throw new InvalidOperationException(
+            "Demo:EncryptionKey is required when Demo:EncryptPiiAtRest is true outside Development. " +
+            "Supply from a secrets manager / KMS — never commit production keys.");
+    }
+    Tadka.Api.Infrastructure.Security.FieldCipher.Configure(encryptPii, encryptionKey);
+}
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();

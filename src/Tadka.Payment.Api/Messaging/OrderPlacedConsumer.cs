@@ -116,23 +116,32 @@ public sealed class OrderPlacedConsumer(
             return;
         }
 
-        // Charge (idempotent on order_id — a redelivery returns the existing outcome, never double-charges).
-        var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-        var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct);
-
-        // Transactional Outbox (ADR-028): payment-results + inbox in the SAME SaveChanges as the charge
-        // path's last write — no dual-write to Kafka. OutboxRelay publishes; crash mid-publish republishes.
-        var result = new PaymentResultMessage(
-            Guid.NewGuid(), msg.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason);
-        db.OutboxMessages.Add(new OutboxMessage
+        // Charge + payment-results outbox + inbox in ONE transaction (ADR-028).
+        // ChargeAsync SaveChanges flushes into this transaction until Commit.
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
         {
-            Topic = Topics.PaymentResults,
-            Key = msg.OrderId.ToString(),
-            Payload = JsonSerializer.Serialize(result),
-            TraceParent = TadkaTrace.CurrentTraceParent()
-        });
+            var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
+            var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct);
 
-        db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
-        await db.SaveChangesAsync(ct);
+            var result = new PaymentResultMessage(
+                Guid.NewGuid(), msg.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason);
+            db.OutboxMessages.Add(new OutboxMessage
+            {
+                Topic = Topics.PaymentResults,
+                Key = msg.OrderId.ToString(),
+                Payload = JsonSerializer.Serialize(result),
+                TraceParent = TadkaTrace.CurrentTraceParent()
+            });
+
+            db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw;
+        }
     }
 }

@@ -46,8 +46,11 @@ Restaurant is still **in-process** on Day 11 (extracted as its own service on Da
 - Fits existing Outbox/Inbox/Kafka patterns — no new framework.
 
 ### Negative / Risks
-- Day 11 restaurant decision is in-process; Day 12+ should move the decision into Restaurant.Api consuming `order-confirmed` (revisit).
-- Direct Kafka publish of `payment-refunded` (no Payment Outbox yet) — same as `payment-results` today; dual-write risk is accepted consistently with Day 9 charge path.
+- Day 11 restaurant decision is in-process; Day 12+ should move the decision into Restaurant.Api consuming `order-confirmed` (revisit). **Done — ADR-062.**
+- Gateway refund failure after order cancel still leaves money-stuck until reconciliation (not productized — named for Day 11 honesty).
+
+### Outbox (updated)
+Payment stages **both** `payment-results` and `payment-refunded` via `payment.outbox_messages` + `OutboxRelay` (ADR-028), matching Ordering/Restaurant. No direct Kafka publish on the happy charge/refund reply path.
 
 ## Alternatives considered
 - Only document the refund without implementing it — rejected (ghost lever in runbooks).
@@ -55,8 +58,8 @@ Restaurant is still **in-process** on Day 11 (extracted as its own service on Da
 - 2PC across Ordering and Payment — rejected (ADR-029).
 
 ## References
-- ADR-029 (base saga), ADR-028 (Outbox/Inbox), ADR-023 (async payment / reconciliation hole)
-- Implementation: `RefundSagaOrchestrator`, `RefundRequestedConsumer`, `PaymentService.RefundAsync`, `RestaurantAcceptanceOptions`
+- ADR-029 (base saga), ADR-028 (Outbox/Inbox), ADR-023 (async payment / reconciliation hole), ADR-062 (Service decision)
+- Implementation: `RefundSagaOrchestrator`, `RefundRequestedConsumer`, `PaymentService.RefundAsync`, Payment `OutboxMessage` / `OutboxRelay`, `RestaurantAcceptanceOptions`
 
 ## Revisit when
 - Restaurant is extracted (Day 12): move AcceptMode into Restaurant.Api on `order-confirmed`. **Done — ADR-062** (`DecisionMode=Service`).

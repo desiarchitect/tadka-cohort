@@ -75,22 +75,32 @@ public sealed class PaymentResultsConsumer(
         var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
 
         // Inbox dedup (ADR-028): skip only if already fully processed.
-        // IMPORTANT: stamp the inbox row AFTER the side effect (or in the same unit of work as it).
-        // Inbox-before-work + crash = "processed" with no confirm/cancel — silent data loss.
-        // Handlers are idempotent, so redelivery after a crash mid-handler is safe.
         if (await db.Set<InboxMessage>().AnyAsync(i => i.MessageId == msg.MessageId, ct))
         {
             logger.LogInformation("payment-results {MessageId} already processed — skipping (idempotent).", msg.MessageId);
             return;
         }
 
-        var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
-        if (string.Equals(msg.Status, "Completed", StringComparison.OrdinalIgnoreCase))
-            await mediator.Publish(new PaymentCompletedEvent(msg.OrderId, msg.GatewayReference ?? ""), ct);
-        else
-            await mediator.Publish(new PaymentFailedEvent(msg.OrderId, msg.FailureReason ?? "Payment failed"), ct);
+        // ONE transaction: domain reaction (confirm/cancel + outbox) + inbox stamp.
+        // Handlers call SaveChanges on this same scoped DbContext; EF enrolls those flushes in the tx
+        // until Commit — so we never "confirm committed, inbox not yet" (or the reverse).
+        await using var tx = await db.Database.BeginTransactionAsync(ct);
+        try
+        {
+            var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+            if (string.Equals(msg.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+                await mediator.Publish(new PaymentCompletedEvent(msg.OrderId, msg.GatewayReference ?? ""), ct);
+            else
+                await mediator.Publish(new PaymentFailedEvent(msg.OrderId, msg.FailureReason ?? "Payment failed"), ct);
 
-        db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
-        await db.SaveChangesAsync(ct);
+            db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
+            await db.SaveChangesAsync(ct);
+            await tx.CommitAsync(ct);
+        }
+        catch
+        {
+            await tx.RollbackAsync(ct);
+            throw; // no Kafka commit → redelivery; handlers are idempotent
+        }
     }
 }
