@@ -36,6 +36,8 @@ if (kafkaOptions?.Enabled == true)
 {
     builder.Services.AddSingleton<KafkaProducer>();
     builder.Services.AddHostedService<OrderPlacedConsumer>();
+    // ADR-045: compensating refund when restaurant rejects an already-paid order.
+    builder.Services.AddHostedService<RefundRequestedConsumer>();
 }
 
 // Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token with the

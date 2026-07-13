@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using Microsoft.Extensions.DependencyInjection;
+using Tadka.Payment.Api.Domain;
 
 namespace Tadka.Payment.Api.Tests;
 
@@ -88,5 +90,29 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         { Content = JsonContent.Create(new { orderId = Guid.NewGuid(), amount = 100m, currency = "INR" }) };
         req.Headers.Add("X-Test-NoAuth", "true");
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, (await client.SendAsync(req)).StatusCode);
+    }
+
+    [Fact]
+    public async Task RefundAsync_after_completed_charge_is_idempotent()
+    {
+        // ADR-045: compensating refund; second call must not double-refund.
+        var client = _factory.CreateClient();
+        var orderId = Guid.NewGuid();
+        var charge = await (await client.PostAsJsonAsync("/payments/charge",
+            new { orderId, amount = 299.00m, currency = "INR" })).Content.ReadFromJsonAsync<ChargeResponse>();
+        Assert.Equal("Completed", charge!.Status);
+
+        using var scope = _factory.Services.CreateScope();
+        var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
+
+        var first = await payments.RefundAsync(orderId, charge.GatewayReference);
+        var second = await payments.RefundAsync(orderId, charge.GatewayReference);
+
+        Assert.True(first.Found);
+        Assert.Equal(PaymentStatus.Refunded, first.Status);
+        Assert.Equal(PaymentStatus.Refunded, second.Status);
+
+        var got = await client.GetFromJsonAsync<ChargeResponse>($"/payments/{orderId}");
+        Assert.Equal("Refunded", got!.Status);
     }
 }

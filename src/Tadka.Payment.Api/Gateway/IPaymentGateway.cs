@@ -11,6 +11,12 @@ public interface IPaymentGateway
 {
     /// <summary>Charges the customer. Returns a gateway reference on success; throws on decline.</summary>
     Task<string> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Refunds a previously completed charge (ADR-045 compensation). Returns a refund reference.
+    /// Idempotent at the gateway layer in production; our Fake always succeeds for demo reliability.
+    /// </summary>
+    Task<string> RefundAsync(Guid orderId, string? originalGatewayReference, Money amount, CancellationToken cancellationToken);
 }
 
 /// <summary>The gateway rejected the charge (insufficient funds, fraud hold, etc.) — a BUSINESS outcome.
