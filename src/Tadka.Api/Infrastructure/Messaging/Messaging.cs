@@ -23,8 +23,9 @@ public sealed record AddressSnapshot(
 public sealed record RestaurantSnapshotMessage(
     Guid MessageId, Guid RestaurantId, string Name, bool IsActive, AddressSnapshot Address, List<MenuItemSnapshot> Menu);
 
-/// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.</summary>
-public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency);
+/// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.
+/// <see cref="Version"/> is the envelope version (ADR-050): schema evolution is additive-only.</summary>
+public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, int Version = 1);
 
 /// <summary>Published by Ordering (via the Outbox) when an order auto-confirms after payment — carries what
 /// the Delivery service needs (no back-call, ADR-008). Consumed by the Delivery service.</summary>

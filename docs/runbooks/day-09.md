@@ -78,8 +78,49 @@ curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]
 
 ```bash
 grep -rn "FakePaymentGateway\|PaymentDbContext\|Domain.Payments\|IPaymentClient" src/Tadka.Api    # nothing — Ordering talks to Payment ONLY via Kafka events
-dotnet test    # 28/28 — monolith 24 (incl. 3 architecture/boundary) + Payment service 4. (Kafka off in tests.)
+dotnet test    # 33/33 — monolith 24 (incl. 3 architecture/boundary) + Payment service 9 (incl. 5 PoisonMessageTracker). (Kafka off in tests.)
 ```
+
+## 7. Poison messages: silent loss vs quarantine (ADR-050/051)
+
+A message that fails processing is NOT retried forever by a plain manual-commit loop —
+`Consumer.Consume()` advances the fetch position on every call regardless of commit, so a failed
+message is silently, permanently skipped the moment a LATER message's offset commits. Verified
+live, not assumed. The fix: bounded retry via explicit `Seek()`, then a Dead Letter Queue.
+
+```bash
+pwsh scripts/inject-poison.ps1 -Mode Malformed             # syntactically invalid JSON
+LAG() { docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group "$1"; }
+LAG tadka-payment | grep order-placed                       # LAG 1 while retrying, then 0 once it's DLQ'd
+docker exec tadka-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic order-placed.dlq --from-beginning --timeout-ms 5000
+```
+Payment log shows `will retry` x2 (real redelivery via `Seek`), then `failed 3x — routing to DLQ, partition unblocked`. Place a healthy order right after — it settles normally, proving the partition is genuinely unblocked, not just skipped past.
+
+Once the root cause is fixed, replay the DLQ:
+```bash
+pwsh scripts/replay-dlq.ps1
+```
+
+**Additive-only vs a breaking rename (ADR-050) — different failure shapes, both worth seeing:**
+```bash
+pwsh scripts/inject-poison.ps1 -Mode SafeExtraField          # an EXTRA unknown field — processes fine, no code change needed
+pwsh scripts/inject-poison.ps1 -Mode MissingRequiredField    # Currency renamed to CurrencyCode — ALSO processes fine, NO error, NO DLQ entry
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"OrderId\", currency FROM payment.payments ORDER BY \"CreatedAt\" DESC LIMIT 1;"   # currency = INR (a DB column default silently filled the gap)
+```
+The rename case is the sharpest lesson of the day: it throws nothing and DLQs nothing. Schema
+discipline (never rename/remove a field) is a code-review-time rule — no runtime mechanism here
+can catch it for you.
+
+## 8. Full offset reset + replay — the Inbox dedup, the real test (ADR-028)
+
+```bash
+# stop the Payment service, wait ~10s for the consumer group to go inactive, then:
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT count(*) FROM payment.payments;"   # note this BEFORE restarting
+dotnet run --project src/Tadka.Payment.Api    # reprocesses every message from offset 0
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"OrderId\", count(*) FROM payment.payments GROUP BY \"OrderId\" HAVING count(*) > 1;"   # 0 rows
+```
+The payments count is unchanged after a FULL replay of the entire topic — the Inbox (ADR-028) dedups every already-processed message, no matter how far back the replay goes.
 
 ## ✅ Done when
 - [ ] `docker compose ps` → `tadka-kafka` healthy; Kafka UI at :8090 shows `order-placed` + `payment-results`.
@@ -87,7 +128,10 @@ dotnet test    # 28/28 — monolith 24 (incl. 3 architecture/boundary) + Payment
 - [ ] **Catch-up:** Payment down → order pending + **lag > 0**; restart → order `Confirmed` + **lag 0** (nothing lost).
 - [ ] No `order_id` has more than one payment (idempotent); a `Failing` gateway → order `Cancelled` (saga compensation).
 - [ ] `grep` over the monolith finds no payment internals / no `IPaymentClient` (Kafka-only).
-- [ ] `dotnet test` → **28/28**.
+- [ ] `dotnet test` → **33/33**.
+- [ ] `inject-poison.ps1 -Mode Malformed`: 2x retry then routed to `order-placed.dlq`; a healthy order right after settles normally.
+- [ ] `inject-poison.ps1 -Mode MissingRequiredField`: processes with NO error and NO DLQ entry — the payment's currency silently defaults to `INR`.
+- [ ] Full offset reset + replay: payments count unchanged, zero duplicate `OrderId` rows.
 
 ## Troubleshooting
 - **`tadka-kafka` name conflict / stuck "starting":** `docker rm -f tadka-kafka tadka-kafka-ui` then `docker compose up -d kafka kafka-ui`.
