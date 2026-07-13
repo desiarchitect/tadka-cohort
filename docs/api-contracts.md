@@ -1,10 +1,19 @@
 # Tadka API Contracts
 
-> **This is a contract-first document.** It is designed and agreed *before* the controllers are written — the code implements this contract, not the other way around. Today these are in-process calls in one app; at extraction (Week 4+) the same contracts become the **network boundaries** between services. Design them as if a mobile team and a partner service already depend on them, because soon they will.
+> **This is a contract-first document.** Paths and shapes are stable; **ownership moves** as services extract (see [DAY-EVOLUTION.md](runbooks/DAY-EVOLUTION.md)).
+>
+> **As of Day 12+ (`main` / `day-16`):** public entry is the **gateway** `:8080`. Direct service ports remain for break kits.
 
-All endpoints live in ONE application: `Tadka.Api`, under the **`/api/v1`** prefix (see ADR-010 for the versioning decision). Grouped by domain for future service extraction.
+| Surface | Owner (Day 12+) | Base (direct) | Via gateway |
+|---------|-----------------|---------------|-------------|
+| Auth, Orders, Users, Coupons, Flags | Ordering (`Tadka.Api`) | `:5224` | `/api/v1/**` |
+| Restaurants + menus | Restaurant.Api | `:5260` | `/api/v1/restaurants/**` |
+| Payments | Payment.Api | `:5240` | `/api/v1/payments/**` |
+| Deliveries | Delivery.Api | `:5250` | `/api/v1/deliveries/**` |
 
-Base URL: `https://localhost:7036` (dev) or `http://localhost:5224`
+All public paths use **`/api/v1`** (ADR-010). Errors: **`application/problem+json`** (ADR-006). Money: `{ amount, currency }`.
+
+Base URL (dev): gateway `http://localhost:8080` · Ordering direct `http://localhost:5224`
 
 ---
 

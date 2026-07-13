@@ -44,6 +44,7 @@ if (kafka?.Enabled == true)
 // Per-service JWT validation (ADR-031, defense in depth — same key as the monolith).
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
+    options.MapInboundClaims = false;
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true, ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "tadka",
@@ -66,17 +67,30 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference(o => { o.Title = "Tadka Delivery Service"; o.Theme = ScalarTheme.DeepSpace; });
 }
 
+app.UseTadkaProblemDetails();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "delivery" })); // public
+app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "delivery" }));
+app.MapGet("/health/ready", async (DeliveryDbContext db) =>
+{
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT 1");
+        return Results.Ok(new { status = "Ready", service = "delivery", database = "Connected" });
+    }
+    catch
+    {
+        return ProblemDetailsExtensions.ServiceUnavailableProblem("Delivery database is unreachable.");
+    }
+});
 
 // The assigned rider posts their live position → Redis GEOADD (ADR-034).
 app.MapPut("/api/v1/deliveries/{orderId:guid}/location", async (Guid orderId, LocationRequest req, DeliveryDbContext db, ILocationStore loc) =>
 {
     var assignment = await db.Assignments.AsNoTracking().FirstOrDefaultAsync(a => a.OrderId == orderId);
-    if (assignment is null) return Results.NotFound();
-    if (!loc.Enabled) return Results.StatusCode(503); // Redis not configured
+    if (assignment is null) return ProblemDetailsExtensions.NotFoundProblem("Delivery assignment", orderId);
+    if (!loc.Enabled) return ProblemDetailsExtensions.ServiceUnavailableProblem("Live location requires Redis (ADR-034).");
     await loc.SetAsync(assignment.AgentId, req.Latitude, req.Longitude);
     return Results.NoContent();
 }).RequireAuthorization();
@@ -85,7 +99,7 @@ app.MapPut("/api/v1/deliveries/{orderId:guid}/location", async (Guid orderId, Lo
 app.MapGet("/api/v1/deliveries/{orderId:guid}/track", async (Guid orderId, DeliveryDbContext db, ILocationStore loc) =>
 {
     var a = await db.Assignments.AsNoTracking().FirstOrDefaultAsync(x => x.OrderId == orderId);
-    if (a is null) return Results.NotFound();
+    if (a is null) return ProblemDetailsExtensions.NotFoundProblem("Delivery assignment", orderId);
     var agent = await db.Agents.AsNoTracking().FirstOrDefaultAsync(x => x.Id == a.AgentId);
     var pos = await loc.GetAsync(a.AgentId);
     return Results.Ok(new TrackResponse(orderId, a.AgentId, agent?.Name ?? "", a.Status.ToString(),

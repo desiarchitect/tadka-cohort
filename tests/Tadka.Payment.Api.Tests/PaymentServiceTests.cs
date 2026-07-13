@@ -21,7 +21,7 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         var client = _factory.CreateClient();
         var orderId = Guid.NewGuid();
 
-        var resp = await client.PostAsJsonAsync("/payments/charge", new { orderId, amount = 299.00m, currency = "INR" });
+        var resp = await client.PostAsJsonAsync("/api/v1/payments/charge", new { orderId, amount = 299.00m, currency = "INR" });
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChargeResponse>();
 
@@ -35,7 +35,7 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         var client = _factory.WithWebHostBuilder(b => b.UseSetting("Payment:Gateway:Behavior", "Failing")).CreateClient();
         var orderId = Guid.NewGuid();
 
-        var resp = await client.PostAsJsonAsync("/payments/charge", new { orderId, amount = 299.00m, currency = "INR" });
+        var resp = await client.PostAsJsonAsync("/api/v1/payments/charge", new { orderId, amount = 299.00m, currency = "INR" });
         resp.EnsureSuccessStatusCode(); // a DECLINE is still HTTP 200 — a business outcome, not a transport error
         var body = await resp.Content.ReadFromJsonAsync<ChargeResponse>();
 
@@ -54,7 +54,7 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         var orderId = Guid.NewGuid();
 
         var start = DateTime.UtcNow;
-        var resp = await client.PostAsJsonAsync("/payments/charge", new { orderId, amount = 299.00m, currency = "INR" });
+        var resp = await client.PostAsJsonAsync("/api/v1/payments/charge", new { orderId, amount = 299.00m, currency = "INR" });
         var elapsed = DateTime.UtcNow - start;
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<ChargeResponse>();
@@ -70,15 +70,15 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         var orderId = Guid.NewGuid();
         var payload = new { orderId, amount = 299.00m, currency = "INR" };
 
-        var first = await (await client.PostAsJsonAsync("/payments/charge", payload)).Content.ReadFromJsonAsync<ChargeResponse>();
-        var second = await (await client.PostAsJsonAsync("/payments/charge", payload)).Content.ReadFromJsonAsync<ChargeResponse>();
+        var first = await (await client.PostAsJsonAsync("/api/v1/payments/charge", payload)).Content.ReadFromJsonAsync<ChargeResponse>();
+        var second = await (await client.PostAsJsonAsync("/api/v1/payments/charge", payload)).Content.ReadFromJsonAsync<ChargeResponse>();
 
         Assert.Equal("Completed", first!.Status);
         Assert.Equal("Completed", second!.Status);
         Assert.Equal(first.GatewayReference, second.GatewayReference); // same charge, not a second one
 
         // GET confirms a single record exists for the order
-        var got = await client.GetFromJsonAsync<ChargeResponse>($"/payments/{orderId}");
+        var got = await client.GetFromJsonAsync<ChargeResponse>($"/api/v1/payments/{orderId}");
         Assert.Equal(first.GatewayReference, got!.GatewayReference);
     }
 
@@ -86,7 +86,7 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
     public async Task Charge_without_a_token_is_rejected_401()  // per-service validation (ADR-031, defense in depth)
     {
         var client = _factory.CreateClient();
-        var req = new HttpRequestMessage(HttpMethod.Post, "/payments/charge")
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/v1/payments/charge")
         { Content = JsonContent.Create(new { orderId = Guid.NewGuid(), amount = 100m, currency = "INR" }) };
         req.Headers.Add("X-Test-NoAuth", "true");
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, (await client.SendAsync(req)).StatusCode);
@@ -98,7 +98,7 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         // ADR-045: compensating refund; second call must not double-refund.
         var client = _factory.CreateClient();
         var orderId = Guid.NewGuid();
-        var charge = await (await client.PostAsJsonAsync("/payments/charge",
+        var charge = await (await client.PostAsJsonAsync("/api/v1/payments/charge",
             new { orderId, amount = 299.00m, currency = "INR" })).Content.ReadFromJsonAsync<ChargeResponse>();
         Assert.Equal("Completed", charge!.Status);
 
@@ -112,7 +112,7 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         Assert.Equal(PaymentStatus.Refunded, first.Status);
         Assert.Equal(PaymentStatus.Refunded, second.Status);
 
-        var got = await client.GetFromJsonAsync<ChargeResponse>($"/payments/{orderId}");
+        var got = await client.GetFromJsonAsync<ChargeResponse>($"/api/v1/payments/{orderId}");
         Assert.Equal("Refunded", got!.Status);
     }
 }

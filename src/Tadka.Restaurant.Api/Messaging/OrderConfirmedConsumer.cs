@@ -83,8 +83,13 @@ public sealed class OrderConfirmedConsumer(
 
         var reject = string.Equals(restaurantOptions.CurrentValue.AcceptMode, "Reject", StringComparison.OrdinalIgnoreCase);
         var status = reject ? "Rejected" : "Accepted";
-        var reason = reject ? "Restaurant:AcceptMode=Reject (demo)" : null;
+        var reason = reject
+            ? (msg.RestaurantId == default
+                ? "Restaurant:AcceptMode=Reject (demo)"
+                : $"Restaurant:AcceptMode=Reject for restaurant {msg.RestaurantId} (demo)")
+            : null;
 
+        // Decision + outbox + inbox in ONE SaveChanges (ADR-028) — never stamp inbox before the decision lands.
         db.OrderDecisions.Add(new OrderDecision
         {
             OrderId = msg.OrderId,
@@ -107,6 +112,7 @@ public sealed class OrderConfirmedConsumer(
         db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
         await db.SaveChangesAsync(ct);
 
-        logger.LogInformation("Restaurant {Status} order {OrderId}.", status, msg.OrderId);
+        logger.LogInformation("Restaurant {Status} order {OrderId} (restaurantId={RestaurantId}).",
+            status, msg.OrderId, msg.RestaurantId);
     }
 }

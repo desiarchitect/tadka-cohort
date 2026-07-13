@@ -35,7 +35,8 @@
                               └──────────────────┘
             └──────────────── Apache Kafka (async backbone) ───────────────┘
               order-placed · payment-results · order-confirmed · delivery-assigned · menu-updated
-              transactional Outbox/Inbox · saga choreography (ADR-027/028/029)
+              refund-requested · payment-refunded · restaurant-response
+              transactional Outbox/Inbox · saga choreography + compensation (ADR-027/028/029/045/062)
 
    Observability: OpenTelemetry → OTLP Collector → Jaeger (traces) + Prometheus
    (metrics) + Grafana (dashboards). One trace spans the whole saga (ADR-040/041).

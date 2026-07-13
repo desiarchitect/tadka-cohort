@@ -16,8 +16,10 @@ public static class Topics
     public const string RestaurantResponse = "restaurant-response"; // published
 }
 
-/// <summary>Consumed from Ordering when payment settled and order confirmed.</summary>
-public sealed record OrderConfirmedMessage(Guid MessageId, Guid OrderId, double Latitude, double Longitude);
+/// <summary>Consumed from Ordering when payment settled and order confirmed.
+/// <see cref="RestaurantId"/> is additive (ADR-050) — use for per-restaurant decisions when present.</summary>
+public sealed record OrderConfirmedMessage(
+    Guid MessageId, Guid OrderId, double Latitude, double Longitude, Guid RestaurantId = default);
 
 /// <summary>Restaurant accept/reject decision for the order saga (ADR-062).</summary>
 public sealed record RestaurantResponseMessage(

@@ -40,11 +40,15 @@ docker exec tadka-postgres psql -U tadka -d tadka -c 'SELECT "Name","PriceAmount
 ```
 
 ## Demo 4 — Restaurant service accept/reject (ADR-062, production multi-service path)
+
+See also **[decision-mode-matrix.md](decision-mode-matrix.md)**. Day 11 used **Inline** (Ordering decides). Day 12 earns **Service** (Restaurant.Api owns accept/reject). Same refund machinery either way — only the trigger moves.
+
 ```powershell
 # Ordering always confirms; Restaurant.Api decides on order-confirmed.
-# Terminal A (Restaurant.Api):  Restaurant__AcceptMode=Reject
-# Terminal B (Ordering):        Restaurant__DecisionMode=Service
-# Place an order → Confirmed briefly → restaurant-response Rejected → cancel + refund-requested
+# Terminal A (Restaurant.Api):  $env:Restaurant__AcceptMode="Reject"
+# Terminal B (Ordering):        $env:Restaurant__DecisionMode="Service"
+# Place an order → Confirmed → restaurant-response Rejected → cancel + refund-requested
+# Stuck Confirmed? Restaurant.Api/Kafka down — see decision-mode-matrix.md runbook.
 # With Saga__Mode=Orchestration, query:
 #   SELECT * FROM ordering.saga_instances ORDER BY "StartedAt" DESC LIMIT 5;
 ```

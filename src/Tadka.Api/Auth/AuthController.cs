@@ -18,7 +18,13 @@ public class AuthController(TadkaDbContext db, TokenService tokens, IPasswordHas
     {
         var email = request.Email.Trim().ToLowerInvariant();
         if (await db.Set<User>().AnyAsync(u => u.Email == email))
-            return Conflict(new { error = "Email already registered." });
+            return Conflict(new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Conflict",
+                Detail = "Email already registered.",
+                Type = "https://tools.ietf.org/html/rfc9110#section-15.5.10"
+            });
 
         var user = new User { Name = request.Name, Email = email, Phone = request.Phone, Role = UserRole.Customer };
         user.PasswordHash = hasher.HashPassword(user, request.Password); // never store plaintext (ADR-030/032)
@@ -35,7 +41,13 @@ public class AuthController(TadkaDbContext db, TokenService tokens, IPasswordHas
         var user = await db.Set<User>().FirstOrDefaultAsync(u => u.Email == email);
         // Same response whether the user is missing or the password is wrong (don't leak which).
         if (user is null || hasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
-            return Unauthorized(new { error = "Invalid credentials." });
+            return Unauthorized(new ProblemDetails
+            {
+                Status = StatusCodes.Status401Unauthorized,
+                Title = "Unauthorized",
+                Detail = "Invalid credentials.",
+                Type = "https://tools.ietf.org/html/rfc7235#section-3.1"
+            });
 
         return Ok(tokens.CreateAccessToken(user));
     }

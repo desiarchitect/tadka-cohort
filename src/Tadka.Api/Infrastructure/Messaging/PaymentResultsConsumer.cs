@@ -74,19 +74,23 @@ public sealed class PaymentResultsConsumer(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
 
-        // Inbox dedup (ADR-028): if we've already processed this message-id, skip (idempotent consumer).
+        // Inbox dedup (ADR-028): skip only if already fully processed.
+        // IMPORTANT: stamp the inbox row AFTER the side effect (or in the same unit of work as it).
+        // Inbox-before-work + crash = "processed" with no confirm/cancel — silent data loss.
+        // Handlers are idempotent, so redelivery after a crash mid-handler is safe.
         if (await db.Set<InboxMessage>().AnyAsync(i => i.MessageId == msg.MessageId, ct))
         {
             logger.LogInformation("payment-results {MessageId} already processed — skipping (idempotent).", msg.MessageId);
             return;
         }
-        db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
-        await db.SaveChangesAsync(ct);
 
         var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
         if (string.Equals(msg.Status, "Completed", StringComparison.OrdinalIgnoreCase))
             await mediator.Publish(new PaymentCompletedEvent(msg.OrderId, msg.GatewayReference ?? ""), ct);
         else
             await mediator.Publish(new PaymentFailedEvent(msg.OrderId, msg.FailureReason ?? "Payment failed"), ct);
+
+        db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
+        await db.SaveChangesAsync(ct);
     }
 }

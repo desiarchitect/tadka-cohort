@@ -21,7 +21,10 @@ dotnet run --project src/Tadka.Api
 ```
 ```bash
 curl http://localhost:5240/health        # {"status":"Healthy","service":"payment"}
+curl http://localhost:5240/health/ready  # DB reachable
 curl http://localhost:5224/health        # Healthy
+# Canonical payment path (same /api/v1 grammar as Ordering). Short /payments/* also works (dual-route).
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5240/api/v1/payments/00000000-0000-0000-0000-000000000001
 ```
 Each app migrates its **own** database on startup. Two databases now:
 ```bash

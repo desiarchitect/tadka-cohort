@@ -70,23 +70,29 @@ public sealed class RestaurantResponseConsumer(
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
 
+        // Inbox AFTER side effects (same discipline as PaymentResultsConsumer / Payment OrderPlacedConsumer).
         if (await db.Set<InboxMessage>().AnyAsync(i => i.MessageId == msg.MessageId, ct))
         {
             logger.LogInformation("restaurant-response {MessageId} already processed — skip.", msg.MessageId);
             return;
         }
-        db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
-        await db.SaveChangesAsync(ct);
 
         if (!string.Equals(msg.Status, "Rejected", StringComparison.OrdinalIgnoreCase))
         {
             logger.LogInformation("Restaurant accepted order {OrderId}.", msg.OrderId);
+            db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
+            await db.SaveChangesAsync(ct);
             return;
         }
 
         var orders = scope.ServiceProvider.GetRequiredService<IOrderRepository>();
         var order = await orders.GetByIdAsync(msg.OrderId);
-        if (order is null) return;
+        if (order is null)
+        {
+            // Don't inbox-stamp unknowns — redelivery may race creation; commit offset only after effect.
+            logger.LogWarning("restaurant-response for unknown order {OrderId} — skip without inbox.", msg.OrderId);
+            return;
+        }
 
         var refundSaga = scope.ServiceProvider.GetRequiredService<RefundSagaOrchestrator>();
         await refundSaga.RejectAndCompensateAsync(
@@ -94,5 +100,12 @@ public sealed class RestaurantResponseConsumer(
             msg.GatewayReference,
             restaurantOptions.Value.RefundOnReject,
             ct);
+
+        // Saga SaveChanges already ran; stamp inbox on a fresh write (same DbContext instance after save).
+        if (!await db.Set<InboxMessage>().AnyAsync(i => i.MessageId == msg.MessageId, ct))
+        {
+            db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
+            await db.SaveChangesAsync(ct);
+        }
     }
 }

@@ -72,7 +72,8 @@ public sealed class RefundSagaOrchestrator(
             {
                 Topic = Topics.RefundRequested,
                 Key = order.Id.ToString(),
-                Payload = JsonSerializer.Serialize(refundMessage)
+                Payload = JsonSerializer.Serialize(refundMessage),
+                TraceParent = Tadka.Telemetry.TadkaTrace.CurrentTraceParent() // keep compensation on the order's trace (ADR-041)
             });
         }
         else

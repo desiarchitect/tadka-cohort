@@ -38,7 +38,9 @@ app.UseStaticFiles();
 
 // The gateway is a THIN edge: routing + rate-limit only. It forwards Authorization as-is; each service
 // still validates the JWT itself (ADR-031, defense in depth — the gateway is not a trust boundary).
+// Liveness only at the edge (no shared DB). Downstream readiness is per-service /health/ready.
 app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "gateway" }));
+app.MapGet("/health/ready", () => Results.Ok(new { status = "Ready", service = "gateway" }));
 app.MapReverseProxy();
 
 app.Run();

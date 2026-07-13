@@ -45,6 +45,8 @@ if (kafkaOptions?.Enabled == true)
 // call to the Payment service's HTTP endpoints needs a valid token.
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
+    // Keep claim names ("role"/"sub") — same as Ordering/Restaurant (ADR-031).
+    options.MapInboundClaims = false;
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true, ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "tadka",
@@ -77,28 +79,52 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+app.UseTadkaProblemDetails();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "payment" })); // public
+// Liveness (process up) vs readiness (can serve — DB reachable). K8s probes map to these two.
+app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "payment" }));
+app.MapGet("/health/ready", async (PaymentDbContext db) =>
+{
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT 1");
+        return Results.Ok(new { status = "Ready", service = "payment", database = "Connected" });
+    }
+    catch
+    {
+        return ProblemDetailsExtensions.ServiceUnavailableProblem("Payment database is unreachable.");
+    }
+});
 
-// POST /payments/charge — idempotent by orderId (ADR-025). A decline/timeout is a BUSINESS outcome
-// (HTTP 200 with Status=Failed); only a DOWN service makes the caller's HTTP call throw.
-app.MapPost("/payments/charge", async (ChargeRequest request, PaymentService payments, CancellationToken ct) =>
+// Canonical public path (ADR-010): /api/v1/payments/** — same grammar as Ordering/Restaurant/Delivery.
+// Legacy /payments/** kept as dual-route expand (ADR-038 style) so Day-8 direct clients still work
+// during the gateway transition; contract step later drops the short path.
+async Task<IResult> Charge(ChargeRequest request, PaymentService payments, CancellationToken ct)
 {
     var outcome = await payments.ChargeAsync(
-        request.OrderId, new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!), ct, request.CardNumber);
+        request.OrderId,
+        new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!),
+        ct,
+        request.CardNumber);
+    // Decline/timeout is a BUSINESS outcome (HTTP 200 + Status=Failed); only a DOWN service throws.
     return Results.Ok(new ChargeResponse(request.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason));
-}).RequireAuthorization();
+}
 
-// GET /payments/{orderId} — query a payment's status (request/reply stays HTTP even after Day-9 Kafka).
-app.MapGet("/payments/{orderId:guid}", async (Guid orderId, PaymentDbContext db) =>
+async Task<IResult> GetPayment(Guid orderId, PaymentDbContext db)
 {
     var p = await db.Payments.AsNoTracking().FirstOrDefaultAsync(x => x.OrderId == orderId);
     return p is null
-        ? Results.NotFound()
+        ? ProblemDetailsExtensions.NotFoundProblem("Payment", orderId)
         : Results.Ok(new ChargeResponse(p.OrderId, p.Status.ToString(), p.GatewayReference, p.FailureReason));
-}).RequireAuthorization();
+}
+
+app.MapPost("/api/v1/payments/charge", Charge).RequireAuthorization();
+app.MapGet("/api/v1/payments/{orderId:guid}", GetPayment).RequireAuthorization();
+// Dual-write route window (Day 8 → gateway era): same handlers, short path.
+app.MapPost("/payments/charge", Charge).RequireAuthorization();
+app.MapGet("/payments/{orderId:guid}", GetPayment).RequireAuthorization();
 
 app.Run();
 

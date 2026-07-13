@@ -65,11 +65,13 @@ public sealed class PaymentRefundedConsumer(
             logger.LogInformation("payment-refunded {MessageId} already processed — skipping (idempotent).", msg.MessageId);
             return;
         }
-        db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
-        await db.SaveChangesAsync(ct);
 
+        // Side effect first (SSE surface), then inbox — crash mid-way redelivers (publish is at-most-once ok).
         await trackingBus.PublishAsync(
             new OrderTrackingEvent(msg.OrderId, "Cancelled", "Your refund has been processed.", DateTime.UtcNow), ct);
+
+        db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
+        await db.SaveChangesAsync(ct);
         logger.LogInformation("Order {OrderId} refund settled ({Status}).", msg.OrderId, msg.Status);
     }
 }

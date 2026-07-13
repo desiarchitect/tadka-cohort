@@ -29,8 +29,10 @@ public sealed record RestaurantSnapshotMessage(
 public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, int Version = 1);
 
 /// <summary>Published by Ordering (via the Outbox) when an order auto-confirms after payment — carries what
-/// the Delivery service needs (no back-call, ADR-008). Consumed by the Delivery service.</summary>
-public sealed record OrderConfirmedMessage(Guid MessageId, Guid OrderId, double Latitude, double Longitude);
+/// consumers need without a back-call (ADR-008). Consumed by Delivery (rider) and Restaurant (accept/reject, ADR-062).
+/// <see cref="RestaurantId"/> is additive (ADR-050): older producers omit it; consumers treat default as unknown.</summary>
+public sealed record OrderConfirmedMessage(
+    Guid MessageId, Guid OrderId, double Latitude, double Longitude, Guid RestaurantId = default);
 
 /// <summary>Published by the Payment service after it settles a charge. Consumed by Ordering (the Saga reaction).</summary>
 public sealed record PaymentResultMessage(Guid MessageId, Guid OrderId, string Status, string? GatewayReference, string? FailureReason);

@@ -8,7 +8,7 @@ Tadka starts as a .NET 10 monolith and evolves into **4 services + an API gatewa
 
 ## 🏃 Run it yourself — Student Runbooks
 
-**New here? Start with [`docs/runbooks/`](docs/runbooks/README.md)** — a copy-paste guide **per day (Day 1 → Day 7)**: how to start the app and infra, every command to run, the API requests to try (with expected responses), and how to verify that day's demo and code actually work. Each day is a git branch (`git checkout day-0N`); the runbooks live on the latest branch (`day-07`).
+**New here? Start with [`docs/runbooks/`](docs/runbooks/README.md)** — copy-paste guides **per day**. Full platform: `git checkout main` (or `day-16`). Confused why Day 6 ≠ Day 12? Read **[`docs/runbooks/DAY-EVOLUTION.md`](docs/runbooks/DAY-EVOLUTION.md)**. Smoke: `./scripts/cohort-smoke.ps1`.
 
 ## Architecture Evolution
 

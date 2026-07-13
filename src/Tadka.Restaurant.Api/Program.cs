@@ -77,10 +77,23 @@ if (app.Environment.IsDevelopment())
     app.MapScalarApiReference(o => { o.Title = "Tadka Restaurant Service"; o.Theme = ScalarTheme.DeepSpace; });
 }
 
+app.UseTadkaProblemDetails();
 app.UseAuthentication();
 app.UseAuthorization();
 
-app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "restaurant" })); // public
+app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "restaurant" }));
+app.MapGet("/health/ready", async (RestaurantDbContext db) =>
+{
+    try
+    {
+        await db.Database.ExecuteSqlRawAsync("SELECT 1");
+        return Results.Ok(new { status = "Ready", service = "restaurant", database = "Connected" });
+    }
+    catch
+    {
+        return ProblemDetailsExtensions.ServiceUnavailableProblem("Restaurant database is unreachable.");
+    }
+});
 app.MapControllers();
 
 app.Run();

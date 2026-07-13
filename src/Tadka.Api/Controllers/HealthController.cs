@@ -4,29 +4,28 @@ using Tadka.Api.Data;
 
 namespace Tadka.Api.Controllers;
 
+/// <summary>
+/// Liveness + readiness (same contract as satellite services).
+/// <c>GET /health</c> — process up. <c>GET /health/ready</c> — DB reachable (k8s readiness probe).
+/// </summary>
 [ApiController]
-[Route("[controller]")]
-public class HealthController : ControllerBase
+public class HealthController(TadkaDbContext dbContext) : ControllerBase
 {
-    private readonly TadkaDbContext _dbContext;
+    [HttpGet("/health")]
+    public IActionResult Live() => Ok(new { status = "Healthy", service = "ordering", timestamp = DateTime.UtcNow });
 
-    public HealthController(TadkaDbContext dbContext)
-    {
-        _dbContext = dbContext;
-    }
-
-    [HttpGet]
-    public async Task<IActionResult> Get()
+    [HttpGet("/health/ready")]
+    public async Task<IActionResult> Ready()
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try
         {
-            await _dbContext.Database.ExecuteSqlRawAsync("SELECT 1");
+            await dbContext.Database.ExecuteSqlRawAsync("SELECT 1");
             stopwatch.Stop();
-
             return Ok(new
             {
-                status = "Healthy",
+                status = "Ready",
+                service = "ordering",
                 database = "Connected",
                 responseTime = $"{stopwatch.ElapsedMilliseconds}ms",
                 timestamp = DateTime.UtcNow
@@ -35,12 +34,12 @@ public class HealthController : ControllerBase
         catch
         {
             stopwatch.Stop();
-            return StatusCode(503, new
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new ProblemDetails
             {
-                status = "Unhealthy",
-                database = "Disconnected",
-                responseTime = $"{stopwatch.ElapsedMilliseconds}ms",
-                timestamp = DateTime.UtcNow
+                Status = StatusCodes.Status503ServiceUnavailable,
+                Title = "Service Unavailable",
+                Detail = "Ordering database is unreachable.",
+                Type = "https://tools.ietf.org/html/rfc7231#section-6.6.4"
             });
         }
     }
