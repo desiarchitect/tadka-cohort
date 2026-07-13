@@ -17,6 +17,13 @@ public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository ord
     /// <summary>
     /// Live order tracking via Server-Sent Events (ADR-020). Streams status changes pushed over the
     /// Redis pub/sub backplane until the client disconnects. One-way (server→client), plain HTTP.
+    ///
+    /// Day 6 reconnect-replay beat: if the client sends `Last-Event-ID` (standard SSE reconnect
+    /// header — browsers set it automatically; our fetch-based client sets it explicitly), missed
+    /// events still in the short recent-history buffer are replayed before live events resume.
+    /// This is a BUFFER, not durability — events older than the buffer's capacity/TTL are gone for
+    /// good. That limit is the point: true no-loss delivery is the transactional outbox (Week 5),
+    /// not a bigger buffer.
     /// </summary>
     [HttpGet("{id:guid}/events")]
     public async Task GetEvents(Guid id, CancellationToken ct)
@@ -31,20 +38,44 @@ public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository ord
         Response.ContentType = "text/event-stream";
         Response.Headers.CacheControl = "no-cache";
 
-        // Bridge the pub/sub callback to the SSE write loop via an in-memory channel.
-        var queue = Channel.CreateUnbounded<OrderTrackingEvent>();
+        // Subscribe FIRST, so any event published between "read the replay buffer" and "start
+        // draining the live queue" is captured (in the queue) rather than silently missed.
+        var queue = Channel.CreateUnbounded<SequencedTrackingEvent>();
         await using var subscription = await _bus.SubscribeAsync(
             id, e => { queue.Writer.TryWrite(e); return Task.CompletedTask; }, ct);
 
-        // Send the current status immediately, so a subscriber that joins between changes isn't blank.
-        var order = await _orders.GetByIdAsync(id);
-        if (order is not null)
-            await WriteEventAsync(new OrderTrackingEvent(id, order.Status.ToString(), $"Current status: {order.Status}.", DateTime.UtcNow), ct);
+        var lastEventId = Request.Headers["Last-Event-ID"].FirstOrDefault();
+        var replayedThrough = 0L;
+
+        if (long.TryParse(lastEventId, out var sinceSeq))
+        {
+            var missed = await _bus.GetEventsSinceAsync(id, sinceSeq, ct);
+            foreach (var sequenced in missed)
+            {
+                await WriteEventAsync(sequenced, ct);
+                replayedThrough = sequenced.Seq;
+            }
+        }
+        else
+        {
+            // No reconnect in progress — send the current status immediately so a fresh
+            // subscriber isn't blank while waiting for the next transition (seq 0: not
+            // replayable, always resent on a fresh connect).
+            var order = await _orders.GetByIdAsync(id);
+            if (order is not null)
+                await WriteEventAsync(new SequencedTrackingEvent(0,
+                    new OrderTrackingEvent(id, order.Status.ToString(), $"Current status: {order.Status}.", DateTime.UtcNow)), ct);
+        }
 
         try
         {
-            await foreach (var trackingEvent in queue.Reader.ReadAllAsync(ct))
-                await WriteEventAsync(trackingEvent, ct);
+            await foreach (var sequenced in queue.Reader.ReadAllAsync(ct))
+            {
+                // The live subscription started before the replay read, so an event already
+                // delivered by replay can also arrive here — skip anything not newer.
+                if (sequenced.Seq <= replayedThrough) continue;
+                await WriteEventAsync(sequenced, ct);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -52,9 +83,12 @@ public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository ord
         }
     }
 
-    private async Task WriteEventAsync(OrderTrackingEvent trackingEvent, CancellationToken ct)
+    private async Task WriteEventAsync(SequencedTrackingEvent sequenced, CancellationToken ct)
     {
-        await Response.WriteAsync($"event: {trackingEvent.Status}\ndata: {JsonSerializer.Serialize(trackingEvent, Json)}\n\n", ct);
+        var trackingEvent = sequenced.Event;
+        var idLine = sequenced.Seq > 0 ? $"id: {sequenced.Seq}\n" : "";
+        await Response.WriteAsync(
+            $"{idLine}event: {trackingEvent.Status}\ndata: {JsonSerializer.Serialize(trackingEvent, Json)}\n\n", ct);
         await Response.Body.FlushAsync(ct);
     }
 }
