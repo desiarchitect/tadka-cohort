@@ -7,6 +7,7 @@ public static class Topics
     public const string OrderPlacedDlq = "order-placed.dlq";
     public const string PaymentResults = "payment-results";
     public const string RefundRequested = "refund-requested"; // ← the restaurant rejected an already-paid order (ADR-045)
+    public const string RefundRequestedDlq = "refund-requested.dlq";
     public const string PaymentRefunded = "payment-refunded"; // → the compensating refund settled (ADR-045)
 }
 

@@ -22,6 +22,8 @@ public sealed class OrderConfirmedConsumer(
     IOptions<KafkaOptions> options,
     ILogger<OrderConfirmedConsumer> logger) : BackgroundService
 {
+    private readonly PoisonMessageTracker _poison = new();
+
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.Run(async () =>
     {
         var config = new ConsumerConfig
@@ -38,18 +40,23 @@ public sealed class OrderConfirmedConsumer(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            ConsumeResult<string, string>? cr = null;
             try
             {
-                var cr = consumer.Consume(TimeSpan.FromSeconds(1));
+                cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
                 using var activity = TadkaDiagnostics.ActivitySource.StartActivity(   // rejoin the trace (ADR-041)
                     $"consume {Topics.OrderConfirmed}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
                 await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr);
+                _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
             catch (ConsumeException ex) { logger.LogError(ex, "OrderConfirmedConsumer consume error."); }
-            catch (Exception ex) { logger.LogError(ex, "OrderConfirmedConsumer handler error — will reprocess (idempotent)."); }
+            catch (Exception ex) when (cr is not null)
+            {
+                await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
         }
 
         consumer.Close();
@@ -59,6 +66,24 @@ public sealed class OrderConfirmedConsumer(
         cr.Message.Headers is not null && cr.Message.Headers.TryGetLastBytes(TadkaTrace.TraceParentHeader, out var bytes)
             ? Encoding.UTF8.GetString(bytes)
             : null;
+
+    private async Task HandlePoisonAsync(IConsumer<string, string> consumer, ConsumeResult<string, string> cr, Exception ex, CancellationToken ct)
+    {
+        if (!_poison.RecordFailureAndShouldDlq(cr.TopicPartitionOffset))
+        {
+            logger.LogWarning(ex, "order-confirmed at {Offset} failed — will retry (idempotent).", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromMilliseconds(300), ct); } catch (OperationCanceledException) { }
+            return;
+        }
+
+        logger.LogError(ex, "order-confirmed at {Offset} failed {Attempts}x — routing to DLQ, partition unblocked.", cr.TopicPartitionOffset, _poison.MaxAttempts);
+        await producer.PublishAsync(Topics.OrderConfirmedDlq, cr.Message.Key,
+            new DlqMessage(Topics.OrderConfirmed, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+
+        consumer.Commit(cr);
+        _poison.Clear(cr.TopicPartitionOffset);
+    }
 
     private async Task HandleAsync(string value, CancellationToken ct)
     {

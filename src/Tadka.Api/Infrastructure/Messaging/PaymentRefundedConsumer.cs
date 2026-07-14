@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Text;
 using System.Text.Json;
 using Confluent.Kafka;
 using Microsoft.EntityFrameworkCore;
@@ -5,6 +7,7 @@ using Microsoft.Extensions.Options;
 using Tadka.Api.Data;
 using Tadka.Api.Data.Messaging;
 using Tadka.Api.Infrastructure.Realtime;
+using Tadka.Telemetry;
 
 namespace Tadka.Api.Infrastructure.Messaging;
 
@@ -17,9 +20,12 @@ namespace Tadka.Api.Infrastructure.Messaging;
 public sealed class PaymentRefundedConsumer(
     IServiceScopeFactory scopeFactory,
     IOrderTrackingBus trackingBus,
+    KafkaProducer producer,
     IOptions<KafkaOptions> options,
     ILogger<PaymentRefundedConsumer> logger) : BackgroundService
 {
+    private readonly PoisonMessageTracker _poison = new();
+
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.Run(async () =>
     {
         var config = new ConsumerConfig
@@ -36,21 +42,54 @@ public sealed class PaymentRefundedConsumer(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            ConsumeResult<string, string>? cr = null;
             try
             {
-                var cr = consumer.Consume(TimeSpan.FromSeconds(1));
+                cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
+
+                // Rejoin the order's trace (ADR-041): closes the compensation loop so the refund
+                // half of the saga shows up as a child span, not an orphan, in Jaeger.
+                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(
+                    $"consume {Topics.PaymentRefunded}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
 
                 await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr);
+                _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
             catch (ConsumeException ex) { logger.LogError(ex, "PaymentRefundedConsumer consume error."); }
-            catch (Exception ex) { logger.LogError(ex, "PaymentRefundedConsumer handler error."); }
+            catch (Exception ex) when (cr is not null)
+            {
+                await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
         }
 
         consumer.Close();
     }, stoppingToken);
+
+    private static string? ReadTraceParent(ConsumeResult<string, string> cr) =>
+        cr.Message.Headers is not null && cr.Message.Headers.TryGetLastBytes(TadkaTrace.TraceParentHeader, out var bytes)
+            ? Encoding.UTF8.GetString(bytes)
+            : null;
+
+    private async Task HandlePoisonAsync(IConsumer<string, string> consumer, ConsumeResult<string, string> cr, Exception ex, CancellationToken ct)
+    {
+        if (!_poison.RecordFailureAndShouldDlq(cr.TopicPartitionOffset))
+        {
+            logger.LogWarning(ex, "payment-refunded at {Offset} failed — will retry (idempotent).", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromMilliseconds(300), ct); } catch (OperationCanceledException) { }
+            return;
+        }
+
+        logger.LogError(ex, "payment-refunded at {Offset} failed {Attempts}x — routing to DLQ, partition unblocked.", cr.TopicPartitionOffset, _poison.MaxAttempts);
+        await producer.PublishAsync(Topics.PaymentRefundedDlq, cr.Message.Key,
+            new DlqMessage(Topics.PaymentRefunded, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+
+        consumer.Commit(cr);
+        _poison.Clear(cr.TopicPartitionOffset);
+    }
 
     private async Task HandleAsync(string value, CancellationToken ct)
     {

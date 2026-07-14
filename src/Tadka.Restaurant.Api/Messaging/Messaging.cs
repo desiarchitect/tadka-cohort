@@ -13,6 +13,7 @@ public static class Topics
     // (event-carried state transfer, ADR-037) so the consumer never has to call back (ADR-008).
     public const string MenuUpdated = "menu-updated";
     public const string OrderConfirmed = "order-confirmed";       // consumed
+    public const string OrderConfirmedDlq = "order-confirmed.dlq";
     public const string RestaurantResponse = "restaurant-response"; // published
 }
 
@@ -24,6 +25,11 @@ public sealed record OrderConfirmedMessage(
 /// <summary>Restaurant accept/reject decision for the order saga (ADR-062).</summary>
 public sealed record RestaurantResponseMessage(
     Guid MessageId, Guid OrderId, string Status, string? Reason, string? GatewayReference);
+
+/// <summary>A message that failed processing repeatedly is quarantined here instead of blocking the
+/// partition forever (ADR-051). <see cref="OriginalPayload"/> is the raw, unmodified JSON that failed, so an
+/// operator can inspect it and, once the root cause is fixed, replay it back onto the original topic.</summary>
+public sealed record DlqMessage(string OriginalTopic, string OriginalPayload, string Error, int Attempts, DateTimeOffset FailedAt);
 
 /// <summary>One menu item, as carried in the snapshot.</summary>
 public sealed record MenuItemSnapshot(
@@ -66,6 +72,11 @@ public sealed class KafkaProducer : IDisposable
             message.Headers = new Headers { { TadkaTrace.TraceParentHeader, Encoding.UTF8.GetBytes(traceParent) } };
         return _producer.ProduceAsync(topic, message, ct);
     }
+
+    /// <summary>Serialize + publish, injecting the ambient traceparent (ADR-041). Used outside the Outbox
+    /// path (e.g. DLQ routing, ADR-051) where there's no pre-serialized outbox row to carry a stored one.</summary>
+    public Task PublishAsync(string topic, string key, object payload, CancellationToken ct = default)
+        => PublishRawAsync(topic, key, JsonSerializer.Serialize(payload), TadkaTrace.CurrentTraceParent(), ct);
 
     public void Dispose() => _producer.Dispose();
 }

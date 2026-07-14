@@ -1,13 +1,14 @@
 using Confluent.Kafka;
 
-namespace Tadka.Payment.Api.Messaging;
+namespace Tadka.Telemetry;
 
 /// <summary>Tracks consecutive processing failures per (topic, partition, offset) so a poison message is
 /// retried a bounded number of times before being routed to the DLQ (ADR-051), instead of blocking the
 /// partition forever. Process-local: a consumer restart resets the count, so a message that failed twice
 /// before a restart gets <see cref="MaxAttempts"/> fresh tries again - an honest limitation for a
 /// single-process teaching deploy, not a hidden bug (the alternative, persisting attempt counts, is real
-/// production hardening out of scope here).</summary>
+/// production hardening out of scope here). Shared across every service's consumers (ADR-051) rather than
+/// duplicated per-service, since it has zero dependency on any service's own message contracts.</summary>
 public sealed class PoisonMessageTracker
 {
     private readonly Dictionary<TopicPartitionOffset, int> _attempts = new();

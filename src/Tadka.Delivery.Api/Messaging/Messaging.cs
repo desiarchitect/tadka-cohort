@@ -9,6 +9,7 @@ namespace Tadka.Delivery.Api.Messaging;
 public static class Topics
 {
     public const string OrderConfirmed = "order-confirmed";   // consumed: assign a rider
+    public const string OrderConfirmedDlq = "order-confirmed.dlq";
     public const string DeliveryAssigned = "delivery-assigned"; // produced: a rider took the order
 }
 
@@ -19,6 +20,11 @@ public sealed record OrderConfirmedMessage(
 
 /// <summary>Published when a rider is assigned (the 3rd participant's Saga reply).</summary>
 public sealed record DeliveryAssignedMessage(Guid MessageId, Guid OrderId, Guid AgentId, string AgentName);
+
+/// <summary>A message that failed processing repeatedly is quarantined here instead of blocking the
+/// partition forever (ADR-051). <see cref="OriginalPayload"/> is the raw, unmodified JSON that failed, so an
+/// operator can inspect it and, once the root cause is fixed, replay it back onto the original topic.</summary>
+public sealed record DlqMessage(string OriginalTopic, string OriginalPayload, string Error, int Attempts, DateTimeOffset FailedAt);
 
 public sealed class KafkaOptions
 {

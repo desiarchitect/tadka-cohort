@@ -13,9 +13,12 @@ namespace Tadka.Api.Infrastructure.Messaging;
 /// </summary>
 public sealed class RestaurantResponseConsumer(
     IServiceScopeFactory scopeFactory,
+    KafkaProducer producer,
     IOptions<KafkaOptions> options,
     ILogger<RestaurantResponseConsumer> logger) : BackgroundService
 {
+    private readonly PoisonMessageTracker _poison = new();
+
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.Run(async () =>
     {
         var config = new ConsumerConfig
@@ -32,9 +35,10 @@ public sealed class RestaurantResponseConsumer(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            ConsumeResult<string, string>? cr = null;
             try
             {
-                var cr = consumer.Consume(TimeSpan.FromSeconds(1));
+                cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
 
                 using var activity = TadkaDiagnostics.ActivitySource.StartActivity(
@@ -49,10 +53,14 @@ public sealed class RestaurantResponseConsumer(
                 }
 
                 consumer.Commit(cr);
+                _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
             catch (ConsumeException ex) { logger.LogError(ex, "RestaurantResponseConsumer consume error."); }
-            catch (Exception ex) { logger.LogError(ex, "RestaurantResponseConsumer handler error."); }
+            catch (Exception ex) when (cr is not null)
+            {
+                await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
         }
 
         consumer.Close();
@@ -62,4 +70,22 @@ public sealed class RestaurantResponseConsumer(
         cr.Message.Headers is not null && cr.Message.Headers.TryGetLastBytes(TadkaTrace.TraceParentHeader, out var bytes)
             ? Encoding.UTF8.GetString(bytes)
             : null;
+
+    private async Task HandlePoisonAsync(IConsumer<string, string> consumer, ConsumeResult<string, string> cr, Exception ex, CancellationToken ct)
+    {
+        if (!_poison.RecordFailureAndShouldDlq(cr.TopicPartitionOffset))
+        {
+            logger.LogWarning(ex, "restaurant-response at {Offset} failed — will retry (idempotent).", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromMilliseconds(300), ct); } catch (OperationCanceledException) { }
+            return;
+        }
+
+        logger.LogError(ex, "restaurant-response at {Offset} failed {Attempts}x — routing to DLQ, partition unblocked.", cr.TopicPartitionOffset, _poison.MaxAttempts);
+        await producer.PublishAsync(Topics.RestaurantResponseDlq, cr.Message.Key,
+            new DlqMessage(Topics.RestaurantResponse, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+
+        consumer.Commit(cr);
+        _poison.Clear(cr.TopicPartitionOffset);
+    }
 }

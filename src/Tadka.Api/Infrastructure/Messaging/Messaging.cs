@@ -5,11 +5,14 @@ public static class Topics
 {
     public const string OrderPlaced = "order-placed";
     public const string PaymentResults = "payment-results";
+    public const string PaymentResultsDlq = "payment-results.dlq";
     public const string OrderConfirmed = "order-confirmed";   // → Delivery assigns a rider (ADR-033)
     public const string MenuUpdated = "menu-updated";         // ← Restaurant publishes; Ordering updates its price replica (ADR-037)
     public const string RefundRequested = "refund-requested"; // → the restaurant rejected an already-paid order (ADR-045)
     public const string PaymentRefunded = "payment-refunded"; // ← the compensating refund settled (ADR-045)
+    public const string PaymentRefundedDlq = "payment-refunded.dlq";
     public const string RestaurantResponse = "restaurant-response"; // ← Restaurant.Api accept/reject (ADR-062)
+    public const string RestaurantResponseDlq = "restaurant-response.dlq";
 }
 
 /// <summary>One menu item, as carried in a <see cref="RestaurantSnapshotMessage"/> (ADR-037).</summary>
@@ -48,6 +51,11 @@ public sealed record PaymentRefundedMessage(Guid MessageId, Guid OrderId, string
 /// <summary>Restaurant.Api decision after order-confirmed (ADR-062). Status = Accepted | Rejected.</summary>
 public sealed record RestaurantResponseMessage(
     Guid MessageId, Guid OrderId, string Status, string? Reason, string? GatewayReference);
+
+/// <summary>A message that failed processing repeatedly is quarantined here instead of blocking the
+/// partition forever (ADR-051). <see cref="OriginalPayload"/> is the raw, unmodified JSON that failed, so an
+/// operator can inspect it and, once the root cause is fixed, replay it back onto the original topic.</summary>
+public sealed record DlqMessage(string OriginalTopic, string OriginalPayload, string Error, int Attempts, DateTimeOffset FailedAt);
 
 /// <summary>Kafka config (ADR-027). If <see cref="BootstrapServers"/> is empty, Kafka is OFF — the relay and
 /// consumers don't start and the producer is a no-op, so single-process dev and the test suite run unchanged.</summary>

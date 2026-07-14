@@ -1,5 +1,5 @@
 using Confluent.Kafka;
-using Tadka.Payment.Api.Messaging;
+using Tadka.Telemetry;
 
 namespace Tadka.Payment.Api.Tests;
 
@@ -7,6 +7,8 @@ namespace Tadka.Payment.Api.Tests;
 /// Pure unit tests for the retry-then-DLQ decision (ADR-051) — no Kafka broker needed, matching the
 /// project's "tests stay green without Redis/Kafka" rule. Confirms the exact bug this phase fixes: a
 /// poison message used to retry forever and block the partition; now it is quarantined after N attempts.
+/// <see cref="PoisonMessageTracker"/> lives in Tadka.Telemetry (shared across every service's consumers),
+/// this test just happens to still live here.
 /// </summary>
 public class PoisonMessageTrackerTests
 {
