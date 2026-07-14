@@ -1,0 +1,54 @@
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using Testcontainers.Kafka;
+using Testcontainers.PostgreSql;
+
+namespace Tadka.Payment.Api.Tests;
+
+/// <summary>Boots the real Payment service against a real Postgres AND a real Kafka (both Testcontainers) —
+/// unlike <see cref="PaymentApiFactory"/>, which runs with Kafka off for deterministic HTTP tests. This
+/// factory exists specifically to prove the poison-message/DLQ path (ADR-051, the review fix that added it
+/// to <c>RefundRequestedConsumer</c>) against a real broker, not a mock.</summary>
+public class PaymentKafkaApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
+{
+    private readonly PostgreSqlContainer _db = new PostgreSqlBuilder("postgres:16").Build();
+    private readonly KafkaContainer _kafka = new KafkaBuilder("apache/kafka:3.8.0").Build();
+
+    public string ConnectionString => _db.GetConnectionString();
+    public string BootstrapServers => _kafka.GetBootstrapAddress();
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        builder.UseSetting("ConnectionStrings:PaymentDb", _db.GetConnectionString());
+        builder.UseSetting("Kafka:BootstrapServers", BootstrapServers);
+        builder.UseEnvironment("Development");
+
+        builder.ConfigureTestServices(services =>
+        {
+            services.AddAuthentication(TestAuthHandler.Scheme)
+                .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.Scheme, _ => { });
+            services.PostConfigure<AuthenticationOptions>(o =>
+            {
+                o.DefaultScheme = TestAuthHandler.Scheme;
+                o.DefaultAuthenticateScheme = TestAuthHandler.Scheme;
+                o.DefaultChallengeScheme = TestAuthHandler.Scheme;
+            });
+        });
+    }
+
+    public async Task InitializeAsync()
+    {
+        await _db.StartAsync();
+        await _kafka.StartAsync();
+        _ = Services; // force the host (and its BackgroundServices) to build before any test publishes
+    }
+
+    public new async Task DisposeAsync()
+    {
+        await _kafka.DisposeAsync();
+        await _db.DisposeAsync();
+    }
+}
