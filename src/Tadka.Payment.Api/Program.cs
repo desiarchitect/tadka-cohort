@@ -100,8 +100,6 @@ app.MapGet("/health/ready", async (PaymentDbContext db) =>
 });
 
 // Canonical public path (ADR-010): /api/v1/payments/** — same grammar as Ordering/Restaurant/Delivery.
-// Legacy /payments/** kept as dual-route expand (ADR-038 style) so Day-8 direct clients still work
-// during the gateway transition; contract step later drops the short path.
 async Task<IResult> Charge(ChargeRequest request, PaymentService payments, CancellationToken ct)
 {
     var outcome = await payments.ChargeAsync(
@@ -123,9 +121,6 @@ async Task<IResult> GetPayment(Guid orderId, PaymentDbContext db)
 
 app.MapPost("/api/v1/payments/charge", Charge).RequireAuthorization();
 app.MapGet("/api/v1/payments/{orderId:guid}", GetPayment).RequireAuthorization();
-// Dual-write route window (Day 8 → gateway era): same handlers, short path.
-app.MapPost("/payments/charge", Charge).RequireAuthorization();
-app.MapGet("/payments/{orderId:guid}", GetPayment).RequireAuthorization();
 
 app.Run();
 

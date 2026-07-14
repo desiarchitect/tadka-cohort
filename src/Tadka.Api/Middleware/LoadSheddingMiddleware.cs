@@ -1,13 +1,21 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Tadka.Api.Middleware;
+
+/// <summary>Levers: <c>LoadShed:Enabled</c>, optional auto when concurrent &gt; threshold (via <c>LoadShed:Force</c>).</summary>
+public sealed class LoadSheddingOptions
+{
+    public const string SectionName = "LoadShed";
+    public bool Enabled { get; set; }
+    public bool Force { get; set; }
+}
 
 /// <summary>
 /// Priority load shedding (ADR-060). Under extreme load, sheddable paths return 503 quickly so
 /// critical paths (place order, pay, auth, health) keep capacity.
-/// Levers: <c>LoadShed:Enabled</c>, optional auto when concurrent &gt; threshold (via <c>LoadShed:Force</c>).
 /// </summary>
-public sealed class LoadSheddingMiddleware(RequestDelegate next, IConfiguration config)
+public sealed class LoadSheddingMiddleware(RequestDelegate next, IOptionsMonitor<LoadSheddingOptions> options)
 {
     private static readonly HashSet<string> CriticalPrefixes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -28,8 +36,7 @@ public sealed class LoadSheddingMiddleware(RequestDelegate next, IConfiguration 
 
     public async Task InvokeAsync(HttpContext context)
     {
-        var enabled = config.GetValue("LoadShed:Enabled", false)
-                      || config.GetValue("LoadShed:Force", false);
+        var enabled = options.CurrentValue.Enabled || options.CurrentValue.Force;
         if (!enabled)
         {
             await next(context);

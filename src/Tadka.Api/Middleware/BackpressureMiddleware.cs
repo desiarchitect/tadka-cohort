@@ -1,11 +1,21 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Options;
 
 namespace Tadka.Api.Middleware;
+
+/// <summary>Demo lever: <c>Backpressure:MaxConcurrent</c> (0 = disabled).</summary>
+public sealed class BackpressureOptions
+{
+    public const string SectionName = "Backpressure";
+    public int MaxConcurrent { get; set; }
+}
 
 /// <summary>
 /// Admission control (ADR-059): caps concurrent in-flight requests. When the limit is hit, reject
 /// immediately with 429 + Retry-After instead of queuing until every thread and connection is burned.
-/// Demo lever: <c>Backpressure:MaxConcurrent</c> (0 = disabled).
+/// Read once at construction (conventional middleware is built once at startup, not per-request) — this
+/// lever has always required an app restart to change, so IOptions (a startup-time snapshot) is the
+/// faithful typed replacement, not IOptionsMonitor.
 /// </summary>
 public sealed class BackpressureMiddleware
 {
@@ -13,10 +23,10 @@ public sealed class BackpressureMiddleware
     private readonly int _maxConcurrent;
     private readonly SemaphoreSlim _gate;
 
-    public BackpressureMiddleware(RequestDelegate next, IConfiguration config)
+    public BackpressureMiddleware(RequestDelegate next, IOptions<BackpressureOptions> options)
     {
         _next = next;
-        _maxConcurrent = config.GetValue("Backpressure:MaxConcurrent", 0);
+        _maxConcurrent = options.Value.MaxConcurrent;
         _gate = _maxConcurrent > 0
             ? new SemaphoreSlim(_maxConcurrent, _maxConcurrent)
             : new SemaphoreSlim(1, 1); // unused when disabled

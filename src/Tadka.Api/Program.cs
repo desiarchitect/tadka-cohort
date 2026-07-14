@@ -157,6 +157,10 @@ if (kafkaOptions?.Enabled == true)
 // validates the SAME key). Authorization is RBAC (the `role` claim) + resource-ownership checks done in
 // the controllers (the `sub` / `restaurantId` claims).
 builder.Services.Configure<Tadka.Api.Auth.JwtOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName));
+builder.Services.Configure<Tadka.Api.Middleware.LoadSheddingOptions>(
+    builder.Configuration.GetSection(Tadka.Api.Middleware.LoadSheddingOptions.SectionName));
+builder.Services.Configure<Tadka.Api.Middleware.BackpressureOptions>(
+    builder.Configuration.GetSection(Tadka.Api.Middleware.BackpressureOptions.SectionName));
 builder.Services.AddSingleton<Tadka.Api.Auth.TokenService>();
 builder.Services.AddSingleton<Microsoft.AspNetCore.Identity.IPasswordHasher<Tadka.Api.Domain.Users.User>,
     Microsoft.AspNetCore.Identity.PasswordHasher<Tadka.Api.Domain.Users.User>>();

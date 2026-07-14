@@ -51,7 +51,9 @@ public sealed class PaymentOptions
 
 public sealed class GatewayOptions
 {
-    /// <summary><c>Fast</c> (~200 ms) · <c>Slow</c> (a provider incident, ~8 s) · <c>Failing</c> (declines).</summary>
+    /// <summary><c>Fast</c> (~200 ms) - <c>Slow</c> (a provider incident, ~8 s) - <c>Failing</c> (declines, a
+    /// final business answer, never retried) - <c>Outage</c> (transport failures, retried, deterministically
+    /// trips the circuit breaker - ADR-039/043; see scripts/inject-incident.ps1 -Scenario payment-outage).</summary>
     public string Behavior { get; set; } = "Fast";
     public double SlowDelaySeconds { get; set; } = 8;
     public double FastDelayMs { get; set; } = 200;
