@@ -3,6 +3,7 @@
 #
 #   pwsh scripts/inject-incident.ps1 -Scenario redis-down
 #   pwsh scripts/inject-incident.ps1 -Scenario payment-slow
+#   pwsh scripts/inject-incident.ps1 -Scenario payment-outage
 #   pwsh scripts/inject-incident.ps1 -Scenario kafka-down
 #   pwsh scripts/inject-incident.ps1 -Scenario pool-tight
 #   pwsh scripts/inject-incident.ps1 -Scenario load-shed
@@ -11,12 +12,12 @@
 #   pwsh scripts/inject-incident.ps1 -Scenario clear
 
 param(
-    [ValidateSet("redis-down","payment-slow","kafka-down","pool-tight","load-shed","backpressure","random","clear")]
+    [ValidateSet("redis-down","payment-slow","payment-outage","kafka-down","pool-tight","load-shed","backpressure","random","clear")]
     [string]$Scenario = "random"
 )
 
 $ErrorActionPreference = "Stop"
-$scenarios = @("redis-down","payment-slow","kafka-down","pool-tight","load-shed","backpressure")
+$scenarios = @("redis-down","payment-slow","payment-outage","kafka-down","pool-tight","load-shed","backpressure")
 if ($Scenario -eq "random") {
     $Scenario = $scenarios | Get-Random
     Write-Host "RANDOM pick: $Scenario"
@@ -40,6 +41,14 @@ switch ($Scenario) {
         Write-Host "  Payment__Gateway__Behavior=Slow"
         Write-Host "  Payment__TimeoutSeconds=2"
         Write-Host "Expect: charge fails fast via timeout/bulkhead; circuit breaker may open under load (Day 14)."
+    }
+    "payment-outage" {
+        Write-Host "Set on Payment process and restart:"
+        Write-Host "  Payment__Gateway__Behavior=Outage"
+        Write-Host "  Payment__CircuitBreakSeconds=15"
+        Write-Host "Expect: sustained transport failures -> circuit OPENS deterministically within a handful of orders"
+        Write-Host "(unlike payment-slow, which only trips the breaker if load happens to cross min-throughput)."
+        Write-Host "Watch tadka_payment_circuit_transitions{state=`"open`"} on Grafana. Behavior=Fast to recover; HALF_OPEN probes after the break window."
     }
     "kafka-down" {
         docker compose stop kafka

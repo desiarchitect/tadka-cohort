@@ -6,6 +6,7 @@ Students get dashboards only. You inject with `scripts/inject-incident.ps1 -Scen
 |----------|--------------|-------------------|----------|
 | redis-down | `docker compose stop redis` | Menu slower (DB path); SSE multi-instance broken; flags/rate-limit may degrade | `docker compose start redis` |
 | payment-slow | `Payment__Gateway__Behavior=Slow` | Timeouts, bulkhead, maybe circuit OPEN under load | Behavior=Fast; wait half-open |
+| payment-outage | `Payment__Gateway__Behavior=Outage` | Sustained transport failures; circuit OPENS deterministically (not load-dependent) | Behavior=Fast; wait half-open |
 | kafka-down | `docker compose stop kafka` | Orders 201; payments not settling; outbox backlog | start kafka; watch lag → 0 |
 | pool-tight | Max Pool Size=5 + k6 | Latency spike, timeouts on DB | restore pool 50 |
 | load-shed | `LoadShed__Enabled=true` | history/invoice 503; place order OK | Enabled=false |
