@@ -2,7 +2,6 @@ using Microsoft.EntityFrameworkCore;
 using Tadka.Api.Data.Configurations;
 using Tadka.Api.Data.Messaging;
 using Tadka.Api.Data.ReadModel;
-using Tadka.Api.Domain.Delivery;
 using Tadka.Api.Domain.Orders;
 using Tadka.Api.Domain.Users;
 
@@ -32,9 +31,10 @@ public class TadkaDbContext : DbContext
     public DbSet<RestaurantReplica> RestaurantReplicas => Set<RestaurantReplica>();
     public DbSet<MenuItemReplica> MenuReplicas => Set<MenuItemReplica>();
 
-    // Delivery domain
-    public DbSet<DeliveryAgent> DeliveryAgents => Set<DeliveryAgent>();
-    public DbSet<DeliveryAssignment> DeliveryAssignments => Set<DeliveryAssignment>();
+    // NOTE: Delivery is NOT here. As of Day 11 (ADR-033) it lives in its own service behind
+    // DeliveryDbContext (its own database) — the core context has zero knowledge of delivery agents
+    // or assignments. (Previously ghost DeliveryAgent/DeliveryAssignment tables lingered here after
+    // extraction; removed — see the PR that deleted them.)
 
     // Identity domain
     public DbSet<User> Users => Set<User>();
