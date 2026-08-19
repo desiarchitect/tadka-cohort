@@ -2,11 +2,13 @@
 
 Get everything installed before Day 1. This should take 30-45 minutes. If something doesn't work, post in `#doubts` on Discord with a screenshot of the error.
 
+**Local database password:** Compose and `appsettings.Development.json` default to `tadka` / `tadka_local`. That dummy is committed so you can clone and run with no `.env`. It is a throwaway local Postgres, not a secret. When a password is real it does not belong in git (User Secrets locally, environment variables in production). Do not copy `.env.example` into a committed `.env` with real credentials — `.env` is gitignored.
+
 ## Required Tools
 
 ### 1. Docker Desktop
 
-We use Docker to run PostgreSQL, Redis, Kafka, and other infrastructure locally. No need to install each one separately.
+We use Docker to run infrastructure locally. **Day 1 is PostgreSQL only.** Later weeks add more containers to the same compose file — you will not install Redis or Kafka yourself.
 
 **Version:** Docker Desktop 4.30+ (Docker Engine 26+)
 
@@ -25,6 +27,8 @@ docker compose version
 ```
 
 **Important:** On Windows, enable WSL 2 backend (Docker Desktop → Settings → General → Use WSL 2 based engine). On Mac, allocate at least 4 GB RAM (Settings → Resources).
+
+How to use Compose with this repo (commands, service vs container name, troubleshooting): [`docs/learn/docker.md`](docs/learn/docker.md).
 
 ### 2. .NET 10 SDK
 
@@ -99,6 +103,8 @@ You need a GitHub account to:
 - Submit assignments via pull requests
 
 If you don't have Copilot yet: https://github.com/features/copilot (Individual plan works fine)
+
+What `CLAUDE.md` and `.github/copilot-instructions.md` are for, and the full `.github/` / `.claude/` catalog (skills, agents, prompts): [`docs/learn/ai-context-files.md`](docs/learn/ai-context-files.md).
 
 ## Optional but Recommended
 

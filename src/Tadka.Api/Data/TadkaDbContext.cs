@@ -12,8 +12,7 @@ namespace Tadka.Api.Data;
 // payment). When we extract a service in Week 4+, it takes its schema. There
 // are NO cross-schema foreign keys (ADR-008); cross-domain links are by ID only.
 //
-// Day 2 establishes the model + the schema boundaries. The migration that
-// creates these tables is added on Day 3 (PostgreSQL deep dive).
+// Day 2: model + schema boundaries. Program.cs applies InitialDomainModel on startup.
 public class TadkaDbContext : DbContext
 {
     public TadkaDbContext(DbContextOptions<TadkaDbContext> options) : base(options)

@@ -15,8 +15,20 @@ public class HealthController : ControllerBase
         _dbContext = dbContext;
     }
 
+    /// <summary>Liveness — the process is up. Does not talk to Postgres.</summary>
     [HttpGet]
-    public async Task<IActionResult> Get()
+    public IActionResult Get()
+    {
+        return Ok(new
+        {
+            status = "Healthy",
+            timestamp = DateTime.UtcNow
+        });
+    }
+
+    /// <summary>Readiness — Postgres answers SELECT 1. 200 if healthy, 503 if not.</summary>
+    [HttpGet("ready")]
+    public async Task<IActionResult> Ready()
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         try

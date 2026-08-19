@@ -41,7 +41,8 @@ project.lock.json
 .DS_Store
 Thumbs.db
 
-# Docker
+# Docker / local env (never commit a real .env)
+.env
 docker/.env
 
 # User secrets
@@ -52,12 +53,3 @@ TestResults/
 coverage/
 *.coverage
 *.coveragexml
-
-# Terraform
-terraform/.terraform/
-terraform/*.tfstate
-terraform/*.tfstate.backup
-terraform/*.tfplan
-
-# k6
-k6/results/
