@@ -40,6 +40,8 @@ On Windows, turn on the WSL 2 backend in Docker Desktop. On Mac, give Docker at 
 
 ## Quick start
 
+This branch is **Day 1**: one API, one PostgreSQL database, a `/health` endpoint. That is the whole running system, on purpose.
+
 ```bash
 git clone https://github.com/desiarchitect/tadka-cohort.git tadka
 cd tadka
@@ -48,24 +50,40 @@ git checkout day-01
 docker compose up -d                      # starts PostgreSQL
 docker compose ps                         # wait for tadka-postgres to say (healthy)
 
-dotnet run --project src/Tadka.Api        # builds, migrates, starts the API
+dotnet run --project src/Tadka.Api        # builds and starts the API (no migration yet)
 ```
 
 Then, in a second terminal:
 
 ```bash
-curl http://localhost:5224/health
+curl.exe http://localhost:5224/health
 ```
 
 You should get back something like this:
 
 ```json
-{ "status": "Healthy", "database": "Connected", "responseTime": "52ms" }
+{ "status": "Healthy", "timestamp": "..." }
 ```
 
-The first call is slow (roughly half a second) and every call after it is fast. That gap is not a bug, and on Day 1 we spend real time on why it happens.
+**No `database` field.** `/health` is liveness — the process is up. It does not talk to Postgres yet. That is the Day 1 lesson, not a missing feature.
+
+On Windows PowerShell, `curl` is an alias for `Invoke-WebRequest`. Use **`curl.exe`**.
+
+HTTP listens on **5224** (HTTPS 7036). Compose service name is **`postgres`** (container `tadka-postgres`).
+
+`Password=tadka_local` in `appsettings.Development.json` is a **local dummy** for that Docker database (no real data). It is in git so clone-and-run works. `appsettings.json` has no secrets.
+
+Full command sequence, expected output, Copilot prompt, and the Postgres down/up demo: [`docs/runbooks/day-01.md`](docs/runbooks/day-01.md).
+
+How Docker Compose works, and every AI context file Copilot/Claude can read: [`docs/learn/`](docs/learn/README.md).
 
 To explore the API in a browser, open `https://localhost:7036/scalar/v2`.
+
+### Tests
+
+```bash
+dotnet test
+```
 
 ## Connection facts
 
@@ -83,12 +101,41 @@ Credentials are local development values with no secrets in them, which is why t
 
 ```bash
 dotnet build Tadka.slnx                   # build everything
-dotnet test                               # run tests (Day 4 onward, needs Docker)
+dotnet test                               # xUnit (the suite grows in later weeks)
 
 docker compose down -v && docker compose up -d    # full database reset
 ```
 
-Use the reset when a migration fails with `relation already exists`. It wipes the volume and starts clean.
+Use the reset when a later day's migration fails with `relation already exists`. It wipes the volume and starts clean. Day 1 has no migration.
+
+## Where this is going
+
+Over 8 weeks this monolith evolves into **four services plus a gateway**. The destination is in [`docs/diagrams/day-01-final-architecture.md`](docs/diagrams/day-01-final-architecture.md). Do not build it today — the opening session shows that diagram so you know what you will earn, not what you should scaffold.
+
+Right now the architecture is:
+
+```
+Client  →  Tadka.Api (.NET 10)  →  PostgreSQL 16
+```
+
+See [`docs/diagrams/day-01-monolith-architecture.md`](docs/diagrams/day-01-monolith-architecture.md). There is no `Domain/` folder yet. Bounded contexts are a Day 2 design exercise.
+
+## Project structure
+
+```
+tadka/
+├── src/Tadka.Api/              # The monolith — one deployable
+│   ├── Controllers/            # HealthController only (liveness)
+│   └── Data/                   # Empty TadkaDbContext
+├── tests/Tadka.Api.Tests/
+├── docs/
+│   ├── adrs/                   # ADR-001 (.NET 10), ADR-002 (monolith first)
+│   ├── diagrams/               # Day 1 current + destination diagrams
+│   ├── learn/                  # Docker + AI context-file catalog
+│   ├── runbooks/               # Day 1 demo commands + what to look for
+│   └── templates/              # Requirements, estimation, ADR worksheets
+└── docker-compose.yml          # PostgreSQL only
+```
 
 ## The 16 days
 
@@ -127,9 +174,16 @@ If you work in Java, Node or Go, you are in the right place. The assignments are
 
 ## Architecture Decision Records
 
-Every significant decision is written down in [`docs/adrs/`](docs/adrs/), with the options considered, the trade-off accepted, how it could fail, and what would make us revisit it.
+Significant decisions live in [`docs/adrs/`](docs/adrs/), with the options considered, the trade-off accepted, how it could fail, and what would make us revisit it.
 
-The ADRs grow with the branches. On `day-01` there are two. By the end there are forty-four.
+Day 1 has two:
+
+| ADR | Decision |
+|-----|----------|
+| [001](docs/adrs/001-dotnet10.md) | .NET 10 as the runtime |
+| [002](docs/adrs/002-monolith-first.md) | Start as a monolith, with folder-level domain boundaries |
+
+The ADRs grow with the branches. By the end there are forty-four.
 
 This is the habit the cohort is really trying to build. The code tells you what the system does. The ADR tells you why, six months later, when nobody remembers.
 
