@@ -1,6 +1,6 @@
 # Tadka — Code Repo (cohort capstone)
 
-The .NET 10 codebase students clone and run. This branch is **Day 2**: domain model + schema-per-domain + ADR-003/008, plus Day 1's liveness `/health` and Copilot-added `/health/ready`. Teaching home: `../desi-architect/desiarchitect-website/cohort-prep/`.
+The .NET 10 codebase students clone and run. This branch is **Day 2**: domain model + schema-per-domain + ADR-003/008, plus Day 1's liveness `/health` and Copilot-added `/health/ready`. Teaching home: `../desi-architect/desiarchitect-website/cohort-prep/`. Public student clone (default `day-01`, days unlock): `D:\work\cohort\tadka-cohort` → `github.com/desiarchitect/tadka-cohort`. Do not copy this private tree onto that repo — it would drop LICENSE, the student README, and the drifted Day-1 `copilot-instructions.md`.
 
 ## Stack (today)
 
