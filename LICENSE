@@ -1,0 +1,20 @@
+Copyright © Desi Architect. All rights reserved.
+
+This repository contains teaching material for the Desi Architect cohort.
+It is published publicly so participants can clone it without account setup.
+It is not open source software.
+
+You may:
+  - clone, run and modify this code on your own machine
+  - use what you learn here in your own work, including commercially
+  - quote short excerpts with attribution
+
+You may not:
+  - redistribute this repository or substantial parts of it
+  - use this material to run or sell a competing course or workshop
+  - remove or alter this notice
+
+The code is provided as is, without warranty of any kind. It is written to
+teach architectural decision making, not to be deployed as it stands.
+
+For permissions beyond this notice, contact hello@desiarchitect.com
