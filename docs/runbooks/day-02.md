@@ -126,6 +126,14 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "\dt payment.*"
 
 ## 5. ADR-008 and value objects — prove it in the table
 
+No seed data today (that is Day 3). `\d` and the FK query need empty tables.
+
+```bash
+docker exec tadka-postgres psql -U tadka -d tadka -c "\d restaurant.menu_items"
+```
+
+**Look for** `Price_Amount` and `Price_Currency` as columns on `menu_items` — EF `OwnsOne` flattened the Money value object. There is no `money` table.
+
 ```bash
 docker exec tadka-postgres psql -U tadka -d tadka -c "\d ordering.orders"
 ```
@@ -134,6 +142,12 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "\d ordering.orders"
 
 - `CustomerId` / `RestaurantId` columns with **no** `FOREIGN KEY` to `identity` or `restaurant`.
 - `TotalAmount_Amount`, `TotalAmount_Currency`, `DeliveryAddress_*` — Money and Address live as **columns** on `orders`, not as separate tables (`OwnsOne`).
+
+Prove ADR-008 with a query that returns **0 rows** (no seed required):
+
+```bash
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT tc.table_schema, tc.table_name, ccu.table_schema AS foreign_schema, ccu.table_name AS foreign_table FROM information_schema.table_constraints tc JOIN information_schema.constraint_column_usage ccu ON ccu.constraint_name = tc.constraint_name AND ccu.constraint_schema = tc.constraint_schema WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema <> ccu.table_schema;"
+```
 
 Within a schema, FKs **are** allowed:
 
