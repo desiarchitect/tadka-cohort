@@ -22,68 +22,45 @@ git fetch                 # pull down newly released days
 git branch -r             # see what is available
 ```
 
-Reading ahead is not blocked because we do not trust you. It is that the whole course is built on feeling a problem before you see its solution. Day 8 ends with a payment that vanishes silently. If you have already read the Day 9 fix, that moment teaches you nothing.
-
-## Before Day 1
-
-Install these and check them before the first session. Budget 30 to 45 minutes. Full walkthrough with troubleshooting is in [`SETUP.md`](SETUP.md).
-
-| Tool | Version | Check |
-|---|---|---|
-| [.NET SDK](https://dotnet.microsoft.com/download/dotnet/10.0) | 10.x | `dotnet --version` |
-| [Docker Desktop](https://www.docker.com/products/docker-desktop/) | 4.30+ | `docker compose version` |
-| [Git](https://git-scm.com/downloads) | any recent | `git --version` |
-
-An editor with C# support helps. VS Code with the C# Dev Kit extension, or Rider, or Visual Studio.
-
-On Windows, turn on the WSL 2 backend in Docker Desktop. On Mac, give Docker at least 4 GB of RAM.
-
 ## Quick start
 
-This branch is **Day 1**: one API, one PostgreSQL database, a `/health` endpoint. That is the whole running system, on purpose.
+This branch is **Day 2**: one API, one PostgreSQL database, five bounded contexts in folders, each mapped to its own Postgres **schema**. HTTP business APIs are not here yet (Day 3).
 
 ```bash
 git clone https://github.com/desiarchitect/tadka-cohort.git tadka
 cd tadka
-git checkout day-01
+git checkout day-02
 
-docker compose up -d                      # starts PostgreSQL
+# Fresh volume — a leftover Day 1 database will fail the migration
+docker compose down -v
+docker compose up -d
 docker compose ps                         # wait for tadka-postgres to say (healthy)
 
-dotnet run --project src/Tadka.Api        # builds and starts the API (no migration yet)
+dotnet run --project src/Tadka.Api        # applies InitialDomainModel on startup
 ```
 
 Then, in a second terminal:
 
 ```bash
 curl.exe http://localhost:5224/health
+curl.exe http://localhost:5224/health/ready
 ```
 
-You should get back something like this:
-
-```json
-{ "status": "Healthy", "timestamp": "..." }
-```
-
-**No `database` field.** `/health` is liveness — the process is up. It does not talk to Postgres yet. That is the Day 1 lesson, not a missing feature.
+`/health` is liveness — process up, **no** `database` field. `/health/ready` talks to Postgres (`SELECT 1`) and should return Connected.
 
 On Windows PowerShell, `curl` is an alias for `Invoke-WebRequest`. Use **`curl.exe`**.
 
 HTTP listens on **5224** (HTTPS 7036). Compose service name is **`postgres`** (container `tadka-postgres`).
 
-`Password=tadka_local` in `appsettings.Development.json` is a **local dummy** for that Docker database (no real data). It is in git so clone-and-run works. `appsettings.json` has no secrets.
-
-Full command sequence, expected output, Copilot prompt, and the Postgres down/up demo: [`docs/runbooks/day-01.md`](docs/runbooks/day-01.md).
-
-How Docker Compose works, and every AI context file Copilot/Claude can read: [`docs/learn/`](docs/learn/README.md).
-
-To explore the API in a browser, open `https://localhost:7036/scalar/v2`.
-
-### Tests
-
 ```bash
-dotnet test
+docker exec tadka-postgres psql -U tadka -d tadka -c "\dn"
 ```
+
+You should see five schemas: `ordering`, `restaurant`, `delivery`, `identity`, `payment`.
+
+Full command sequence: [`docs/runbooks/day-02.md`](docs/runbooks/day-02.md).
+
+`Password=tadka_local` in `appsettings.Development.json` is a **local dummy**. Real credentials never go in git.
 
 ## Connection facts
 
@@ -95,101 +72,72 @@ These stay the same on every branch.
 | Postgres | `localhost:5432`, database `tadka`, user `tadka`, password `tadka_local` |
 | Compose service name | `postgres` (container `tadka-postgres`) |
 
-Credentials are local development values with no secrets in them, which is why they are committed.
-
 ## Common commands
 
 ```bash
-dotnet build Tadka.slnx                   # build everything
-dotnet test                               # xUnit (the suite grows in later weeks)
-
+dotnet build Tadka.slnx
+dotnet test
 docker compose down -v && docker compose up -d    # full database reset
 ```
 
-Use the reset when a later day's migration fails with `relation already exists`. It wipes the volume and starts clean. Day 1 has no migration.
+Use the reset when the migration fails with `relation already exists`.
 
 ## Where this is going
 
-Over 8 weeks this monolith evolves into **four services plus a gateway**. The destination is in [`docs/diagrams/day-01-final-architecture.md`](docs/diagrams/day-01-final-architecture.md). Do not build it today — the opening session shows that diagram so you know what you will earn, not what you should scaffold.
+Over 8 weeks this monolith evolves into **four services plus a gateway**. Destination: [`docs/diagrams/day-01-final-architecture.md`](docs/diagrams/day-01-final-architecture.md).
 
-Right now the architecture is:
+Right now:
 
 ```
-Client  →  Tadka.Api (.NET 10)  →  PostgreSQL 16
+Client  →  Tadka.Api  →  PostgreSQL 16
+                         ├── ordering
+                         ├── restaurant
+                         ├── delivery
+                         ├── identity
+                         └── payment
 ```
 
-See [`docs/diagrams/day-01-monolith-architecture.md`](docs/diagrams/day-01-monolith-architecture.md). There is no `Domain/` folder yet. Bounded contexts are a Day 2 design exercise.
+No arrows between those schemas. That absence is ADR-008.
 
 ## Project structure
 
 ```
 tadka/
-├── src/Tadka.Api/              # The monolith — one deployable
-│   ├── Controllers/            # HealthController only (liveness)
-│   └── Data/                   # Empty TadkaDbContext
+├── src/Tadka.Api/
+│   ├── Controllers/            # Health + Ready only
+│   ├── Domain/
+│   │   ├── Orders/
+│   │   ├── Restaurants/
+│   │   ├── Delivery/
+│   │   ├── Users/              # maps to schema identity
+│   │   ├── Payments/
+│   │   └── ValueObjects/       # Money, Address, GeoLocation
+│   ├── Data/
+│   └── Migrations/             # InitialDomainModel
 ├── tests/Tadka.Api.Tests/
 ├── docs/
-│   ├── adrs/                   # ADR-001 (.NET 10), ADR-002 (monolith first)
-│   ├── diagrams/               # Day 1 current + destination diagrams
-│   ├── learn/                  # Docker + AI context-file catalog
-│   ├── runbooks/               # Day 1 demo commands + what to look for
-│   └── templates/              # Requirements, estimation, ADR worksheets
-└── docker-compose.yml          # PostgreSQL only
+│   ├── adrs/                   # 001, 002, 003, 008
+│   ├── diagrams/
+│   ├── learn/
+│   ├── runbooks/
+│   └── templates/
+└── docker-compose.yml
 ```
 
-## The 16 days
-
-Two sessions a week, over eight weeks.
-
-| Week | Days | What you build |
-|---|---|---|
-| 1 | 1, 2 | The monolith and its domain model. Bounded contexts, schema-per-domain. |
-| 2 | 3, 4 | A real REST API, then hardening it against retries and races. |
-| 3 | 5, 6 | Making the database fast, then caching and live order tracking. |
-| 4 | 7, 8 | A payment brownout, and extracting Payment into its own service. |
-| 5 | 9, 10 | A durable event backbone, then securing the whole system. |
-| 6 | 11, 12 | Extracting Delivery and Restaurant. Four services behind a gateway. |
-| 7 | 13, 14 | Making the system observable, then deliberately breaking it. |
-| 8 | 15, 16 | Interview teardowns, load testing to the breaking point, and cost. |
-
-The end state is **four services plus a gateway**: Ordering, Payment, Delivery, Restaurant. Identity lives inside Ordering, because it never earned an extraction of its own.
-
-## Tech stack
-
-Each tool enters in the week you feel the need for it, not before.
-
-| | Enters | Why |
-|---|---|---|
-| .NET 10, PostgreSQL 16 | Week 1 | The starting monolith |
-| EF Core | Week 1 | Code-first migrations |
-| xUnit, Testcontainers | Week 2 | Tests against a real database |
-| Redis | Week 3 | Caching, then locks and geo |
-| Polly | Week 4 | Timeouts and bulkheads around a slow gateway |
-| Kafka | Week 5 | A durable log so messages survive a service being down |
-| YARP | Week 6 | One entry point once there are several services |
-| OpenTelemetry, Serilog | Week 7 | A choreographed flow is invisible without tracing |
-| k6, Terraform | Week 8 | Load to the breaking point, and the bill |
-
-If you work in Java, Node or Go, you are in the right place. The assignments are ADRs, diagrams and failure analysis, none of which are language specific. Each day's notes map the .NET pieces to your stack.
+Folder `Users` / schema `identity` is intentional (aggregate name vs bounded-context name).
 
 ## Architecture Decision Records
-
-Significant decisions live in [`docs/adrs/`](docs/adrs/), with the options considered, the trade-off accepted, how it could fail, and what would make us revisit it.
-
-Day 1 has two:
 
 | ADR | Decision |
 |-----|----------|
 | [001](docs/adrs/001-dotnet10.md) | .NET 10 as the runtime |
-| [002](docs/adrs/002-monolith-first.md) | Start as a monolith, with folder-level domain boundaries |
-
-The ADRs grow with the branches. By the end there are forty-four.
-
-This is the habit the cohort is really trying to build. The code tells you what the system does. The ADR tells you why, six months later, when nobody remembers.
+| [002](docs/adrs/002-monolith-first.md) | Start as a monolith |
+| [003](docs/adrs/003-schema-per-domain.md) | One Postgres schema per bounded context |
+| [008](docs/adrs/008-no-cross-schema-fks.md) | FKs only inside a schema; cross-domain refs by id |
 
 ## Getting help
 
-Post in `#doubts` on Discord with the command you ran and the full error text. A screenshot of the terminal is fine.
+Post in `#doubts` on Discord with the command you ran and the full error text.
 
 ## License
 

@@ -12,6 +12,14 @@ builder.Services.AddDbContext<TadkaDbContext>(options =>
 
 var app = builder.Build();
 
+// Apply migrations on startup so the schema-per-domain layout exists the moment
+// you run the app (great for cohort local dev — open pgAdmin and see 5 schemas).
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
+    db.Database.Migrate();
+}
+
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();

@@ -14,15 +14,14 @@ We have zero users, zero traffic, and zero production data. We don't know which 
 
 ## Decision
 
-Build Tadka as a single .NET 10 Web API (`Tadka.Api`) backed by a single PostgreSQL 16 database. One deployable unit. When we model the domain, bounded contexts will live as folders *inside this project* — not as separate services. We do not pre-create those folders before we have named the contexts.
+Build Tadka as a single .NET 10 Web API (`Tadka.Api`) backed by a single PostgreSQL 16 database. Organize code into domain folders (Orders, Restaurants, Delivery, Users, Payments) that represent future service boundaries, but keep everything in one deployable unit.
 
-**What this looks like (today):**
-- One `Tadka.Api` project (`Controllers/` + empty `TadkaDbContext`)
-- One Docker Compose file (PostgreSQL)
+**What this looks like:**
+- One `Tadka.Api` project
+- One `TadkaDbContext` with schema-per-domain (e.g., `orders.orders`, `restaurants.menus`)
+- One Docker Compose file (API + PostgreSQL)
 - One CI/CD pipeline
 - One deployment target
-
-**What this does not include yet:** domain folders, schema-per-domain, or entities. Those are the next design session, still inside this same project.
 
 **What we explicitly avoid:**
 - Separate services for each domain

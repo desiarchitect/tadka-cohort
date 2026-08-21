@@ -13,9 +13,23 @@ graph TB
 
     subgraph api["Tadka.Api — .NET 10"]
         direction TB
-        controllers["Controllers<br/>GET /health"]
-        dbcontext["TadkaDbContext<br/>(empty model)"]
-        controllers --> dbcontext
+        controllers["Controllers"]
+        
+        subgraph domains["Domain Folders"]
+            direction LR
+            orders["📦 Orders"]
+            restaurants["🍽️ Restaurants"]
+            delivery["🚴 Delivery"]
+            users["👤 Users"]
+            payments["💳 Payments"]
+        end
+        
+        subgraph data["Data Layer"]
+            dbcontext["TadkaDbContext<br/>(EF Core)"]
+        end
+        
+        controllers --> domains
+        domains --> data
     end
 
     subgraph infra["Infrastructure"]
@@ -27,9 +41,15 @@ graph TB
     dbcontext --> postgres
 
     style api fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc
+    style domains fill:#0f172a,stroke:#334155,color:#f8fafc
     style infra fill:#0f172a,stroke:#334155,color:#f8fafc
     style Clients fill:#0f172a,stroke:#334155,color:#f8fafc
     style postgres fill:#1e293b,stroke:#f59e0b,stroke-width:2px,color:#f8fafc
+    style orders fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
+    style restaurants fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
+    style delivery fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
+    style users fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
+    style payments fill:#1e3a5f,stroke:#3b82f6,color:#93c5fd
     style controllers fill:#1e3a5f,stroke:#60a5fa,color:#93c5fd
     style dbcontext fill:#1e3a5f,stroke:#60a5fa,color:#93c5fd
     style mobile fill:#1e293b,stroke:#6366f1,color:#a5b4fc
@@ -38,15 +58,12 @@ graph TB
 
 ## What to Tell Students
 
-"Look at this diagram. One API, one database, a health endpoint. That's it. This handles launch without breaking a sweat. A single PostgreSQL instance with proper indexes can handle thousands of queries per second.
-
-We have not designed the domain yet. ADR-002 only says: one process, not five services. Tomorrow we name the bounded contexts and *then* put them in folders inside this same project. Pre-creating `Orders/` and `Payments/` directories today would be guessing the model before we have it — the same mistake as starting with microservices.
+"Look at this diagram. One API, one database. Five domain folders inside one project. That's it. This handles 0 to 10,000 users without breaking a sweat. A single PostgreSQL instance with proper indexes can handle thousands of queries per second.
 
 Every startup you admire started here. Swiggy's first version was a single Django app. Flipkart ran on a single Java monolith for years. We start the same way, and we'll feel the pain that forces us to split. That pain is the real teacher."
 
 ## What's Deliberately Missing
 
-- No `Domain/` folders (Day 2 — after the room names the bounded contexts)
 - No Redis (added Week 2, when we need caching)
 - No Kafka (added Week 5, when we need async events)
 - No API Gateway (added Week 5, when we have multiple services)
