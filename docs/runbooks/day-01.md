@@ -13,6 +13,63 @@ Compose commands and service vs container name: [`docs/learn/docker.md`](../lear
 | Compose service | `postgres` (container `tadka-postgres`) |
 | Postgres | `localhost:5432`, db `tadka`, user `tadka`, password `tadka_local` |
 
+### pgAdmin (or any GUI) from your machine
+
+This is **Postgres on localhost**, not SQL Server LocalDB. pgAdmin talks to the **mapped port**, not the container name.
+
+Register a server:
+
+| Field | Value |
+|-------|--------|
+| Host | `localhost` or `127.0.0.1` |
+| Port | `5432` |
+| Maintenance database | `tadka` |
+| Username | `tadka` |
+| Password | `tadka_local` |
+
+Same as `appsettings.Development.json`. Container must be **healthy** (`docker compose ps`).
+
+**Do not** use Host `tadka-postgres` — that name only works inside Docker.
+
+If connect fails with “already in use” / wrong database: a **local** Postgres install may already own `5432`. Stop that Windows service, or you are not hitting the Docker instance. `docker compose ps` PORTS must show `0.0.0.0:5432->5432`.
+
+Day 1: you will mostly see `public`. Five domain schemas (`ordering`, …) appear on Day 2 after `InitialDomainModel`.
+
+### Docker — enough to run this runbook
+
+You do not install Postgres on Windows. **Docker Desktop** runs an official Postgres 16 image so every laptop looks the same. Install Docker Desktop, start it, then run every command below from the **repo root** (the folder that contains `docker-compose.yml`).
+
+| Word | Meaning here |
+|------|----------------|
+| **Image** | The recipe. `postgres:16` is downloaded once from Docker Hub. |
+| **Container** | A running copy of that image. Ours is named `tadka-postgres`. |
+| **Compose** | Reads `docker-compose.yml` and starts what this day needs. Use `docker compose` (space), not the old `docker-compose` binary. |
+
+Two names you must not mix up:
+
+| Name | What you type it with |
+|------|------------------------|
+| **Service** `postgres` | Compose: `up`, `stop`, `start`, `logs` |
+| **Container** `tadka-postgres` | `docker exec`, `docker ps` |
+
+`docker compose stop db` fails. There is no service named `db`.
+
+**Every Docker command in this file**
+
+| Command | What it does |
+|---------|----------------|
+| `docker compose up -d` | Create and start the Postgres container **in the background** (`-d` = detached: this terminal stays free). First run downloads `postgres:16`. |
+| `docker compose ps` | List this project's containers. You want `tadka-postgres` … **`(healthy)`**. `starting` / `unhealthy`: wait ~10 s and run it again. |
+| `docker exec tadka-postgres pg_isready -U tadka` | Run `pg_isready` **inside** the container, as user `tadka`. “Accepting connections” means Postgres can take clients. It does **not** list tables. |
+| `docker compose stop postgres` | Stop the DB. Container (and data) stay on disk. The API process keeps running so you can see `/health` vs `/health/ready`. |
+| `docker compose start postgres` | Start that same container again. Data is still there. Wait for `(healthy)` before curling ready. |
+| `docker compose logs postgres` | Print Postgres logs. Use the **service** name. Last lines usually show password / port / data-dir errors. |
+| `docker compose down -v` | Stop **and remove** the container, network, **and the named volume**. Database is empty after this. Day 1 has no seed to lose. |
+
+`stop` / `start` = pause and resume. `down` = tear down. `-v` = also wipe stored data.
+
+**“container name already in use”:** another folder (for example private `tadka` vs `tadka-cohort`) already started a container named `tadka-postgres`. From **that** folder run `docker compose down`, then `up -d` here. Only one container can use that name and port `5432`.
+
 ### Local dummy password — not a production secret
 
 `appsettings.Development.json` contains `Password=tadka_local`. That is **committed on purpose**: it is a throwaway local Docker database with no real data. `appsettings.json` has no connection string.
@@ -56,6 +113,8 @@ dotnet build Tadka.slnx
 
 ## 1. Start Postgres
 
+From the repo root. `-d` keeps this terminal free.
+
 ```bash
 docker compose up -d
 docker compose ps
@@ -70,7 +129,7 @@ tadka-postgres   postgres:16   Up ... (healthy)
 
 If status is `starting` or `unhealthy`, wait ~10 seconds and run `docker compose ps` again.
 
-Quick probe inside the container:
+Quick probe **inside** the container (`exec` = run this one command in `tadka-postgres`):
 
 ```bash
 docker exec tadka-postgres pg_isready -U tadka
@@ -173,7 +232,7 @@ Leave `/health` alone and hit it too — it must still be the simple liveness pa
 
 ## 6. Break — stop Postgres
 
-Compose service name is **`postgres`**, not `db`.
+Compose **service** name is **`postgres`**, not `db`. This stops the database only; it does not kill `dotnet run`.
 
 ```bash
 docker compose stop postgres
@@ -193,6 +252,8 @@ That split is the whole demo: process-up is not the same as system-healthy.
 ---
 
 ## 7. Fix — start Postgres
+
+`start` resumes the same container (data still there). Wait until `ps` shows `(healthy)`.
 
 ```bash
 docker compose start postgres
@@ -231,7 +292,8 @@ dotnet test Tadka.slnx
 
 | Symptom | What to do |
 |---------|------------|
-| `tadka-postgres` not healthy | `docker compose logs postgres`. Wait 10 s. If port 5432 is taken, stop the other Postgres. |
+| `tadka-postgres` not healthy | `docker compose logs postgres` (service name). Wait 10 s. If port 5432 is taken, stop the other Postgres. |
+| Container name already in use | Another compose project owns `tadka-postgres`. `docker compose down` in that folder, then `up -d` here. |
 | `Failed to bind ... 5224` | A previous `dotnet run` is still up. Stop it, or `Get-NetTCPConnection -LocalPort 5224` and kill that PID. |
 | `curl` prints a huge HTML / method error | You used PowerShell `curl`. Switch to `curl.exe`. |
 | `docker compose stop db` fails | Service is `postgres`. |

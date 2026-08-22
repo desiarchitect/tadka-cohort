@@ -10,7 +10,68 @@
 | Compose service | `postgres` (container `tadka-postgres`) |
 | Postgres | `localhost:5432`, db `tadka`, user `tadka`, password `tadka_local` |
 
-Compose cheat sheet: [`docs/learn/docker.md`](../learn/docker.md).
+### pgAdmin (or any GUI) from your machine
+
+This is **Postgres on localhost**, not SQL Server LocalDB. pgAdmin talks to the **mapped port**, not the container name.
+
+Register a server:
+
+| Field | Value |
+|-------|--------|
+| Host | `localhost` or `127.0.0.1` |
+| Port | `5432` |
+| Maintenance database | `tadka` |
+| Username | `tadka` |
+| Password | `tadka_local` |
+
+Container must be **healthy** (`docker compose ps`). Run the API once so `InitialDomainModel` creates the schemas.
+
+**Do not** use Host `tadka-postgres` — that name only works inside Docker.
+
+If connect fails: a **local** Postgres install may own `5432`. Stop that service, or you are hitting the wrong server. `docker compose ps` PORTS must show `0.0.0.0:5432->5432`.
+
+In pgAdmin: **tadka → Schemas**. Look for `ordering`, `restaurant`, `delivery`, `identity`, `payment` (plus `public`). Tables live **under each schema**, not only under `public`. Folder `Users` in code is schema `identity` here.
+
+### Docker — enough to run this runbook
+
+You do not install Postgres on Windows. **Docker Desktop** runs official Postgres 16. Start Docker Desktop, then run every command from the **repo root** (where `docker-compose.yml` lives). Use `docker compose` (space), not `docker-compose`.
+
+| Word | Meaning here |
+|------|----------------|
+| **Image** | Recipe. `postgres:16` is downloaded once. |
+| **Container** | Running copy. Named `tadka-postgres`. |
+| **Compose** | Starts whatever `docker-compose.yml` lists. Today: Postgres only. |
+| **Volume** | Disk for DB files. Survives `stop`. Wiped by `down -v`. |
+
+| Name | What you type it with |
+|------|------------------------|
+| **Service** `postgres` | `up`, `stop`, `start`, `logs`, `down` |
+| **Container** `tadka-postgres` | `docker exec` (and what `ps` shows under NAME) |
+
+**Every Docker command in this file**
+
+| Command | What it does |
+|---------|----------------|
+| `docker compose down -v` | Stop and **remove** the container, network, **and volume**. Empty database. Required when switching onto `day-02` so the migration does not hit “relation already exists”. |
+| `docker compose up -d` | Create/start Postgres **in the background** (`-d` = this terminal stays free). |
+| `docker compose ps` | List this project's containers. Want `tadka-postgres` **`(healthy)`**. |
+| `docker exec tadka-postgres pg_isready -U tadka` | Inside the container: is Postgres accepting connections? Not a schema list. |
+| `docker exec tadka-postgres psql …` | Inside the container: run **one** SQL/`psql` command as user `tadka` on database `tadka`, then exit. |
+| `docker compose stop postgres` | Pause the DB. Data stays. API can keep running (liveness vs ready). |
+| `docker compose start postgres` | Resume the same container. Wait for `(healthy)`. |
+
+`psql` pieces: `-U tadka` = user, `-d tadka` = database, `-c "…"` = run this and quit.
+
+`psql` backslash commands (they are **not** SQL):
+
+| Inside `-c "…"` | Meaning |
+|-----------------|---------|
+| `\dn` | List **schemas** (namespaces). Day 2 payoff: five domains plus `public`. |
+| `\dt ordering.*` | List **tables** in schema `ordering`. |
+| `\d restaurant.menu_items` | **Describe** that table (columns, constraints). |
+| `\d ordering.orders` | Same for `orders` — look for IDs with **no** cross-schema FK. |
+
+**“container name already in use”:** another clone (e.g. `tadka` vs `tadka-cohort`) already started `tadka-postgres`. From **that** folder: `docker compose down -v`, then `up -d` here. Only one container can use that name and port `5432`.
 
 ---
 
@@ -34,7 +95,7 @@ dotnet build Tadka.slnx
 
 ## 1. Fresh Postgres (the `-v` matters)
 
-A volume left over from Day 1 (or a previous Day 2 boot) makes the migration throw **`relation already exists`**.
+A volume left over from Day 1 (or a previous Day 2 boot) makes the migration throw **`relation already exists`**. `-v` wipes that volume on purpose.
 
 ```bash
 docker compose down -v
@@ -46,7 +107,7 @@ docker compose ps
 
 ```bash
 docker exec tadka-postgres pg_isready -U tadka
-# → localhost:5432 - accepting connections
+# → localhost:5432 - accepting connections   (server is up; not a list of schemas)
 ```
 
 ---
@@ -98,11 +159,15 @@ First ready hit after `dotnet run` is often **500–800 ms**. Hit it again for s
 
 ## 4. The payoff — five schemas
 
+`exec` = run this inside `tadka-postgres`. `psql` = Postgres client. `\dn` = list schemas.
+
 ```bash
 docker exec tadka-postgres psql -U tadka -d tadka -c "\dn"
 ```
 
 **Look for:** `delivery`, `identity`, `ordering`, `payment`, `restaurant` (plus `public`).
+
+`\dt schema.*` lists tables in that schema:
 
 ```bash
 docker exec tadka-postgres psql -U tadka -d tadka -c "\dt ordering.*"
@@ -127,6 +192,8 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "\dt payment.*"
 ## 5. ADR-008 and value objects — prove it in the table
 
 No seed data today (that is Day 3). `\d` and the FK query need empty tables.
+
+`\d table` describes columns and constraints:
 
 ```bash
 docker exec tadka-postgres psql -U tadka -d tadka -c "\d restaurant.menu_items"
@@ -160,6 +227,8 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "\d ordering.order_items"
 ---
 
 ## 6. (Optional) Postgres down still does not kill liveness
+
+`stop postgres` = service name. Container and data stay. Keep `dotnet run` going.
 
 ```bash
 docker compose stop postgres
@@ -206,7 +275,8 @@ Open in the editor, font bumped:
 
 | Symptom | What to do |
 |---------|------------|
-| `relation already exists` on migrate | `docker compose down -v && docker compose up -d`, then `dotnet run` again. |
+| `relation already exists` on migrate | `docker compose down -v && docker compose up -d`, then `dotnet run` again. `-v` wipes the old volume. |
+| Container name already in use | Another folder already started `tadka-postgres`. `docker compose down` there, then `up -d` here. |
 | `/health/ready` 404 | You are on Day 1 code, or the API was not rebuilt. This branch must have `Ready()`. |
 | `/health` already returns `database` | Old controller. Day 2 splits liveness and readiness. |
 | `psql` role `postgres` does not exist | User is **`tadka`**, database **`tadka`**. |
