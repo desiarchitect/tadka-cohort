@@ -4,7 +4,7 @@
 
 Tadka is a food delivery platform built as a teaching tool for the Desi Architect cohort. **Today it is a .NET 10 monolith** — one API project, one PostgreSQL database, five domain folders, schema-per-domain.
 
-The product will later expose restaurant, menu, and order APIs. Those HTTP endpoints do not exist yet (Day 3).
+Restaurant and order HTTP APIs exist under `/api/v1`. The client never sends a price — `OrderFactory` prices from the current menu. No Payment endpoints yet.
 
 ## Current Architecture
 
@@ -15,7 +15,8 @@ The product will later expose restaurant, menu, and order APIs. Those HTTP endpo
 - **Controllers** live in `Controllers/`, not inside domain folders.
 - **Health:** `GET /health` is liveness only. `GET /health/ready` checks Postgres via `TadkaDbContext` (200 / 503).
 - **Tests:** `tests/Tadka.Api.Tests` (xUnit)
-- **ADRs in force:** 001 .NET 10 · 002 monolith · 003 schema-per-domain · 008 no cross-schema FKs
+- **ADRs in force:** 001–010 (REST `/api/v1`, RFC 7807, two-layer validation, no PUT/DELETE)
+- **Do not** add Redis, Kafka, a Payment controller, `IOrderRepository`, or extra `src/` projects.
 
 ## Coding Standards
 

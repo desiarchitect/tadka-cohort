@@ -1,10 +1,10 @@
 # Tadka — Code Repo (cohort capstone)
 
-The .NET 10 codebase students clone and run. This branch is **Day 2**: domain model + schema-per-domain + ADR-003/008, plus Day 1's liveness `/health` and Copilot-added `/health/ready`. Teaching home: `../desi-architect/desiarchitect-website/cohort-prep/`. Public student clone (default `day-01`, days unlock): `D:\work\cohort\tadka-cohort` → `github.com/desiarchitect/tadka-cohort`. Do not copy this private tree onto that repo — it would drop LICENSE, the student README, and the drifted Day-1 `copilot-instructions.md`.
+The .NET 10 codebase students clone and run. This branch is **Day 3**: REST API under `/api/v1` (restaurants + orders), server-side pricing, order state machine, RFC 7807, demo seed. Day 2's schemas and Day 1's liveness `/health` + `/health/ready` stay. Teaching home: `../desi-architect/desiarchitect-website/cohort-prep/`. Public student clone: `D:\work\cohort\tadka-cohort` → `github.com/desiarchitect/tadka-cohort` (do not overlay this private tree onto it).
 
 ## Stack (today)
 
-.NET 10 (Controllers) · PostgreSQL 16 · EF Core code-first (`InitialDomainModel` on startup) · xUnit. Redis / Kafka / YARP / OTEL / Polly / Terraform / k6 are later weeks — do not add them on this branch.
+.NET 10 (Controllers) · PostgreSQL 16 · EF Core (`InitialDomainModel` + `OrderLifecycleAndDemoSeed`) · FluentValidation · xUnit. Redis / Kafka / YARP / OTEL / Polly / Terraform / k6 / Testcontainers are later weeks — do not add them on this branch.
 
 ## Commands (use the PowerShell tool — Bash/WSL can't see `D:`)
 
@@ -12,35 +12,33 @@ The .NET 10 codebase students clone and run. This branch is **Day 2**: domain mo
 dotnet build Tadka.slnx
 dotnet test
 docker compose down -v
-docker compose up -d                       # creds tadka/tadka_local — down -v first if switching onto this branch
-dotnet run --project src/Tadka.Api         # applies InitialDomainModel
-curl http://localhost:5224/health          # liveness only
-curl http://localhost:5224/health/ready    # SELECT 1 against Postgres
-docker exec tadka-postgres psql -U tadka -d tadka -c "\dn"
+docker compose up -d
+dotnet run --project src/Tadka.Api         # migrates + seeds 3 restaurants, 16 items, Priya
+curl.exe http://localhost:5224/health      # liveness only
+curl.exe http://localhost:5224/health/ready
+curl.exe http://localhost:5224/api/v1/restaurants
 ```
 
 - Compose **service name is `postgres`** (container `tadka-postgres`).
-- First `/health/ready` after `dotnet run` is ~500–800ms (EF/Npgsql warm-up); steady state is single-digit ms.
-- Student runbook: `docs/runbooks/day-02.md`. Learn guides: `docs/learn/`.
+- Switching from Day 2: **`down -v`** or the seed migration hits "relation already exists".
+- Student runbook: `docs/runbooks/day-03.md`. Learn guides: `docs/learn/`.
 
-## Layout & schema-per-domain
+## Layout
 
-`src/Tadka.Api/Domain/{Orders,Restaurants,Delivery,Users,Payments}` plus `ValueObjects`. Postgres schemas: `ordering, restaurant, delivery, identity, payment`. Folder `Users` / schema `identity` is intentional. **No cross-schema FKs** (ADR-008); cross-domain refs by ID only. Value objects as C# records via EF `OwnsOne`.
-
-**Do not create extra `src/` projects** on this branch.
+`Controllers/OrdersController.cs` and `RestaurantsController.cs` under `/api/v1`. Pricing lives in `Domain/Orders/OrderFactory` (client never sends a price). No `IOrderRepository`. No Payment controller. **Do not create extra `src/` projects.**
 
 ## Branches / tags → days
 
-`day-01` = scaffold + liveness `/health` + ADR-001/002. `day-02` = domain model + schemas + `/health/ready` + ADR-003/008. Later `day-NN` branches add only what that day earned.
+`day-01` = scaffold + liveness `/health` + ADR-001/002. `day-02` = domain model + schemas + `/health/ready` + ADR-003/008. `day-03` = REST + seed + ADR-004–007, 009, 010. Later `day-NN` branches add only what that day earned.
 
 ## ADRs (on this branch)
 
-`docs/adrs/`: **001** .NET 10 · **002** monolith-first · **003** schema-per-domain · **008** no-cross-schema-FKs. Template: `docs/templates/adr-template.md`. Later numbers (004+) belong on later day branches.
+`docs/adrs/`: **001** .NET 10 · **002** monolith-first · **003** schema-per-domain · **004** EF Core code-first · **005** REST API style · **006** RFC 7807 · **007** two-layer validation · **008** no-cross-schema-FKs · **009** denormalize order items · **010** API versioning.
 
 ## Gotchas
 
 - **Auto-commit hook** commits with terse messages ("fixed"). Commit explicitly with a real message first.
-- Switching onto this branch: `docker compose down -v` or the migration hits "relation already exists".
-- Compose creds default to `tadka/tadka_local`, matching `appsettings.Development.json`.
+- Compose creds default to `tadka/tadka_local`.
 - Build target is `Tadka.slnx`, not a `.sln`.
 - Do not re-introduce empty `k6/`, `terraform/`, `scripts/`, `toydemo/`, or extra service projects.
+- `/health` must stay liveness-only. Readiness is `/health/ready`.

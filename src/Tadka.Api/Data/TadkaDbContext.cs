@@ -12,7 +12,8 @@ namespace Tadka.Api.Data;
 // payment). When we extract a service in Week 4+, it takes its schema. There
 // are NO cross-schema foreign keys (ADR-008); cross-domain links are by ID only.
 //
-// Day 2: model + schema boundaries. Program.cs applies InitialDomainModel on startup.
+// Day 2: model + schema boundaries. Day 3: REST API + demo seed (HasData).
+        // Program.cs applies migrations on startup.
 public class TadkaDbContext : DbContext
 {
     public TadkaDbContext(DbContextOptions<TadkaDbContext> options) : base(options)
@@ -105,5 +106,7 @@ public class TadkaDbContext : DbContext
             e.Property(p => p.Status).HasConversion<string>().HasMaxLength(20);
             e.OwnsOne(p => p.Amount);
         });
+
+        DemoSeed.Apply(modelBuilder);
     }
 }

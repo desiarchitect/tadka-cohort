@@ -1,19 +1,23 @@
+using FluentValidation;
 using Microsoft.EntityFrameworkCore;
 using Scalar.AspNetCore;
 using Tadka.Api.Data;
+using Tadka.Api.Domain.Orders;
+using Tadka.Api.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 builder.Services.AddOpenApi();
+builder.Services.AddValidatorsFromAssemblyContaining<Program>();
+builder.Services.AddScoped<OrderFactory>();
 
 builder.Services.AddDbContext<TadkaDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("TadkaDb")));
 
 var app = builder.Build();
 
-// Apply migrations on startup so the schema-per-domain layout exists the moment
-// you run the app (great for cohort local dev — open pgAdmin and see 5 schemas).
+// Apply migrations (schema + Day-3 demo seed) on startup.
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
@@ -30,6 +34,7 @@ if (app.Environment.IsDevelopment())
     });
 }
 
+app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseHttpsRedirection();
 app.UseAuthorization();
 app.MapControllers();

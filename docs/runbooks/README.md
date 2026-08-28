@@ -6,6 +6,7 @@ Copy-paste guides to run and verify **this branch's** code. Each day ships the r
 |-----|----------------|---------|
 | 1 | Scaffold + liveness `/health`; Copilot adds `/health/ready` | [day-01.md](day-01.md) |
 | 2 | Domain model + 5 Postgres schemas; `/health/ready` already in the controller | [day-02.md](day-02.md) |
+| 3 | REST `/api/v1`, server-side pricing, RFC 7807, seed | [day-03.md](day-03.md) |
 
 Later days add their own file here when that day's code exists.
 

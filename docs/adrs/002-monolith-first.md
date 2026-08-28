@@ -4,63 +4,19 @@
 **Status:** Accepted
 **Deciders:** Tadka Engineering Team
 
-## Context
+**Topic:** How does Tadka start: one deployable, or many services on day one?
 
-Tadka is a greenfield food delivery platform launching in Bangalore with a team of 6 engineers and 3 months of runway to MVP. We need to decide on the initial application architecture: monolith vs microservices.
+**Options:**
+1. Microservices from day one (one process per domain, many databases).
+2. Modular monolith (one deploy, separate assemblies and hard module walls).
+3. Single API + one Postgres, domain folders as future seams.
 
-The founding team has experience at Swiggy and Dunzo, where they saw both monolithic and microservices architectures at various stages. Every one of those companies started as a monolith.
+**Choice:** Option 3, with option 2's *discipline* (folders, schemas, no cross-domain shortcuts). One `Tadka.Api`, one `TadkaDbContext`, one compose file, one pipeline.
 
-We have zero users, zero traffic, and zero production data. We don't know which parts of the system will become bottlenecks. Guessing wrong with microservices upfront means we burn weeks on infrastructure instead of shipping features.
+**Why:** Team of a few engineers, write load about 11 orders/sec, no measured bottleneck. Five services, a broker, and a gateway before the first order is over-engineering. Swiggy-class companies started as one app.
 
-## Decision
+**Trade-off:** One deploy: a restaurant bug can take down place-order. One connection pool and one backup for everything. Independent scale of one domain waits. Extraction later is a move, not a rewrite, only if we keep the seams.
 
-Build Tadka as a single .NET 10 Web API (`Tadka.Api`) backed by a single PostgreSQL 16 database. Organize code into domain folders (Orders, Restaurants, Delivery, Users, Payments) that represent future service boundaries, but keep everything in one deployable unit.
+**Failure mode:** Folder boundaries blur, everything imports everything, and extraction becomes a rewrite. Or traffic 10×s and we extract too late. Health checks that ignore the database make the dashboard green while orders fail.
 
-**What this looks like:**
-- One `Tadka.Api` project
-- One `TadkaDbContext` with schema-per-domain (e.g., `orders.orders`, `restaurants.menus`)
-- One Docker Compose file (API + PostgreSQL)
-- One CI/CD pipeline
-- One deployment target
-
-**What we explicitly avoid:**
-- Separate services for each domain
-- Inter-service communication (gRPC, HTTP, message queues)
-- Service discovery, API gateway, distributed tracing
-- Multiple databases
-
-## Consequences
-
-### Positive
-- Ship MVP in weeks, not months. One codebase, one deploy, one database to manage.
-- Debugging is straightforward. A request starts and ends in the same process. Stack traces are complete. No distributed tracing needed yet.
-- Schema changes are simple. One migration, one rollback. Foreign keys work across domains because it's all one database.
-- The team of 6 can all work in one repo without coordination overhead of service boundaries.
-- Refactoring is cheap. Moving code between domain folders is a file move, not a service extraction.
-
-### Negative
-- All domains share a single deployment. A bug in restaurant management takes down order placement too.
-- Single database means one connection pool, one set of indexes, one backup strategy for everything.
-- The codebase will grow. Without discipline, domain boundaries in folders will blur.
-- When we need to scale one domain independently (say, delivery tracking needs real-time WebSocket connections), the monolith makes that harder.
-
-### Risks
-- **Risk:** Team treats folder boundaries casually, domains become tangled, extraction becomes painful later. **Mitigation:** Code reviews enforce that domain folders don't import from each other directly. Shared types go in a Common/ folder.
-- **Risk:** Single database becomes a bottleneck at scale. **Mitigation:** We'll add read replicas (Week 2-3), then extract hot domains when load testing proves the bottleneck (Week 4+).
-
-## Alternatives Considered
-
-### Option A: Microservices from Day 1
-- Pros: Each domain independently deployable, scales independently, technology flexibility per service.
-- Cons: 6 engineers managing 5 services + API gateway + message broker + service discovery + distributed tracing + 5 CI/CD pipelines for an app with 0 users. We'd spend month 1 on infrastructure and ship 0 features.
-- Why rejected: Premature complexity. We have no data on which domains need independent scaling. Swiggy ran as a monolith until they had 10K+ daily orders. We should do the same.
-
-### Option B: Modular Monolith from Day 1
-- Pros: Stronger domain isolation than plain folders (separate assemblies, explicit interfaces). Easier extraction later.
-- Cons: More upfront ceremony (interfaces, dependency injection configuration, project references). Slower to iterate in the first few weeks when we're still discovering domain boundaries.
-- Why rejected: We'll evolve to this in Week 4 when we introduce MediatR and domain events. Starting with it adds friction before we understand our domains well enough.
-
-## References
-- [MonolithFirst by Martin Fowler](https://martinfowler.com/bliki/MonolithFirst.html)
-- Swiggy engineering blog: started as a single Django monolith, split after 2 years
-- Shopify: famously runs a modular monolith at massive scale
+**Revisit when:** Team is clearly past ~8 people with ownership fights; a load test names one domain as the bottleneck; or Payment needs physical isolation (fault / PCI), not just a folder.
