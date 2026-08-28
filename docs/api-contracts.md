@@ -235,6 +235,12 @@ Toggle menu item availability (e.g., out of stock during dinner rush).
 
 Create a new order. Server calculates prices from menu items (client does NOT send prices).
 
+**Request Headers:**
+
+| Header | Required | Description |
+|--------|----------|-------------|
+| `Idempotency-Key` | recommended | A client-generated unique value (e.g. a UUID) for this logical order. **Reuse the same key on retries.** A replayed key returns the order the first call created instead of creating a duplicate — the safe-retry guarantee (ADR-011). |
+
 **Request Body:**
 
 ```json
@@ -320,6 +326,7 @@ Create a new order. Server calculates prices from menu items (client does NOT se
 }
 ```
 
+**Response: 200 OK** — *Idempotent replay.* The `Idempotency-Key` was seen before; returns the original order (same shape as the 201 body, same `id`). No new order is created.  
 **Response: 400 Bad Request** — Validation error (empty items, quantity ≤ 0, bad pincode)  
 **Response: 404 Not Found** — Restaurant not found  
 **Response: 422 Unprocessable Entity** — Domain rule violation: menu item not on this restaurant's menu, or item unavailable
@@ -399,7 +406,8 @@ Invalid transitions return `422 Unprocessable Entity`.
 **Response: 204 No Content**
 
 **Response: 404 Not Found** — Order not found  
-**Response: 422 Unprocessable Entity** — Invalid state transition
+**Response: 409 Conflict** — *Concurrent update.* Another request changed this order between your read and your write (optimistic concurrency, ADR-012). Reload and retry. Distinct from 422: the request was legal, you lost a race.  
+**Response: 422 Unprocessable Entity** — Invalid state transition (a domain-rule violation)
 
 ---
 

@@ -1,4 +1,5 @@
 using Tadka.Api.Domain.Common;
+using Tadka.Api.Domain.Orders.Events;
 using Tadka.Api.Domain.Restaurants;
 using Tadka.Api.Domain.ValueObjects;
 
@@ -46,6 +47,8 @@ public class OrderFactory
             DeliveryAddress = deliveryAddress,
             CreatedAt = DateTime.UtcNow
         };
+
+        order.Raise(new OrderPlacedEvent(order.Id, order.CustomerId, order.RestaurantId));
 
         return Result.Success(order);
     }

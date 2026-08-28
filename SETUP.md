@@ -6,7 +6,7 @@ Get everything installed before Day 1. This should take 30-45 minutes. If someth
 
 ### 1. Docker Desktop
 
-We use Docker to run PostgreSQL, Redis, Kafka, and other infrastructure locally. No need to install each one separately.
+We use Docker to run PostgreSQL locally (more services arrive on later days). You do not install Postgres yourself.
 
 **Version:** Docker Desktop 4.30+ (Docker Engine 26+)
 

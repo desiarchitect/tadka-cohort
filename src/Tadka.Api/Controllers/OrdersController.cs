@@ -1,6 +1,7 @@
 using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Tadka.Api.Contracts;
 using Tadka.Api.Contracts.Orders;
 using Tadka.Api.Contracts.Restaurants;
@@ -19,11 +20,17 @@ namespace Tadka.Api.Controllers;
 public class OrdersController(
     IOrderRepository orderRepository,
     OrderFactory orderFactory,
-    TadkaDbContext db) : ControllerBase
+    IIdempotencyStore idempotencyStore,
+    IDomainEventDispatcher eventDispatcher,
+    TadkaDbContext db,
+    IConfiguration configuration) : ControllerBase
 {
     private readonly IOrderRepository _orderRepository = orderRepository;
     private readonly OrderFactory _orderFactory = orderFactory;
+    private readonly IIdempotencyStore _idempotencyStore = idempotencyStore;
+    private readonly IDomainEventDispatcher _eventDispatcher = eventDispatcher;
     private readonly TadkaDbContext _db = db; // monolith-phase lookup of restaurant + menu for server-side pricing
+    private readonly IConfiguration _configuration = configuration;
 
     [HttpPost]
     public async Task<ActionResult<OrderResponse>> Create(
@@ -33,6 +40,19 @@ public class OrdersController(
         var result = await validator.ValidateAsync(request);
         if (!result.IsValid)
             throw new ValidationException(result.Errors);
+
+        // Idempotency (ADR-011): if the client sends an Idempotency-Key and we have already seen it,
+        // return the order that key created — a double-tap / retry must never place a second order.
+        var idempotencyKey = Request.Headers["Idempotency-Key"].FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            var existingOrderId = await _idempotencyStore.FindOrderIdAsync(idempotencyKey);
+            if (existingOrderId is not null)
+            {
+                var existing = await _orderRepository.GetByIdAsync(existingOrderId.Value);
+                return Ok(MapToResponse(existing!)); // replay → 200 with the original order
+            }
+        }
 
         // Load restaurant with menu to do server-side pricing (the client never sends a price).
         var restaurant = await _db.Restaurants.AsNoTracking()
@@ -62,7 +82,33 @@ public class OrdersController(
         var order = orderResult.Value;
 
         _orderRepository.Add(order);
-        await _orderRepository.SaveChangesAsync();
+
+        // The key→order mapping is staged on the SAME DbContext, so it commits in the SAME
+        // transaction as the order: either both land or neither does.
+        if (!string.IsNullOrWhiteSpace(idempotencyKey))
+            _idempotencyStore.Record(idempotencyKey, order.Id);
+
+        try
+        {
+            await _orderRepository.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex) && !string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            // Concurrent replay: both requests missed the Find, both inserted. The unique
+            // constraint on the key is the actual race fix (ADR-011). The loser must return
+            // the winner's order as 200 — not 500.
+            _db.ChangeTracker.Clear();
+            var winnerId = await _idempotencyStore.FindOrderIdAsync(idempotencyKey);
+            if (winnerId is null)
+                throw;
+            var winner = await _orderRepository.GetByIdAsync(winnerId.Value);
+            return Ok(MapToResponse(winner!));
+        }
+
+        // Dispatch domain events AFTER the state is committed (ADR-013): a failed side-effect
+        // (e.g. notification) must not roll back a persisted order.
+        await _eventDispatcher.DispatchAsync(order.DomainEvents);
+        order.ClearDomainEvents();
 
         // Payment is intentionally NOT processed here yet (see Day 7). Doing it
         // synchronously inside order creation would couple ordering to a slow
@@ -117,7 +163,31 @@ public class OrdersController(
         if (result.IsFailure)
             return Problem(detail: result.Error, statusCode: StatusCodes.Status422UnprocessableEntity, title: "Invalid State Transition");
 
+        // Day 4 break kit, Demo 6 (ADR-045 lock-hold beat): "Demo:DispatchEventsBeforeCommit"
+        // reproduces the bug ADR-013 already fixed, on demand, for teaching. Default is false —
+        // the correct, shipped behavior (dispatch AFTER commit, below). Flip it to true and an
+        // EXPLICIT transaction is kept open across the slow notification handler
+        // (Demo:NotificationDelayMs): SaveChanges flushes the UPDATE (taking the order row's
+        // write lock) but does NOT commit, the handler runs next while that lock is still held,
+        // and only then do we commit. A concurrent PATCH on the SAME order blocks for the
+        // handler's whole duration. `pg_locks` shows exactly who is waiting on whom (see
+        // break-kit-day-04.md, Demo 6).
+        if (_configuration.GetValue("Demo:DispatchEventsBeforeCommit", false))
+        {
+            await using var tx = await _db.Database.BeginTransactionAsync();
+            await _orderRepository.SaveChangesAsync(); // UPDATE runs, lock taken, transaction NOT yet committed
+            await _eventDispatcher.DispatchAsync(order.DomainEvents); // the lock is held for this entire call
+            await tx.CommitAsync(); // lock released here — too late, if the handler was slow
+            order.ClearDomainEvents();
+            return NoContent();
+        }
+
+        // A concurrent PATCH may have moved the order since we read it — SaveChanges then throws
+        // DbUpdateConcurrencyException (xmin mismatch) → 409 via the middleware (ADR-012).
         await _orderRepository.SaveChangesAsync();
+
+        await _eventDispatcher.DispatchAsync(order.DomainEvents);
+        order.ClearDomainEvents();
         return NoContent();
     }
 
@@ -137,6 +207,9 @@ public class OrdersController(
         await _orderRepository.SaveChangesAsync();
         return NoContent();
     }
+
+    private static bool IsUniqueViolation(DbUpdateException ex) =>
+        ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
     private static OrderResponse MapToResponse(Order o) => new(
         o.Id,

@@ -5,6 +5,8 @@
 # Day 8: Add Kafka + Zookeeper (first service extraction)
 # Day 13: Add Prometheus + Grafana
 
+name: tadka
+
 services:
   postgres:
     image: postgres:16

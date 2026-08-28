@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FluentValidation;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Tadka.Api.Exceptions;
 
 namespace Tadka.Api.Middleware;
@@ -45,6 +46,15 @@ public class ExceptionHandlingMiddleware
                 Title = "Business Rule Violation",
                 Detail = domain.Message,
                 Type = "https://tools.ietf.org/html/rfc4918#section-11.2"
+            },
+            // Optimistic-concurrency conflict (ADR-012): someone changed this row between our read
+            // and our write. 409 ≠ 422 — the request was legal, you just lost the race. Reload + retry.
+            DbUpdateConcurrencyException => new ProblemDetails
+            {
+                Status = StatusCodes.Status409Conflict,
+                Title = "Concurrent Update Conflict",
+                Detail = "This order was modified by another request. Reload the order and try again.",
+                Type = "https://tools.ietf.org/html/rfc9110#section-15.5.10"
             },
             ValidationException validation => CreateValidationProblemDetails(validation),
             _ => CreateInternalErrorProblemDetails(exception)

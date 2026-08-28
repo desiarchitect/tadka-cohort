@@ -1,0 +1,649 @@
+openapi: 3.1.0
+info:
+  title: Tadka API (Day 3)
+  version: "1.0.0"
+  description: |
+    Contract-first snapshot of **tadka branch `day-03`**. One process, one Postgres,
+    routes under `/api/v1` except liveness/readiness.
+
+    The client never sends a price. No `PUT`. No `DELETE`. Errors are RFC 7807
+    (`application/problem+json`).
+
+    Why each field exists: `docs/api/contract-reasoning.md`.
+    Shapes in Markdown: `docs/api-contracts.md`.
+
+    Seed examples: Meghana Foods `a1b2c3d4-0001-4000-8000-000000000001`,
+    Chicken Biryani `b1b2c3d4-0001-4000-8000-000000000001` (₹299),
+    Priya Sharma `c1b2c3d4-0001-4000-8000-000000000001`.
+    Two biryanis → `totalAmount.amount` = 598.00.
+  contact:
+    name: Desi Architect cohort
+servers:
+  - url: http://localhost:5224
+    description: Kestrel HTTP (compose Postgres on 5432)
+tags:
+  - name: Health
+  - name: Restaurants
+  - name: Menu
+  - name: Orders
+paths:
+  /health:
+    get:
+      tags: [Health]
+      operationId: getLiveness
+      summary: Liveness. Process is up. Does not talk to Postgres.
+      description: See contract-reasoning.md (Health).
+      responses:
+        "200":
+          description: Process up. No `database` field.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Liveness"
+              example:
+                status: Healthy
+                timestamp: "2026-08-24T10:00:00Z"
+
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: getReadiness
+      summary: Readiness. Postgres answers SELECT 1.
+      description: See contract-reasoning.md (Health).
+      responses:
+        "200":
+          description: Database connected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+        "503":
+          description: Database disconnected.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+
+  /api/v1/restaurants:
+    get:
+      tags: [Restaurants]
+      operationId: listRestaurants
+      summary: List restaurants, optional city filter, paged.
+      description: See contract-reasoning.md (Restaurant catalogue).
+      parameters:
+        - $ref: "#/components/parameters/city"
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: Page of restaurants. Menu is not included.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PagedRestaurants"
+    post:
+      tags: [Restaurants]
+      operationId: createRestaurant
+      summary: Create a restaurant. Server sets isActive true.
+      description: See contract-reasoning.md (Restaurant catalogue).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRestaurantRequest"
+      responses:
+        "201":
+          description: Created. Location points at GET by id.
+          headers:
+            Location:
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Restaurant"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+
+  /api/v1/restaurants/{id}:
+    parameters:
+      - $ref: "#/components/parameters/restaurantId"
+    get:
+      tags: [Restaurants]
+      operationId: getRestaurant
+      summary: Get one restaurant. Does not return the menu.
+      description: See contract-reasoning.md (Restaurant catalogue).
+      responses:
+        "200":
+          description: One restaurant. Menu is a separate GET.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Restaurant"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      tags: [Restaurants]
+      operationId: updateRestaurant
+      summary: Partial update, including deactivate (isActive false). Not DELETE.
+      description: See contract-reasoning.md (Restaurant catalogue).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRestaurantRequest"
+            example:
+              isActive: false
+      responses:
+        "204":
+          description: Updated. No body.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/restaurants/{id}/menu:
+    parameters:
+      - $ref: "#/components/parameters/restaurantId"
+    get:
+      tags: [Menu]
+      operationId: getMenu
+      summary: List menu items for a restaurant.
+      description: See contract-reasoning.md (Menu). Live prices live here, not on the order.
+      parameters:
+        - name: category
+          in: query
+          schema: { type: string }
+        - name: vegOnly
+          in: query
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Array, not paged.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MenuItem"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [Menu]
+      operationId: addMenuItem
+      summary: Partner adds a dish. Price is set here (live catalogue).
+      description: See contract-reasoning.md (Menu).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMenuItemRequest"
+      responses:
+        "201":
+          description: Dish created under this restaurant.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MenuItem"
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/restaurants/{id}/menu/{itemId}:
+    parameters:
+      - $ref: "#/components/parameters/restaurantId"
+      - $ref: "#/components/parameters/menuItemId"
+    patch:
+      tags: [Menu]
+      operationId: updateMenuItem
+      summary: Partial update of a dish, including price. Does not rewrite old orders.
+      description: See contract-reasoning.md (Menu).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateMenuItemRequest"
+            example:
+              price: { amount: 320, currency: INR }
+      responses:
+        "204":
+          description: Updated.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/restaurants/{id}/menu/{itemId}/availability:
+    parameters:
+      - $ref: "#/components/parameters/restaurantId"
+      - $ref: "#/components/parameters/menuItemId"
+    patch:
+      tags: [Menu]
+      operationId: updateMenuItemAvailability
+      summary: Toggle 86'd / available without sending the whole dish.
+      description: See contract-reasoning.md (Menu).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAvailabilityRequest"
+      responses:
+        "204":
+          description: Updated.
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/orders:
+    post:
+      tags: [Orders]
+      operationId: placeOrder
+      summary: Place an order. Server prices from the live menu. Client sends no price.
+      description: See contract-reasoning.md (Place order). 201 total for two biryanis is 598.00.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrderRequest"
+            example:
+              customerId: "c1b2c3d4-0001-4000-8000-000000000001"
+              restaurantId: "a1b2c3d4-0001-4000-8000-000000000001"
+              items:
+                - menuItemId: "b1b2c3d4-0001-4000-8000-000000000001"
+                  quantity: 2
+              deliveryAddress:
+                line1: "302, Prestige Lakeside"
+                line2: "Whitefield"
+                city: "Bangalore"
+                pincode: "560066"
+                latitude: 12.97
+                longitude: 77.75
+      responses:
+        "201":
+          description: Created. Location is GET /orders/{id}. Body includes server total and line snapshots.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+              example:
+                totalAmount: { amount: 598.00, currency: INR }
+                status: Created
+        "400":
+          $ref: "#/components/responses/ValidationError"
+        "404":
+          description: Restaurant id does not exist.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "422":
+          description: Item not on this restaurant's menu, or a dish is unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+    get:
+      tags: [Orders]
+      operationId: listOrders
+      summary: List orders, newest first. Optional customerId filter. Paged.
+      description: See contract-reasoning.md (Place order). No restaurant name join.
+      parameters:
+        - name: customerId
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/page"
+        - $ref: "#/components/parameters/pageSize"
+      responses:
+        "200":
+          description: Page of orders, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PagedOrders"
+
+  /api/v1/orders/{id}:
+    parameters:
+      - $ref: "#/components/parameters/orderId"
+    get:
+      tags: [Orders]
+      operationId: getOrder
+      summary: Get one order with snapshotted line names and unit prices.
+      description: See contract-reasoning.md (Place order).
+      responses:
+        "200":
+          description: Order with snapshotted line names and unit prices.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Order"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/orders/{id}/status:
+    parameters:
+      - $ref: "#/components/parameters/orderId"
+    patch:
+      tags: [Orders]
+      operationId: updateOrderStatus
+      summary: Legal FSM transition only. Illegal jump is 422, not 400.
+      description: See contract-reasoning.md (Lifecycle). Unknown status string is also 422 (DomainException).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateOrderStatusRequest"
+            example:
+              status: Confirmed
+      responses:
+        "204":
+          description: Transition applied.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Illegal transition, or status string not in the enum.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  /api/v1/orders/{id}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/orderId"
+    post:
+      tags: [Orders]
+      operationId: cancelOrder
+      summary: Cancel as a business action, not PATCH status. Allowed from Created or Confirmed only.
+      description: See contract-reasoning.md (Lifecycle).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelOrderRequest"
+      responses:
+        "204":
+          description: Cancelled.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          description: Not cancellable from current status (e.g. Preparing or later).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+components:
+  parameters:
+    restaurantId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    menuItemId:
+      name: itemId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    orderId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    city:
+      name: city
+      in: query
+      schema: { type: string }
+      description: Case-insensitive city filter.
+    page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+    pageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+
+  responses:
+    NotFound:
+      description: Resource not found.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+          example:
+            type: "https://tools.ietf.org/html/rfc7231#section-6.5.4"
+            title: Resource Not Found
+            status: 404
+            detail: "Restaurant with id ... was not found."
+    ValidationError:
+      description: FluentValidation failed (shape).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ValidationProblemDetails"
+          example:
+            type: "https://tools.ietf.org/html/rfc7231#section-6.5.1"
+            title: Validation Failed
+            status: 400
+            detail: One or more validation errors occurred.
+            errors:
+              Items:
+                - Order must have at least one item.
+
+  schemas:
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: number
+          format: double
+        currency:
+          type: string
+          default: INR
+          minLength: 3
+          maxLength: 3
+    Address:
+      type: object
+      required: [line1, city, pincode]
+      properties:
+        line1: { type: string }
+        line2: { type: string }
+        city: { type: string }
+        pincode:
+          type: string
+          pattern: "^\\d{6}$"
+        latitude: { type: number, format: double }
+        longitude: { type: number, format: double }
+    Restaurant:
+      type: object
+      required: [id, name, address, isActive, avgPrepTimeMinutes, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        address: { $ref: "#/components/schemas/Address" }
+        isActive: { type: boolean }
+        avgPrepTimeMinutes: { type: integer }
+        createdAt: { type: string, format: date-time }
+    MenuItem:
+      type: object
+      required: [id, name, price, category, isAvailable, isVeg]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: [string, "null"] }
+        price: { $ref: "#/components/schemas/Money" }
+        category: { type: string }
+        isAvailable: { type: boolean }
+        isVeg: { type: boolean }
+    OrderStatus:
+      type: string
+      enum:
+        - Created
+        - Confirmed
+        - Preparing
+        - ReadyForPickup
+        - PickedUp
+        - Delivered
+        - Cancelled
+        - Refunded
+      description: |
+        Refunded is in the enum for later payment work. Day 3 transitions do not enter it.
+        Legal edges: Created→Confirmed|Cancelled; Confirmed→Preparing|Cancelled;
+        Preparing→ReadyForPickup; ReadyForPickup→PickedUp; PickedUp→Delivered.
+    OrderItem:
+      type: object
+      description: Snapshot of the dish at place-order time. Name and unitPrice are copies.
+      required: [id, menuItemId, name, quantity, unitPrice]
+      properties:
+        id: { type: string, format: uuid }
+        menuItemId: { type: string, format: uuid }
+        name: { type: string }
+        quantity: { type: integer, minimum: 1 }
+        unitPrice: { $ref: "#/components/schemas/Money" }
+        specialInstructions: { type: [string, "null"] }
+    Order:
+      type: object
+      required: [id, customerId, restaurantId, status, items, totalAmount, deliveryAddress, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        customerId: { type: string, format: uuid }
+        restaurantId: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/OrderStatus" }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/OrderItem" }
+        totalAmount: { $ref: "#/components/schemas/Money" }
+        deliveryAddress: { $ref: "#/components/schemas/Address" }
+        createdAt: { type: string, format: date-time }
+        confirmedAt: { type: [string, "null"], format: date-time }
+        deliveredAt: { type: [string, "null"], format: date-time }
+        cancelledAt: { type: [string, "null"], format: date-time }
+        cancellationReason: { type: [string, "null"] }
+    PagedRestaurants:
+      type: object
+      required: [items, page, pageSize, totalCount, totalPages]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Restaurant" }
+        page: { type: integer }
+        pageSize: { type: integer }
+        totalCount: { type: integer }
+        totalPages: { type: integer }
+    PagedOrders:
+      type: object
+      required: [items, page, pageSize, totalCount, totalPages]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Order" }
+        page: { type: integer }
+        pageSize: { type: integer }
+        totalCount: { type: integer }
+        totalPages: { type: integer }
+    CreateRestaurantRequest:
+      type: object
+      required: [name, address]
+      properties:
+        name: { type: string, maxLength: 200 }
+        address: { $ref: "#/components/schemas/Address" }
+        avgPrepTimeMinutes: { type: integer, exclusiveMinimum: 0, default: 30 }
+    UpdateRestaurantRequest:
+      type: object
+      properties:
+        name: { type: [string, "null"] }
+        avgPrepTimeMinutes: { type: [integer, "null"] }
+        isActive: { type: [boolean, "null"] }
+    CreateMenuItemRequest:
+      type: object
+      required: [name, price, category, isVeg]
+      properties:
+        name: { type: string, maxLength: 100 }
+        description: { type: [string, "null"] }
+        price: { $ref: "#/components/schemas/Money" }
+        category: { type: string }
+        isVeg: { type: boolean }
+    UpdateMenuItemRequest:
+      type: object
+      properties:
+        name: { type: [string, "null"] }
+        description: { type: [string, "null"] }
+        price: { $ref: "#/components/schemas/Money" }
+        category: { type: [string, "null"] }
+        isVeg: { type: [boolean, "null"] }
+        isAvailable: { type: [boolean, "null"] }
+    UpdateAvailabilityRequest:
+      type: object
+      required: [isAvailable]
+      properties:
+        isAvailable: { type: boolean }
+    CreateOrderItemRequest:
+      type: object
+      required: [menuItemId, quantity]
+      properties:
+        menuItemId: { type: string, format: uuid }
+        quantity: { type: integer, exclusiveMinimum: 0 }
+        specialInstructions: { type: [string, "null"] }
+      additionalProperties: false
+    CreateOrderRequest:
+      type: object
+      required: [customerId, restaurantId, items, deliveryAddress]
+      additionalProperties: false
+      description: No price. No totalAmount. Server copies name and unit price from the menu.
+      properties:
+        customerId: { type: string, format: uuid }
+        restaurantId: { type: string, format: uuid }
+        items:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/CreateOrderItemRequest" }
+        deliveryAddress: { $ref: "#/components/schemas/Address" }
+    UpdateOrderStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          description: Case-insensitive parse of OrderStatus. Unknown value is 422.
+    CancelOrderRequest:
+      type: object
+      properties:
+        reason: { type: [string, "null"] }
+    Liveness:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status: { type: string }
+        timestamp: { type: string, format: date-time }
+    Readiness:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status: { type: string }
+        database: { type: string }
+        responseTime: { type: string }
+        timestamp: { type: string, format: date-time }
+    ProblemDetails:
+      type: object
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string }
+        traceId: { type: string }
+    ValidationProblemDetails:
+      allOf:
+        - $ref: "#/components/schemas/ProblemDetails"
+        - type: object
+          properties:
+            errors:
+              type: object
+              additionalProperties:
+                type: array
+                items: { type: string }

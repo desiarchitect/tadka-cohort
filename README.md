@@ -2,120 +2,106 @@
 
 A food delivery platform built as a teaching project for the [Desi Architect](https://desiarchitect.com) cohort.
 
-Tadka starts as a .NET 10 monolith and evolves into a microservices architecture over 8 weeks. Every architectural decision is earned, not assumed.
+This branch is **Day 4**: Saturday's `/api/v1` plus **idempotency**, **optimistic concurrency (`xmin` → 409)**, and **in-process domain events**. The client still does not send prices. Illegal transitions are **422**. A lost race is **409**.
 
-## Architecture Evolution
+## Where this is going
 
-| Week | Architecture | What Changes |
-|------|-------------|-------------|
-| 1 | Monolith | Single API + PostgreSQL. CRUD, health check, domain folders. |
-| 2 | Monolith + Caching | Redis for menu/restaurant caching. Read replicas for PostgreSQL. |
-| 3 | Monolith + Async | Kafka for order events. Async processing for non-critical paths. |
-| 4 | Modular Monolith → First Extraction | CQRS pattern. Order service extracted as first microservice. |
-| 5 | 2 Services | API Gateway (YARP). Distributed transactions (Saga). |
-| 6 | 3 Services | Observability (OpenTelemetry). Circuit breakers. Chaos engineering. |
-| 7 | 4 Services | CDN. Rate limiting. Capacity planning with k6 load tests. |
-| 8 | 5 Services | Final architecture. Real-world teardowns. Production readiness. |
+Over 8 weeks this monolith evolves into **4 services plus a gateway**. Destination: [`docs/diagrams/day-01-final-architecture.md`](docs/diagrams/day-01-final-architecture.md). There is no separate User service.
 
-## Tech Stack
+Right now:
+
+```
+Client  →  Tadka.Api (/api/v1)  →  PostgreSQL 16
+                                   ├── ordering
+                                   ├── restaurant
+                                   ├── delivery
+                                   ├── identity
+                                   └── payment
+```
+
+No Redis, Kafka, gateway, or Payment HTTP API yet.
+
+## Tech stack (today)
 
 - **.NET 10** — Web API with Controllers
-- **PostgreSQL 16** — Primary database
-- **Redis 7** — Caching (from Week 2)
-- **Apache Kafka** — Event streaming (from Week 3)
-- **YARP** — API Gateway (from Week 5)
-- **Docker** — Local infrastructure
-- **EF Core** — ORM with code-first migrations
-- **xUnit + FluentAssertions + NSubstitute** — Testing
-- **Testcontainers** — Integration tests
-- **OpenTelemetry** — Distributed tracing and metrics (from Week 6)
-- **k6** — Load testing (from Week 7)
-- **Terraform** — Infrastructure as Code (from Week 8)
+- **PostgreSQL 16** — one database, five schemas
+- **EF Core** — `InitialDomainModel` + `OrderLifecycleAndDemoSeed` + `Day04Hardening` on startup
+- **FluentValidation** — request validation (400)
+- **xUnit + Testcontainers** — state machine + order-flow tests (**24/24**)
+- **Docker Compose** — Postgres only
 
-## Getting Started
+## Getting started
 
-### Prerequisites
+Prerequisites: [`SETUP.md`](SETUP.md). Compose: [`docs/learn/docker.md`](docs/learn/docker.md).
 
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) (4.30+)
-- [VS Code](https://code.visualstudio.com/) with C# Dev Kit extension
+```powershell
+git checkout day-04
 
-### Setup
-
-```bash
-# Start PostgreSQL
+# Switching from Day 3: must wipe the volume. `down` without -v leaves ordering.orders
+# and the next `dotnet run` fails: relation "orders" already exists.
+docker compose down -v
+docker rm -f tadka-postgres
+docker volume rm tadka_pgdata tadka-cohort_pgdata
 docker compose up -d
+docker compose ps              # tadka-postgres should be (healthy)
 
-# Verify PostgreSQL is healthy
-docker compose ps
-
-# Run the API
+dotnet test Tadka.slnx         # 24/24; needs Docker Desktop
 dotnet run --project src/Tadka.Api
 
-# Check health
-curl http://localhost:5000/health
+curl.exe http://localhost:5224/health
+curl.exe http://localhost:5224/health/ready
+curl.exe http://localhost:5224/api/v1/restaurants
 ```
 
-### Running Tests
+HTTP **5224** (HTTPS 7036). Compose service **`postgres`**. Dev also serves Scalar at `http://localhost:5224/scalar`.
 
-```bash
-dotnet test
-```
+Seed is unchanged from Day 3 (Meghana, biryani ₹299, Priya). Full curls, 201/200, 409, and the locking toy: [`docs/runbooks/day-04.md`](docs/runbooks/day-04.md). Use `curl.exe` and `--data-binary "@docs/runbooks/place-order.json"`.
 
-## Project Structure
+`Password=tadka_local` in `appsettings.Development.json` is a **local dummy**. Real credentials never go in git.
+
+## Project structure
 
 ```
 tadka/
-├── src/
-│   └── Tadka.Api/           # The monolith (becomes modular over time)
-│       ├── Controllers/     # API endpoints
-│       ├── Domain/          # Business logic, organized by bounded context
-│       │   ├── Orders/
-│       │   ├── Restaurants/
-│       │   ├── Delivery/
-│       │   ├── Users/
-│       │   └── Payments/
-│       └── Data/            # EF Core DbContext and migrations
-├── tests/
-│   └── Tadka.Api.Tests/     # Unit and integration tests
+├── src/Tadka.Api/
+│   ├── Controllers/            # Health, Orders, Restaurants
+│   ├── Contracts/
+│   ├── Domain/                 # aggregates + OrderFactory + events
+│   ├── Data/                   # TadkaDbContext + idempotency store
+│   ├── Middleware/             # RFC 7807 + 409
+│   └── Migrations/
+├── tests/Tadka.Api.Tests/
+├── toydemo/day-04-locking/     # FOR UPDATE wait / NOWAIT / SKIP LOCKED (not order API)
 ├── docs/
-│   ├── adrs/                # Architecture Decision Records
-│   ├── diagrams/            # Mermaid architecture diagrams
-│   └── templates/           # Reusable templates
-├── docker-compose.yml       # Infrastructure (PostgreSQL, later Redis, Kafka)
-└── k6/                      # Load test scripts (from Week 7)
+│   ├── adrs/                   # 001–013
+│   ├── api/                    # OpenAPI 3.1 companion (Day 3 contract)
+│   ├── api-contracts.md
+│   ├── diagrams/
+│   ├── learn/
+│   ├── runbooks/
+│   └── templates/
+└── docker-compose.yml
 ```
 
-## Releases
-
-Each release is a clean, runnable snapshot of Tadka at the end of that week. You can download a ZIP from GitHub Releases or check out the tag locally.
-
-```bash
-# See all release tags
-git fetch --tags
-git tag -l
-
-# Check out a specific week's state (read-only)
-git checkout v1.0-monolith-crud
-
-# Return to your own work
-git checkout main
-```
-
-| Tag | After | What's in it |
-|-----|-------|-------------|
-| `v0.0-scaffold` | Phase 0 | Empty scaffold, `/health` endpoint, domain folder structure |
-| `v1.0-monolith-crud` | Week 2 | Restaurant + menu + order APIs, ADRs, schema-per-domain |
-| `v2.0-db-and-cache` | Week 3 | PostgreSQL indexes, EXPLAIN ANALYZE, Redis Cache-Aside |
-| `v3.0-modular-monolith` | Week 4 | MediatR domain events, CQRS, Payment service extracted, Kafka introduced |
-| `v4.0-distributed` | Week 5 | Delivery service extracted, YARP gateway, JWT across services, Saga pattern |
-| `v5.0-production-deploy` | Week 6 | Restaurant extracted, Docker multi-stage, ECS Fargate, Terraform, CI/CD |
-| `v6.0-observability` | Week 7 | OpenTelemetry, Grafana dashboards, Tempo tracing, Polly resilience, chaos |
-| `v7.0-final` | Week 8 | k6 load tests, cost optimization, architecture documentation |
+Pricing is still `OrderFactory`. No Payment controller. Pessimistic `FOR UPDATE` is **not** on orders — that demo is the locking toy.
 
 ## Architecture Decision Records
 
-We document every significant technical decision as an ADR in `docs/adrs/`. This isn't just for the project. It's a habit every architect should build.
+| ADR | Decision |
+|-----|----------|
+| [001](docs/adrs/001-dotnet10.md) | .NET 10 as the runtime |
+| [002](docs/adrs/002-monolith-first.md) | Start as a monolith |
+| [003](docs/adrs/003-schema-per-domain.md) | One Postgres schema per bounded context |
+| [004](docs/adrs/004-ef-core-code-first.md) | EF Core code-first |
+| [005](docs/adrs/005-rest-api-style.md) | REST under `/api/v1`; no PUT/DELETE |
+| [006](docs/adrs/006-rfc7807-errors.md) | RFC 7807 Problem Details |
+| [007](docs/adrs/007-two-layer-validation.md) | FluentValidation + domain rules |
+| [008](docs/adrs/008-no-cross-schema-fks.md) | FKs only inside a schema |
+| [009](docs/adrs/009-denormalize-order-items.md) | Snapshot name and price on order items |
+| [010](docs/adrs/010-api-versioning.md) | URL version `/api/v1` |
+| [011](docs/adrs/011-idempotency-for-unsafe-writes.md) | `Idempotency-Key`; unique constraint; 201 then 200 |
+| [012](docs/adrs/012-optimistic-concurrency-orders.md) | `xmin` token; loser is **409** |
+| [013](docs/adrs/013-in-process-domain-events.md) | Raise fact; dispatch after `SaveChanges` |
 
 ## License
 

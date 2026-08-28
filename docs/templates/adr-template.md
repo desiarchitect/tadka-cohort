@@ -4,36 +4,18 @@
 **Status:** Proposed | Accepted | Deprecated | Superseded
 **Deciders:** [who was involved]
 
-## Context
+Same seven fields as the board. English in the file. Fill every field; "Revisit when" is not optional.
 
-What is the issue that we're seeing that is motivating this decision or change?
+**Topic:** What are we deciding?
 
-## Decision
+**Options:** What did we consider? (3–5 real options, none strawmanned)
 
-What is the change that we're proposing and/or doing?
+**Choice:** What did we pick?
 
-## Consequences
+**Why:** Why this one?
 
-### Positive
-- 
+**Trade-off:** What does it cost (rupees, ops, reversibility)?
 
-### Negative
-- 
+**Failure mode:** How does this go wrong at 2am?
 
-### Risks
-- 
-
-## Alternatives Considered
-
-### Option A: [Name]
-- Pros:
-- Cons:
-- Why rejected:
-
-### Option B: [Name]
-- Pros:
-- Cons:
-- Why rejected:
-
-## References
-- 
+**Revisit when:** Under what conditions do we open this again? (A number, a failure, a team size — not "a new blog post".)

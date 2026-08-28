@@ -106,6 +106,89 @@ namespace Tadka.Api.Migrations
                     b.ToTable("assignments", "delivery");
                 });
 
+            modelBuilder.Entity("Tadka.Api.Domain.Orders.Coupon", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int>("MaxRedemptions")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("Redeemed")
+                        .HasColumnType("integer");
+
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("coupons", "ordering");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("c0000000-0001-4000-8000-000000000001"),
+                            Code = "TADKA50",
+                            MaxRedemptions = 100,
+                            Redeemed = 0
+                        });
+                });
+
+            modelBuilder.Entity("Tadka.Api.Domain.Orders.CouponRedemption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CouponId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("RedeemedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("NOW()");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CouponId");
+
+                    b.ToTable("coupon_redemptions", "ordering");
+                });
+
+            modelBuilder.Entity("Tadka.Api.Domain.Orders.IdempotencyKey", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("NOW()");
+
+                    b.Property<Guid>("OrderId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("idempotency_keys", "ordering");
+                });
+
             modelBuilder.Entity("Tadka.Api.Domain.Orders.Order", b =>
                 {
                     b.Property<Guid>("Id")
@@ -143,6 +226,12 @@ namespace Tadka.Api.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)")
                         .HasDefaultValue("Created");
+
+                    b.Property<uint>("xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
 
                     b.HasKey("Id");
 

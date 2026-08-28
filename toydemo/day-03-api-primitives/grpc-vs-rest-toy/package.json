@@ -1,0 +1,19 @@
+{
+  "name": "grpc-vs-rest-toy",
+  "version": "1.0.0",
+  "description": "Failure-first toy demo for chatty REST vs gRPC internal calls (Day 03/04 concept)",
+  "main": "index.js",
+  "scripts": {
+    "break": "node index.js --mode=break",
+    "fix": "node index.js --mode=fix",
+    "bench:break": "node real-bench.js --mode=break",
+    "bench:fix": "node real-bench.js --mode=fix"
+  },
+  "keywords": [],
+  "author": "Desi Architect",
+  "license": "MIT",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.12.6",
+    "@grpc/proto-loader": "^0.7.13"
+  }
+}

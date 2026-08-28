@@ -7,6 +7,7 @@ graph LR
     subgraph "Tadka API (localhost:5224)"
         subgraph "Health"
             H1["GET /health"]
+            H2["GET /health/ready"]
         end
 
         subgraph "Restaurant Domain"
@@ -55,13 +56,14 @@ graph LR
 | PATCH | `/api/v1/orders/{id}/status` | Update status (state machine) | 204, 404, 422 |
 | POST | `/api/v1/orders/{id}/cancel` | Cancel order | 204, 404, 422 |
 
-### Health (1)
+### Health (2)
 
 | Method | Route | Purpose | Status Codes |
 |--------|-------|---------|-------------|
-| GET | `/health` | Readiness check | 200 |
+| GET | `/health` | Liveness check | 200 |
+| GET | `/health/ready` | Readiness check (DB) | 200/503 |
 
-**Total: 14 endpoints** (8 restaurant + 5 order + health). No `PUT`, no `DELETE` — all updates are partial (`PATCH`); removal is deactivate/soft-hide/cancel.
+**Total: 15 endpoints** (8 restaurant + 5 order + 2 health (liveness + readiness)). No `PUT`, no `DELETE` — all updates are partial (`PATCH`); removal is deactivate/soft-hide/cancel.
 
 ## Order State Machine
 

@@ -229,3 +229,26 @@ Auto-increment IDs leak information (competitor can estimate your order volume b
 | HTTP headers | Title-Case | `Content-Type`, `Authorization` |
 
 ASP.NET Core's default JSON serializer (System.Text.Json) converts PascalCase C# properties to camelCase automatically.
+
+---
+
+## 13. Idempotency & Safe Retries (Decided — ADR-011)
+
+The network is unreliable; clients retry. A safe method (`GET`) can be retried freely. An **unsafe** method (`POST` that creates a resource) cannot — a retry would create a duplicate. To make unsafe writes safe to retry, support a client-supplied key.
+
+- **`Idempotency-Key` request header** on unsafe writes (today: `POST /orders`). The client generates a unique value per logical operation and **reuses it on retries**.
+- The server stores `key → resourceId` **in the same transaction** as the resource it creates.
+- A **first-time** key creates the resource (`201`). A **replayed** key returns the original resource (`200`) — never a duplicate.
+- The key column is **unique**, so even a true concurrent double-submit cannot create two resources.
+
+This is the Stripe/Razorpay idiom. It is the monolith-phase rehearsal for retried calls that later cross a service boundary (Week 5).
+
+---
+
+## 14. Concurrency Control (Decided — ADR-012)
+
+When two requests modify the **same resource at the same time**, the naive outcome is last-write-wins — a silent lost update. Tadka uses **optimistic concurrency** on mutable aggregates (today: `Order`), backed by PostgreSQL's `xmin` row-version system column.
+
+- A conflicting write is rejected with **`409 Conflict`** (RFC 7807). The client reloads and retries.
+- **`409` ≠ `422`.** `409` means *the request was legal but you lost a race* (retry). `422` means *the request itself broke a domain rule* (fix it). `404` means *the resource is gone*.
+- Optimistic (not pessimistic) because conflicts are rare at our scale: we keep the no-conflict path lock-free and pay a cost only when a conflict actually occurs.

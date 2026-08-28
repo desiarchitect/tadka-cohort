@@ -16,6 +16,9 @@ public class TadkaDbContext : DbContext
     // Ordering domain
     public DbSet<Order> Orders => Set<Order>();
     public DbSet<OrderItem> OrderItems => Set<OrderItem>();
+    public DbSet<IdempotencyKey> IdempotencyKeys => Set<IdempotencyKey>();
+    public DbSet<Coupon> Coupons => Set<Coupon>();
+    public DbSet<CouponRedemption> CouponRedemptions => Set<CouponRedemption>();
 
     // Restaurant domain
     public DbSet<Restaurant> Restaurants => Set<Restaurant>();
