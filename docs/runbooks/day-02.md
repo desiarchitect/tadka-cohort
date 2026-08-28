@@ -276,11 +276,39 @@ Open in the editor, font bumped:
 | Symptom | What to do |
 |---------|------------|
 | `relation already exists` on migrate | `docker compose down -v && docker compose up -d`, then `dotnet run` again. `-v` wipes the old volume. |
-| Container name already in use | Another folder already started `tadka-postgres`. `docker compose down` there, then `up -d` here. |
 | `/health/ready` 404 | You are on Day 1 code, or the API was not rebuilt. This branch must have `Ready()`. |
 | `/health` already returns `database` | Old controller. Day 2 splits liveness and readiness. |
 | `psql` role `postgres` does not exist | User is **`tadka`**, database **`tadka`**. |
 | Port 5224 in use | Stop the other `dotnet run`. |
 | `curl` HTML / method error | Use `curl.exe` on PowerShell. |
+
+### Container name already in use
+
+This means another checkout has already created the fixed container name `tadka-postgres`. Check whether it is healthy before removing anything:
+
+```powershell
+docker ps -a --filter "name=^/tadka-postgres$"
+docker inspect tadka-postgres --format '{{json .Config.Labels}}'
+```
+
+If the container is `Up` and `(healthy)`, reuse it with the Tadka Compose project name:
+
+```powershell
+docker compose -p tadka up -d
+docker compose -p tadka ps
+docker exec tadka-postgres pg_isready -U tadka -d tadka
+```
+
+This repository pins the project name to `tadka`, so `docker compose up -d` also works after pulling the latest Day 2 files.
+
+If the existing container is stale and you do not need its database, remove it and start a fresh one:
+
+```powershell
+docker rm -f tadka-postgres
+docker compose up -d
+docker compose ps
+```
+
+**Do not** run `docker compose down -v` unless you intentionally want to delete the PostgreSQL volume and all database data. To clean up the old checkout without deleting data, use `docker compose down` (without `-v`) from that checkout, then run `docker compose up -d` here.
 
 ➡️ Next: Day 3 — the REST API under `/api/v1`.
