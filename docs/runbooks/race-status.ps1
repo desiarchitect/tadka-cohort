@@ -1,0 +1,43 @@
+# Fire two PATCH /status at the same time (true overlap, not Start-Job).
+# Usage (repo root, API running, FRESH Created order id):
+#   .\docs\runbooks\race-status.ps1 -OrderId PASTE_ID
+#
+# Both send Confirmed. Confirm-then-Cancel is a LEGAL sequence (two 204s) — that is
+# not a race. Two Confirmed cannot both succeed: 204+409 (overlapped) or 204+422 (serialised).
+
+param(
+    [Parameter(Mandatory = $true)]
+    [string]$OrderId
+)
+
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Net.Http
+
+$url = "http://localhost:5224/api/v1/orders/$OrderId/status"
+$json = Get-Content -Raw -Path (Join-Path $PSScriptRoot "status-confirmed.json")
+
+function Start-Patch {
+    $client = New-Object System.Net.Http.HttpClient
+    $content = New-Object System.Net.Http.StringContent($json, [Text.Encoding]::UTF8, "application/json")
+    $req = New-Object System.Net.Http.HttpRequestMessage
+    $req.Method = New-Object System.Net.Http.HttpMethod "PATCH"
+    $req.RequestUri = [Uri]$url
+    $req.Content = $content
+    return @{ Client = $client; Task = $client.SendAsync($req) }
+}
+
+$a = Start-Patch
+$b = Start-Patch
+[void][Threading.Tasks.Task]::WaitAll($a.Task, $b.Task)
+
+function Show($label, $task) {
+    $resp = $task.Result
+    $body = $resp.Content.ReadAsStringAsync().Result
+    Write-Host "$label HTTP $([int]$resp.StatusCode) $($resp.StatusCode)"
+    if ($body) { Write-Host $body }
+}
+
+Show "A" $a.Task
+Show "B" $b.Task
+$a.Client.Dispose()
+$b.Client.Dispose()

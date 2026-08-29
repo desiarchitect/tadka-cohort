@@ -11,7 +11,7 @@ The **break** for lost-update is **drawn** (t1–t6). Everything else is a live 
 | Beat 1 — two POSTs, no key | `POST /api/v1/orders` twice, no header | Missing design: two 201, two ids | `OrdersController.Create` — no key path, just `Add` + `SaveChanges` |
 | Beat 1 — same `Idempotency-Key` | two POSTs, header `demo-key-123` | 201 then **200**, same id | `IIdempotencyStore` / `IdempotencyKey` / `ordering.idempotency_keys` (PK = unique). Concurrent loser: unique catch in `Create` → 200 |
 | Beat 2 — **board** | draw t1–t6 Confirm vs Cancel | Silent last-write-wins | *Not in this branch.* `xmin` is already on. Do not expect two 204s. |
-| Beat 2 — **"Ab demo. Fix."** | two windows `PATCH …/status` same order **id from a new 201** (paste the UUID; `$ORDER` is not shared across windows) | Optimistic: **204 + 409** (or 204+422 if they did not overlap) | `Data/Configurations/OrderConfiguration.cs` (`xmin` concurrency token) → `UpdateStatus` `SaveChanges` → `ExceptionHandlingMiddleware` (`DbUpdateConcurrencyException` → 409) |
+| Beat 2 — **"Ab demo. Fix."** | `.\docs\runbooks\race-status.ps1 -OrderId <new 201 id>` — two **Confirmed**, not Confirm+Cancel | **204+409** (race) or **204+422** (serialised). Two 204s means you used Cancel after Confirm (legal). | `OrderConfiguration` xmin → middleware 409. Guaranteed 409: `dotnet test --filter xmin_concurrency_token_rejects_a_stale_write` |
 | Beat 2 — **"Ab demo. Pessimistic."** | `toydemo/day-04-locking/locking-toy` `hold` / `wait` / `nowait` / `skip` | Default `FOR UPDATE` **waits**; NOWAIT errors; SKIP takes the other row | **`toydemo/day-04-locking/locking-toy/demo.js` only.** Not `OrdersController`. Not `CouponsController`. Table `locking_demo`. |
 | Beat 3 — confirm + log | `PATCH … Confirmed` | SMS after commit | `OrderConfirmedEvent` + `OrderConfirmedNotificationHandler` (log line). `DispatchAsync` **after** `SaveChanges` in `UpdateStatus` |
 
@@ -86,51 +86,36 @@ Do **not** demo same key + different body. The API still returns the first order
 
 On paper: restaurant Confirm and customer Cancel, same instant, **no** version check. Both read `Created`, both write, last write wins. That is t1–t6. The running API already has `xmin`, so you **cannot** reproduce two successful writes live.
 
-### 3b. Prove the fix — two PATCHes on **one new** order
+### 3b. Prove the fix — two **Confirmed** PATCHes on one new order
 
-`$ORDER` is **not** magic. It is the `"id"` from a **fresh 201**. Two PowerShell windows do **not** share variables — paste the same GUID into both commands.
+The **story** on the board is Confirm vs Cancel. Do **not** use that pair on the API for the race: `Created → Confirmed → Cancelled` is a **legal** sequence, so two 204s means you ran them **one after the other** (`Start-Job` is too slow — it is not a race).
 
-**1. API must be running.** New terminal, repo root.
+Live HTTP uses **two Confirmed**. That cannot both succeed.
 
-**2. Create a Created order** (no key is fine):
+**1.** API running. Repo root.
+
+**2.** New order, copy `"id"`:
 
 ```powershell
 curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 ```
 
-In the JSON, copy `"id"` (a UUID). Example: `a1b2c3d4-....` — **yours will be different**.
-
-**3. Open a second PowerShell window.** Repo root in both. Replace `PASTE_ID` with that UUID in **both** commands below. Do not press Enter yet.
-
-Window A (restaurant):
+**3.** Same process, true overlap (not Start-Job):
 
 ```powershell
-curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json"
+.\docs\runbooks\race-status.ps1 -OrderId PASTE_ID
 ```
 
-Window B (customer):
-
-```powershell
-curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-cancelled.json"
-```
-
-**4. Enter in both windows at the same time** (or as close as you can).
-
-| What you see | Meaning |
+| Codes | Meaning |
 |---|---|
-| **204** and **409** | Race. Loser must reload. This is the demo. |
-| **204** and **422** | They did not overlap; the second ran after the first committed. Still not two silent successes. |
-| **Two 204s** | You were too slow: Confirm then Cancel is a **legal** sequence (`Created → Confirmed → Cancelled`). Make a **new** order and press Enter together. |
-| **404** | Typo in the UUID, or API not running. |
+| **204** and **409** | Race. `xmin` caught it. Best case. |
+| **204** and **422** | Second ran after commit. `Confirmed → Confirmed` is illegal. Still no lost update. |
+| **Two 204s** | Should not happen with two Confirmed. New order; run the script again. |
 
-One window, fire both at once (same `PASTE_ID`):
+Guaranteed **409** (two DbContexts, no HTTP timing luck):
 
 ```powershell
-$oid = "PASTE_ID"
-Start-Job { curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH "http://localhost:5224/api/v1/orders/$using:oid/status" -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json" }
-Start-Job { curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH "http://localhost:5224/api/v1/orders/$using:oid/status" -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-cancelled.json" }
-Start-Sleep 2
-Get-Job | Receive-Job
+dotnet test Tadka.slnx --filter xmin_concurrency_token_rejects_a_stale_write --nologo
 ```
 
 This is **`xmin` on the order**. Orders do **not** use `FOR UPDATE`.
