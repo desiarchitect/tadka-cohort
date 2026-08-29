@@ -105,13 +105,13 @@ In the JSON, copy `"id"` (a UUID). Example: `a1b2c3d4-....` — **yours will be 
 Window A (restaurant):
 
 ```powershell
-curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary '{"status":"Confirmed"}'
+curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json"
 ```
 
 Window B (customer):
 
 ```powershell
-curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary '{"status":"Cancelled"}'
+curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-cancelled.json"
 ```
 
 **4. Enter in both windows at the same time** (or as close as you can).
@@ -127,8 +127,8 @@ One window, fire both at once (same `PASTE_ID`):
 
 ```powershell
 $oid = "PASTE_ID"
-Start-Job { curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH "http://localhost:5224/api/v1/orders/$using:oid/status" -H "Content-Type: application/json" --data-binary '{"status":"Confirmed"}' }
-Start-Job { curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH "http://localhost:5224/api/v1/orders/$using:oid/status" -H "Content-Type: application/json" --data-binary '{"status":"Cancelled"}' }
+Start-Job { curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH "http://localhost:5224/api/v1/orders/$using:oid/status" -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json" }
+Start-Job { curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH "http://localhost:5224/api/v1/orders/$using:oid/status" -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-cancelled.json" }
 Start-Sleep 2
 Get-Job | Receive-Job
 ```
@@ -160,7 +160,7 @@ Notification: order … confirmed — SMS sent to customer …
 Handler ran after commit. A failed SMS must not un-confirm.
 
 ```powershell
-curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/$ORDER/status -H "Content-Type: application/json" --data-binary '{"status":"Confirmed"}'
+curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/$ORDER/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json"
 ```
 
 ## Done when
@@ -180,7 +180,7 @@ curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/ord
 | Two POSTs with a key still create two orders | Header name is `Idempotency-Key`. Same key both times. |
 | `dotnet test` hangs / Docker errors | Start Docker Desktop; Testcontainers needs it. |
 | No notification in the log | Confirm a **Created** order; look at the API process terminal. |
-| POST 400 on a good body | PowerShell ate the JSON. Use `--data-binary "@docs/runbooks/place-order.json"`. |
+| POST/PATCH 400, `invalid start of a property name` | PowerShell stripped the quotes in `'{"status":"Confirmed"}'`. Use a file: `"@docs/runbooks/status-confirmed.json"`. Never inline JSON on PowerShell. |
 | Coupons / `FOR UPDATE` in the repo | Not today's spine. Ignore `CouponsController` unless leftover time. |
 | Container name already in use | Another folder started `tadka-postgres`. `docker rm -f tadka-postgres`, then §0. |
 
