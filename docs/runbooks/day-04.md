@@ -16,7 +16,7 @@ Spoken cue in the script: **"Ab demo."** Lost-update is **live on `day-03` at th
 | Beat 2 — board | draw t1–t6 Confirm vs Cancel | Same shape as the two 204s: both read `Created`, both write | Legal Cancel-after-Confirm: `OrderStateMachine.cs` 6–8 (not the live race) |
 | Beat 2 — **"Ab demo. Fix."** | Same `race-status.ps1` on **`day-04`**, new order, two **Confirmed** | **204+409** (race) or **204+422** (serialised). Not two 204s. | `OrderConfiguration` xmin → middleware 409. Guaranteed 409: `dotnet test --filter xmin_concurrency_token_rejects_a_stale_write` |
 | Beat 2 — **"Ab demo. Pessimistic."** | `toydemo/day-04-locking/locking-toy` `hold` / `wait` / `nowait` / `skip` | Default `FOR UPDATE` **waits**; NOWAIT errors; SKIP takes the other row | **`toydemo/day-04-locking/locking-toy/demo.js` only.** Not `OrdersController`. Not `CouponsController`. Table `locking_demo`. |
-| Beat 3 — confirm + log | `PATCH … Confirmed` | SMS after commit | `OrderConfirmedEvent` + `OrderConfirmedNotificationHandler` (log line). `DispatchAsync` **after** `SaveChanges` in `UpdateStatus` |
+| Beat 3 — **"Ab demo."** | New **Created** order, PATCH Confirmed. Watch the **`dotnet run` terminal**, not curl. | HTTP **204** + log `Notification: order … confirmed — SMS sent…` | `Order.cs` 46–49 raise; `OrdersController` **SaveChanges then** `DispatchAsync` 187–189; handler 21–29 |
 
 **Do not open for the spine:** `CouponsController` (leftover 50-way), `Demo:DispatchEventsBeforeCommit` (Day 7), `cursor-pagination-toy` (Day 5).
 
@@ -186,17 +186,49 @@ Do **not** run the cursor-pagination toy today. That is Day 5.
 
 ## 4. Beat 3 — SMS after commit (live)
 
-`PATCH …/status` `Confirmed`. Watch the **`dotnet run` log**, not only HTTP:
+The **break** is drawn (SMS inside the transaction → rollback un-confirms the order). Do not flip `Demo:DispatchEventsBeforeCommit`. That flag is leftover, not today's spine.
 
-```
-Notification: order … confirmed — SMS sent to customer …
-```
+Live is the **fix**: confirm a **new Created** order, then look at the **API process** (`dotnet run`), not the curl window.
 
-Handler ran after commit. A failed SMS must not un-confirm.
+**Do not reuse Beat 2's order.** That one is already `Confirmed`. Confirming it again is **422** and **no** notification line. `$ORDER` is not set — PowerShell will PATCH `/orders//status` and you get **404**.
+
+**1.** New order, copy `"id"`:
 
 ```powershell
-curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/$ORDER/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json"
+curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 ```
+
+**2.** Put the **`dotnet run` terminal** on screen (the one that is listening on 5224). Then PATCH, paste the id:
+
+```powershell
+curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json"
+```
+
+**Look for**
+
+| Where | What |
+|---|---|
+| curl window | **HTTP 204** (empty body) |
+| `dotnet run` window | `Notification: order PASTE_ID confirmed — SMS sent to customer …` |
+
+Handler ran **after** `SaveChanges`. If that log line threw, the row would still be `Confirmed` — GET to prove:
+
+```powershell
+curl.exe -s http://localhost:5224/api/v1/orders/PASTE_ID
+```
+
+`"status": "Confirmed"`.
+
+**Where the fix lives**
+
+| Step | File | Lines |
+|---|---|---|
+| Raise a fact. `Order` does not know SMS | `src/Tadka.Api/Domain/Orders/Order.cs` | 46–49 (`Raise(new OrderConfirmedEvent…)`) |
+| Event type | `src/Tadka.Api/Domain/Orders/Events/OrderConfirmedEvent.cs` | 5 |
+| `SaveChanges` **then** dispatch | `src/Tadka.Api/Controllers/OrdersController.cs` | 187 then 189 (`DispatchAsync` is **below** `SaveChanges`) |
+| Handler logs the fake SMS (outside `Transition`) | `src/Tadka.Api/Domain/Orders/Events/Handlers/OrderConfirmedNotificationHandler.cs` | 21–29 |
+
+The block at `OrdersController.cs` 175–183 (`Demo:DispatchEventsBeforeCommit`) is the **wrong** order (dispatch while the txn is open). Leave it `false`.
 
 ## Done when
 
@@ -206,7 +238,7 @@ curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/ord
 - [ ] Same `race-status.ps1` on day-04 → **204+409** or **204+422** (not two 204s)
 - [ ] You can explain 409 vs 422
 - [ ] Toy `wait` freezes ~5s
-- [ ] Confirm prints the notification line
+- [ ] New Created order → PATCH Confirmed → **204** and the **`dotnet run`** line `Notification: order … confirmed`
 - [ ] You can name the file for each demo (table at the top of this runbook)
 
 ## Troubleshooting
@@ -216,7 +248,8 @@ curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/ord
 | `42P07: relation "orders" already exists` | Old Day 2/3 volume. Ctrl+C the API, then the wipe block in **§0** (`down -v` **and** `docker rm -f tadka-postgres` + both `pgdata` volumes). Then `up -d` and `dotnet run`. |
 | Two POSTs with a key still create two orders | Header name is `Idempotency-Key`. Same key both times. |
 | `dotnet test` hangs / Docker errors | Start Docker Desktop; Testcontainers needs it. |
-| No notification in the log | Confirm a **Created** order; look at the API process terminal. |
+| No notification in the log | You PATCHed an already-**Confirmed** order (Beat 2 leftover) → **422**, no event. POST a **new** order, PATCH that id. Watch the **`dotnet run`** terminal, not curl. |
+| PATCH `/orders//status` or 404 | `$ORDER` was empty. Paste the GUID from the POST body. |
 | POST/PATCH 400, `invalid start of a property name` | PowerShell stripped the quotes in `'{"status":"Confirmed"}'`. Use a file: `"@docs/runbooks/status-confirmed.json"`. Never inline JSON on PowerShell. |
 | Coupons / `FOR UPDATE` in the repo | Not today's spine. Ignore `CouponsController` unless leftover time. |
 | Container name already in use | Another folder started `tadka-postgres`. `docker rm -f tadka-postgres`, then §0. |
