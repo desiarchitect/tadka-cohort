@@ -123,11 +123,14 @@ Two PowerShell windows, repo-relative:
 
   cd toydemo\\day-04-locking\\locking-toy
 
-Window A:  node demo.js hold
-Window B (immediately):
-  node demo.js wait      # blocks ~5s, then proceeds
-  node demo.js nowait    # could not obtain lock
-  node demo.js skip      # returns id=2
+Three rounds. Restart hold each time (it only lasts 5s).
+  A:  node demo.js hold          # wait for: HOLD: locking id=1
+  B immediately (do not wait for hold to finish):
+      node demo.js wait          # ~5s freeze, then WAIT: got the lock. Not an error.
+  A:  node demo.js hold          # again
+  B immediately: node demo.js nowait   # instant ERROR: could not obtain lock
+  A:  node demo.js hold          # again
+  B immediately: node demo.js skip     # instant id=2
 
 Leftover: node demo.js deadlock-a   and   deadlock-b
 `);

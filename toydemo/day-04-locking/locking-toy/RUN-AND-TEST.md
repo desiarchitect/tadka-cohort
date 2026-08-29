@@ -17,27 +17,33 @@ Session A holds row 1. Session B asks for the same row with plain `FOR UPDATE`. 
 
 ## 3. Exact steps (Windows PowerShell)
 
-**Prerequisites:** Docker Desktop; from the Tadka repo root `docker compose up -d`; `tadka-postgres` **(healthy)**. Node.js. Two terminals.
+**Prerequisites:** Docker Desktop; from the Tadka repo root `docker compose up -d`; `tadka-postgres` **(healthy)**. Node.js. **Two** PowerShell windows.
+
+In **both** windows:
 
 ```powershell
 cd toydemo\day-04-locking\locking-toy
 ```
 
-**Window A**
+`hold` locks `id=1` for **5 seconds**, then **releases**. Start window B as soon as A prints `HOLD: locking id=1`. Do **not** wait for A to finish. **Restart `hold` before every B command** (`wait`, then `nowait`, then `skip` are three separate rounds).
 
-```powershell
-node demo.js hold
-```
+**Round 1 — wait (queue, not an error)**
 
-Look for: `HOLD: locking id=1 for 5 seconds`
+1. A: `node demo.js hold` → `HOLD: locking id=1 for 5 seconds` then **silence for ~5 s**.
+2. B immediately: `node demo.js wait` → **also silence for ~5 s**, then `WAIT: got the lock` and `[client wall clock: ~5000ms]`. **No ERROR.**
+3. A then prints `HOLD: released id=1`.
 
-**Window B — immediately** (three runs; restart `hold` each time)
+**Round 2 — nowait (fail-fast)**
 
-```powershell
-node demo.js wait      # wall clock ~5000ms, then COMMIT. Not an error.
-node demo.js nowait    # ERROR: could not obtain lock on row
-node demo.js skip      # returns id=2, label row-2. Instant.
-```
+1. A: `node demo.js hold` again.
+2. B immediately: `node demo.js nowait` → **instant** `ERROR: could not obtain lock on row in relation "locking_demo"`. Wall clock tens of ms.
+
+**Round 3 — skip (other row)**
+
+1. A: `node demo.js hold` again.
+2. B immediately: `node demo.js skip` → **instant** success, `id | label` = `2 | row-2`.
+
+If B returns in ~100 ms with no freeze and no error, `hold` already finished. Start `hold` again and run B within one second.
 
 **macOS/Linux:** same commands; path `toydemo/day-04-locking/locking-toy`.
 

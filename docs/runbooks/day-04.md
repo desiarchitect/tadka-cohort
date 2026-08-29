@@ -15,7 +15,7 @@ Spoken cue in the script: **"Ab demo."** Lost-update is **live on `day-03` at th
 | Beat 1 — same `Idempotency-Key` | two POSTs, header `demo-key-123` | 201 then **200**, same id | `IIdempotencyStore` / `IdempotencyKey` / `ordering.idempotency_keys` (PK = unique). Concurrent loser: unique catch in `Create` → 200 |
 | Beat 2 — board | draw t1–t6 Confirm vs Cancel | Same shape as the two 204s: both read `Created`, both write | Legal Cancel-after-Confirm: `OrderStateMachine.cs` 6–8 (not the live race) |
 | Beat 2 — **"Ab demo. Fix."** | Same `race-status.ps1` on **`day-04`**, new order, two **Confirmed** | **204+409** (race) or **204+422** (serialised). Not two 204s. | `OrderConfiguration` xmin → middleware 409. Guaranteed 409: `dotnet test --filter xmin_concurrency_token_rejects_a_stale_write` |
-| Beat 2 — **"Ab demo. Pessimistic."** | `toydemo/day-04-locking/locking-toy` `hold` / `wait` / `nowait` / `skip` | Default `FOR UPDATE` **waits**; NOWAIT errors; SKIP takes the other row | **`toydemo/day-04-locking/locking-toy/demo.js` only.** Not `OrdersController`. Not `CouponsController`. Table `locking_demo`. |
+| Beat 2 — **"Ab demo. Pessimistic."** | Three rounds, **restart `hold` each time**: `wait` / `nowait` / `skip` | Default `FOR UPDATE` **waits ~5s**; NOWAIT instant lock error; SKIP `id=2` | **`toydemo/day-04-locking/locking-toy/demo.js` only.** Not `OrdersController`. Not `CouponsController`. Table `locking_demo`. |
 | Beat 3 — **"Ab demo."** | New **Created** order, PATCH Confirmed. Watch the **`dotnet run` terminal**, not curl. | HTTP **204** + log `Notification: order … confirmed — SMS sent…` | `Order.cs` 46–49 raise; `OrdersController` **SaveChanges then** `DispatchAsync` 187–189; handler 21–29 |
 
 **Do not open for the spine:** `CouponsController` (leftover 50-way), `Demo:DispatchEventsBeforeCommit` (Day 7), `cursor-pagination-toy` (Day 5).
@@ -170,19 +170,85 @@ dotnet test Tadka.slnx --filter xmin_concurrency_token_rejects_a_stale_write --n
 
 ### 3c. Pessimistic primitives (toy, not orders)
 
-Toy, own table, two terminals. Postgres must be up. Full doc: [`toydemo/day-04-locking/locking-toy/RUN-AND-TEST.md`](../../toydemo/day-04-locking/locking-toy/RUN-AND-TEST.md).
+Not Tadka orders. Own table `locking_demo`, same `tadka-postgres`. API can keep running. Full doc: [`toydemo/day-04-locking/locking-toy/RUN-AND-TEST.md`](../../toydemo/day-04-locking/locking-toy/RUN-AND-TEST.md).
+
+**Two PowerShell windows.** In **both**, from the repo root:
 
 ```powershell
 cd toydemo\day-04-locking\locking-toy
-# window A
-node demo.js hold
-# window B immediately
-node demo.js wait      # ~5s block, not an error
-node demo.js nowait    # could not obtain lock
-node demo.js skip      # id=2
 ```
 
-Do **not** run the cursor-pagination toy today. That is Day 5.
+`hold` locks row `id=1` for **5 seconds**, then **releases**. Do **not** wait for it to finish before starting window B. Do **not** run `wait`, `nowait`, and `skip` against one `hold` — that hold is gone after 5s. **Three rounds. Restart `hold` each time.**
+
+If B returns in ~100 ms with no freeze / no error, `hold` already finished. Start `hold` again, run B within **one second** of seeing `HOLD: locking id=1`.
+
+---
+
+**Round 1 — default `FOR UPDATE` waits (no error)**
+
+| When | Window | Command |
+|---|---|---|
+| 1 | A | `node demo.js hold` |
+| 2 | B, **immediately** (do not wait for A to finish) | `node demo.js wait` |
+
+**Window A** prints this and then **sits for ~5 s** (that silence is the lock):
+
+```
+HOLD: locking id=1 for 5 seconds (FOR UPDATE + pg_sleep). Other terminal: wait / nowait / skip.
+```
+
+**Window B** also sits for ~5 s (blocked on A). Then both finish. B is **not** an error:
+
+```
+WAIT: got the lock (Time includes the wait)
+[client wall clock: ~5000ms]
+```
+
+A then prints `HOLD: released id=1`. That wait is the lesson: second locker **queues**, it does not throw.
+
+---
+
+**Round 2 — `NOWAIT` fail-fast**
+
+`hold` from round 1 has already released. Start it again.
+
+| When | Window | Command |
+|---|---|---|
+| 1 | A | `node demo.js hold` |
+| 2 | B, **immediately** | `node demo.js nowait` |
+
+**Window B** returns **instantly** (tens of ms), **error**, non-zero exit:
+
+```
+ERROR:  could not obtain lock on row in relation "locking_demo"
+```
+
+No freeze. Connection is not stuck in a queue.
+
+---
+
+**Round 3 — `SKIP LOCKED` takes the other row**
+
+Restart `hold` again.
+
+| When | Window | Command |
+|---|---|---|
+| 1 | A | `node demo.js hold` |
+| 2 | B, **immediately** | `node demo.js skip` |
+
+**Window B** returns **instantly**, **success**, the **free** row:
+
+```
+ id | label
+----+-------
+  2 | row-2
+```
+
+A still holds `id=1`. B did not wait and did not error — it skipped the locked row.
+
+---
+
+Orders in Tadka use **none** of this (`xmin` → 409). Do **not** run the cursor-pagination toy today (Day 5). Leftover, skip in class: `deadlock-a` / `deadlock-b`.
 
 ## 4. Beat 3 — SMS after commit (live)
 
@@ -237,7 +303,7 @@ The block at `OrdersController.cs` 175–183 (`Demo:DispatchEventsBeforeCommit`)
 - [ ] Then **`day-04`** once: two ids without a key; 201 then 200 with a key
 - [ ] Same `race-status.ps1` on day-04 → **204+409** or **204+422** (not two 204s)
 - [ ] You can explain 409 vs 422
-- [ ] Toy `wait` freezes ~5s
+- [ ] Toy: `wait` freezes ~5s; `nowait` lock error; `skip` returns `id=2` (restart `hold` each round)
 - [ ] New Created order → PATCH Confirmed → **204** and the **`dotnet run`** line `Notification: order … confirmed`
 - [ ] You can name the file for each demo (table at the top of this runbook)
 
@@ -251,6 +317,7 @@ The block at `OrdersController.cs` 175–183 (`Demo:DispatchEventsBeforeCommit`)
 | No notification in the log | You PATCHed an already-**Confirmed** order (Beat 2 leftover) → **422**, no event. POST a **new** order, PATCH that id. Watch the **`dotnet run`** terminal, not curl. |
 | PATCH `/orders//status` or 404 | `$ORDER` was empty. Paste the GUID from the POST body. |
 | POST/PATCH 400, `invalid start of a property name` | PowerShell stripped the quotes in `'{"status":"Confirmed"}'`. Use a file: `"@docs/runbooks/status-confirmed.json"`. Never inline JSON on PowerShell. |
+| Toy `wait` returns instantly (~100 ms), no freeze | `hold` already finished (it only lasts 5s). Start `hold` again, run B within one second of `HOLD: locking id=1`. Do not chain wait/nowait/skip on one hold. |
 | Coupons / `FOR UPDATE` in the repo | Not today's spine. Ignore `CouponsController` unless leftover time. |
 | Container name already in use | Another folder started `tadka-postgres`. `docker rm -f tadka-postgres`, then §0. |
 
