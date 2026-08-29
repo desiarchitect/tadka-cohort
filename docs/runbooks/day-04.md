@@ -10,7 +10,7 @@ The **break** for lost-update is **drawn** (t1–t6). Everything else is a live 
 |---|---|---|---|
 | Beat 1 — two POSTs, no key | `POST /api/v1/orders` twice, no header | Missing design: two 201, two ids | `OrdersController.Create` — no key path, just `Add` + `SaveChanges` |
 | Beat 1 — same `Idempotency-Key` | two POSTs, header `demo-key-123` | 201 then **200**, same id | `IIdempotencyStore` / `IdempotencyKey` / `ordering.idempotency_keys` (PK = unique). Concurrent loser: unique catch in `Create` → 200 |
-| Beat 2 — **board** | draw t1–t6 Confirm vs Cancel | Silent last-write-wins | *Not in this branch.* `xmin` is already on. Do not expect two 204s. |
+| Beat 2 — **board (3a)** | draw t1–t6 Confirm vs Cancel | Silent last-write-wins (no `xmin`) | Bug is **not** in this branch. Legal Cancel-after-Confirm: `OrderStateMachine.cs` 6–8. |
 | Beat 2 — **"Ab demo. Fix."** | `.\docs\runbooks\race-status.ps1 -OrderId <new 201 id>` — two **Confirmed**, not Confirm+Cancel | **204+409** (race) or **204+422** (serialised). Two 204s means you used Cancel after Confirm (legal). | `OrderConfiguration` xmin → middleware 409. Guaranteed 409: `dotnet test --filter xmin_concurrency_token_rejects_a_stale_write` |
 | Beat 2 — **"Ab demo. Pessimistic."** | `toydemo/day-04-locking/locking-toy` `hold` / `wait` / `nowait` / `skip` | Default `FOR UPDATE` **waits**; NOWAIT errors; SKIP takes the other row | **`toydemo/day-04-locking/locking-toy/demo.js` only.** Not `OrdersController`. Not `CouponsController`. Table `locking_demo`. |
 | Beat 3 — confirm + log | `PATCH … Confirmed` | SMS after commit | `OrderConfirmedEvent` + `OrderConfirmedNotificationHandler` (log line). `DispatchAsync` **after** `SaveChanges` in `UpdateStatus` |
@@ -82,45 +82,71 @@ Do **not** demo same key + different body. The API still returns the first order
 
 ## 3. Beat 2 — optimistic (Tadka) then pessimistic (toy)
 
-### 3a. Board (the break — do not expect this on the API)
+### 3a. Board — the bug (do not curl this)
 
-On paper: restaurant Confirm and customer Cancel, same instant, **no** version check. Both read `Created`, both write, last write wins. That is t1–t6. The running API already has `xmin`, so you **cannot** reproduce two successful writes live.
+Two people, **one** `Created` order, **same millisecond**, **no version check**:
 
-### 3b. Prove the fix — two **Confirmed** PATCHes on one new order
+- Restaurant PATCH `Confirmed`
+- Customer PATCH `Cancelled`
 
-The **story** on the board is Confirm vs Cancel. Do **not** use that pair on the API for the race: `Created → Confirmed → Cancelled` is a **legal** sequence, so two 204s means you ran them **one after the other** (`Start-Job` is too slow — it is not a race).
-
-Live HTTP uses **two Confirmed**. That cannot both succeed.
-
-**1.** API running. Repo root.
-
-**2.** New order, copy `"id"`:
-
-```powershell
-curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+```
+        Restaurant                         Customer
+  t1    READ  → Created
+  t2                                       READ  → Created
+  t3    Created→Confirmed allowed
+  t4                                       Created→Cancelled allowed
+  t5    WRITE Confirmed
+  t6                                       WRITE Cancelled   ← overwrites t5
 ```
 
-**3.** Same process, true overlap (not Start-Job):
+Last write wins. DB is `Cancelled`. Restaurant already got **204** and is cooking. **No error.** That is a lost update.
 
-```powershell
-.\docs\runbooks\race-status.ps1 -OrderId PASTE_ID
-```
+Why you cannot reproduce it with curl **on this branch:** the fix is already in. EF sends `UPDATE … WHERE id = ? AND xmin = ?`. If someone else committed, **0 rows**, exception, **409**.
+
+Legal transitions (so Confirm **then** Cancel is *not* a bug): `OrderStateMachine.cs` lines 6–8 — `Created → Confirmed | Cancelled`, `Confirmed → Preparing | Cancelled`.
+
+### 3b. API — prove the fix (two **Confirmed**, not Confirm+Cancel)
+
+**Story** stays Confirm vs Cancel on the board. **Live HTTP** uses two **Confirmed** on a **new** `Created` order.
+
+`Created → Confirmed → Cancelled` is **legal**. If you run Confirm, wait, then Cancel, you get **two 204s**. That is a normal cancel, not a race. `Start-Job` is too slow: the first PATCH finishes before the second starts.
+
+`Confirmed → Confirmed` is **illegal**. So two Confirmed cannot both 204:
 
 | Codes | Meaning |
 |---|---|
-| **204** and **409** | Race. `xmin` caught it. Best case. |
-| **204** and **422** | Second ran after commit. `Confirmed → Confirmed` is illegal. Still no lost update. |
-| **Two 204s** | Should not happen with two Confirmed. New order; run the script again. |
+| **204** and **409** | Both read `Created`. Second `SaveChanges` saw a new `xmin`. Race caught. |
+| **204** and **422** | Second ran after commit. State machine rejected Confirmed→Confirmed. Still no silent overwrite. |
+| **Two 204s** | You used Confirm+Cancel, or an old order. New 201, run the script again. |
 
-Guaranteed **409** (two DbContexts, no HTTP timing luck):
+**Where the fix lives**
+
+| Step | File | Lines |
+|---|---|---|
+| Map Postgres `xmin` as concurrency token | `src/Tadka.Api/Data/Configurations/OrderConfiguration.cs` | 45–54 (`IsConcurrencyToken()`) |
+| PATCH reads order, transitions, `SaveChanges` | `src/Tadka.Api/Controllers/OrdersController.cs` | 150–191 (comment + `SaveChanges` 185–187) |
+| `DbUpdateConcurrencyException` → **409** | `src/Tadka.Api/Middleware/ExceptionHandlingMiddleware.cs` | 50–58 |
+| Illegal jump → **422** | `OrdersController.cs` 162–164; `OrderStateMachine.cs` 6–8 | |
+| Deterministic 409 (two DbContexts) | `tests/.../OrderFlowIntegrationTests.cs` | `xmin_concurrency_token_rejects_a_stale_write` ~116 |
+
+Orders do **not** use `FOR UPDATE`. That is the toy in 3c.
+
+**Run** (API up, repo root):
+
+```powershell
+curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+.\docs\runbooks\race-status.ps1 -OrderId PASTE_ID
+```
+
+Guaranteed **409** (no HTTP luck):
 
 ```powershell
 dotnet test Tadka.slnx --filter xmin_concurrency_token_rejects_a_stale_write --nologo
 ```
 
-This is **`xmin` on the order**. Orders do **not** use `FOR UPDATE`.
+### 3c. Pessimistic primitives (toy, not orders)
 
-**Pessimistic primitives** — toy, own table, two terminals. Postgres must be up. Full doc: [`toydemo/day-04-locking/locking-toy/RUN-AND-TEST.md`](../../toydemo/day-04-locking/locking-toy/RUN-AND-TEST.md).
+Toy, own table, two terminals. Postgres must be up. Full doc: [`toydemo/day-04-locking/locking-toy/RUN-AND-TEST.md`](../../toydemo/day-04-locking/locking-toy/RUN-AND-TEST.md).
 
 ```powershell
 cd toydemo\day-04-locking\locking-toy
