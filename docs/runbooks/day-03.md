@@ -187,6 +187,21 @@ docker compose start postgres
 
 ---
 
+## 8. Day 4 morning — show the lost-update (optional on Saturday Day 3)
+
+There is **no** `xmin` on this branch. Two overlapping Confirmed PATCHes can **both** return **204**.
+
+```powershell
+curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+.\docs\runbooks\race-status.ps1 -OrderId PASTE_ID
+```
+
+**Look for: two HTTP 204.** Both callers think they confirmed. That is the bug Day 4 fixes. Then `git checkout day-04`, wipe the volume (`docs/runbooks/day-04.md` §0), same script → **204 + 409**.
+
+Do not use Confirm then Cancel: that sequence is legal (`OrderStateMachine.cs`). Two 204s there is a normal cancel.
+
+---
+
 ## Done when
 
 - [ ] `dotnet build Tadka.slnx` is clean.
