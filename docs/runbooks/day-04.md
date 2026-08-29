@@ -2,16 +2,19 @@
 
 **Branch:** `day-04`. **What's new:** `Idempotency-Key`, `xmin` → 409, in-process `OrderConfirmed` handler (log line). Saturday's API stays.
 
+> **Class start (instructor):** do **not** open on this branch. Checkout **`day-03`**, wipe, API up. Opening demo: `race-status.ps1` → **two HTTP 204**. Then §0 onto **`day-04` once** and stay. Beat 1 (idempotency) and Beat 2 (409) both run here. Do not switch back to `day-03` mid-class.
+
 ### Demo → code (open these when someone asks "yeh kahan hai?")
 
-The **break** for lost-update is **drawn** (t1–t6). Everything else is a live demo. Spoken cue in the script: **"Ab demo."**
+Spoken cue in the script: **"Ab demo."** Lost-update is **live on `day-03` at the start of the day**, then drawn (t1–t6), then the same script on `day-04`.
 
 | When (script) | What you run | What it proves | Code to point at |
 |---|---|---|---|
-| Beat 1 — two POSTs, no key | `POST /api/v1/orders` twice, no header | Missing design: two 201, two ids | `OrdersController.Create` — no key path, just `Add` + `SaveChanges` |
+| **Opening — leftover bug** | On **`day-03`**: POST an order, `.\docs\runbooks\race-status.ps1 -OrderId PASTE_ID` | **Two HTTP 204.** Both writers think they confirmed. No 409. | Day 3 `OrdersController.UpdateStatus` → `SaveChanges` only. No `xmin`. |
+| Beat 1 — two POSTs, no key | After checkout **`day-04`**: `POST /api/v1/orders` twice, no header | Missing design: two 201, two ids | `OrdersController.Create` — no key path, just `Add` + `SaveChanges` |
 | Beat 1 — same `Idempotency-Key` | two POSTs, header `demo-key-123` | 201 then **200**, same id | `IIdempotencyStore` / `IdempotencyKey` / `ordering.idempotency_keys` (PK = unique). Concurrent loser: unique catch in `Create` → 200 |
-| Beat 2 — **board (3a)** | draw t1–t6 Confirm vs Cancel | Silent last-write-wins (no `xmin`) | Bug is **not** in this branch. Legal Cancel-after-Confirm: `OrderStateMachine.cs` 6–8. |
-| Beat 2 — **"Ab demo. Fix."** | `.\docs\runbooks\race-status.ps1 -OrderId <new 201 id>` — two **Confirmed**, not Confirm+Cancel | **204+409** (race) or **204+422** (serialised). Two 204s means you used Cancel after Confirm (legal). | `OrderConfiguration` xmin → middleware 409. Guaranteed 409: `dotnet test --filter xmin_concurrency_token_rejects_a_stale_write` |
+| Beat 2 — board | draw t1–t6 Confirm vs Cancel | Same shape as the two 204s: both read `Created`, both write | Legal Cancel-after-Confirm: `OrderStateMachine.cs` 6–8 (not the live race) |
+| Beat 2 — **"Ab demo. Fix."** | Same `race-status.ps1` on **`day-04`**, new order, two **Confirmed** | **204+409** (race) or **204+422** (serialised). Not two 204s. | `OrderConfiguration` xmin → middleware 409. Guaranteed 409: `dotnet test --filter xmin_concurrency_token_rejects_a_stale_write` |
 | Beat 2 — **"Ab demo. Pessimistic."** | `toydemo/day-04-locking/locking-toy` `hold` / `wait` / `nowait` / `skip` | Default `FOR UPDATE` **waits**; NOWAIT errors; SKIP takes the other row | **`toydemo/day-04-locking/locking-toy/demo.js` only.** Not `OrdersController`. Not `CouponsController`. Table `locking_demo`. |
 | Beat 3 — confirm + log | `PATCH … Confirmed` | SMS after commit | `OrderConfirmedEvent` + `OrderConfirmedNotificationHandler` (log line). `DispatchAsync` **after** `SaveChanges` in `UpdateStatus` |
 
@@ -30,6 +33,8 @@ The **break** for lost-update is **drawn** (t1–t6). Everything else is a live 
 Seed GUIDs (same as Day 3): Meghana `a1b2c3d4-0001-4000-8000-000000000001`, biryani `b1b2c3d4-0001-4000-8000-000000000001`, Priya `c1b2c3d4-0001-4000-8000-000000000001`.
 
 ## 0. Fresh volume + tests (pre-class)
+
+Instructor: run this **once before class** to confirm 24/24, then **checkout `day-03`** and wipe again so the opening demo is Saturday's API (see **§3a**). After two 204s, come back here onto `day-04` and stay.
 
 Day 2/3 already created `ordering.orders`. If that volume is still there, `dotnet run` tries `CREATE TABLE` again → **`42P07: relation "orders" already exists`**. `down` without **`-v`** is not enough. The container name is always **`tadka-postgres`**, so **another clone** (`D:\work\cohort\tadka`) can keep the old volume alive.
 
@@ -82,32 +87,51 @@ Do **not** demo same key + different body. The API still returns the first order
 
 ## 3. Beat 2 — optimistic (Tadka) then pessimistic (toy)
 
-### 3a. Board — the bug (do not curl this)
+### 3a. Class start — show the bug on **`day-03`** (before you move to Day 4)
 
-Two people, **one** `Created` order, **same millisecond**, **no version check**:
+Day 4 already has `xmin`. **First thing in class** (and first thing if you self-study): stay on **`day-03`** so both writers can get **204**. Then checkout `day-04` once. Do not leave this until after Beat 1.
 
-- Restaurant PATCH `Confirmed`
-- Customer PATCH `Cancelled`
+**Ctrl+C** the API if it is already on day-04.
 
+```powershell
+git checkout day-03
+docker compose down -v
+docker rm -f tadka-postgres
+docker volume rm tadka_pgdata tadka-cohort_pgdata
+docker compose up -d
+docker compose ps
+dotnet run --project src/Tadka.Api
 ```
-        Restaurant                         Customer
-  t1    READ  → Created
-  t2                                       READ  → Created
-  t3    Created→Confirmed allowed
-  t4                                       Created→Cancelled allowed
-  t5    WRITE Confirmed
-  t6                                       WRITE Cancelled   ← overwrites t5
+
+New terminal, repo root. New order, copy `"id"`:
+
+```powershell
+curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+.\docs\runbooks\race-status.ps1 -OrderId PASTE_ID
 ```
 
-Last write wins. DB is `Cancelled`. Restaurant already got **204** and is cooking. **No error.** That is a lost update.
+**Look for two HTTP 204.** Both callers think they confirmed. No 409. `GET /api/v1/orders/PASTE_ID` is still `Confirmed`.
 
-Why you cannot reproduce it with curl **on this branch:** the fix is already in. EF sends `UPDATE … WHERE id = ? AND xmin = ?`. If someone else committed, **0 rows**, exception, **409**.
+Do **not** use Confirm then Cancel: that path is legal (`OrderStateMachine.cs` 6–8). Two 204s there is a normal cancel.
 
-Legal transitions (so Confirm **then** Cancel is *not* a bug): `OrderStateMachine.cs` lines 6–8 — `Created → Confirmed | Cancelled`, `Confirmed → Preparing | Cancelled`.
+Then draw t1–t6 (Confirm vs Cancel, last write wins, restaurant cooking, no error). Same shape: both read `Created`, both write.
 
-### 3b. API — prove the fix (two **Confirmed**, not Confirm+Cancel)
+**Day 3 code (no token):** `OrdersController.UpdateStatus` → `SaveChanges` only. No `xmin` in configuration.
 
-**Story** stays Confirm vs Cancel on the board. **Live HTTP** uses two **Confirmed** on a **new** `Created` order.
+### 3b. After the opening — `day-04` and prove the fix
+
+If class started on `day-03`, you already wiped onto this branch before Beat 1. **Ctrl+C** only if the API is still on Day 3. Wipe again (Day 4 migrations) if you just checked out.
+
+```powershell
+git checkout day-04
+docker compose down -v
+docker rm -f tadka-postgres
+docker volume rm tadka_pgdata tadka-cohort_pgdata
+docker compose up -d
+dotnet run --project src/Tadka.Api
+```
+
+Same race, **new** order, **two Confirmed** (not Confirm+Cancel):
 
 `Created → Confirmed → Cancelled` is **legal**. If you run Confirm, wait, then Cancel, you get **two 204s**. That is a normal cancel, not a race. `Start-Job` is too slow: the first PATCH finishes before the second starts.
 
@@ -177,9 +201,11 @@ curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/ord
 ## Done when
 
 - [ ] 24/24 tests
-- [ ] Two ids without a key; 201 then 200 with a key
+- [ ] On **`day-03`**: two Confirmed → **two 204s** (the leftover bug)
+- [ ] Then **`day-04`** once: two ids without a key; 201 then 200 with a key
+- [ ] Same `race-status.ps1` on day-04 → **204+409** or **204+422** (not two 204s)
 - [ ] You can explain 409 vs 422
-- [ ] Two-window PATCH → 204 + 409; toy `wait` freezes ~5s
+- [ ] Toy `wait` freezes ~5s
 - [ ] Confirm prints the notification line
 - [ ] You can name the file for each demo (table at the top of this runbook)
 

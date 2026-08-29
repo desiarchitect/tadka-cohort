@@ -1,9 +1,12 @@
-# Fire two PATCH /status at the same time (true overlap, not Start-Job).
+# Fire two PATCH /status Confirmed at the same time (not Start-Job).
 # Usage (repo root, API running, FRESH Created order id):
 #   .\docs\runbooks\race-status.ps1 -OrderId PASTE_ID
 #
-# Both send Confirmed. Confirm-then-Cancel is a LEGAL sequence (two 204s) — that is
-# not a race. Two Confirmed cannot both succeed: 204+409 (overlapped) or 204+422 (serialised).
+# Day 4 class start (branch day-03, no xmin): TWO HTTP 204.
+#   Both writers think they confirmed. That is the bug. Then checkout day-04.
+# Day 4 after checkout (xmin): 204+409 (race) or 204+422 (serialised). Not two 204s.
+#
+# Do not use Confirm+Cancel: that sequence is legal, so two 204s is a normal cancel.
 
 param(
     [Parameter(Mandatory = $true)]
