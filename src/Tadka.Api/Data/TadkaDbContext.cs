@@ -40,6 +40,8 @@ public class TadkaDbContext : DbContext
             e.OwnsOne(o => o.TotalAmount);
             e.OwnsOne(o => o.DeliveryAddress);
             e.HasMany(o => o.Items).WithOne().HasForeignKey("OrderId").OnDelete(DeleteBehavior.Cascade);
+            // Items is read-only (IReadOnlyList over a private field); EF populates the backing field.
+            e.Navigation(o => o.Items).UsePropertyAccessMode(PropertyAccessMode.Field);
         });
 
         modelBuilder.Entity<OrderItem>(e =>
