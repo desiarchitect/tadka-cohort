@@ -9,7 +9,7 @@ public class OrderStateMachineTests
     [Fact]
     public void Transition_Created_to_Confirmed_succeeds_and_stamps_ConfirmedAt()
     {
-        var order = new Order { Status = OrderStatus.Created };
+        var order = Order.InState(OrderStatus.Created);
 
         var result = order.Transition(OrderStatus.Confirmed);
 
@@ -21,7 +21,7 @@ public class OrderStateMachineTests
     [Fact]
     public void Transition_Created_to_Preparing_is_illegal_and_state_unchanged()
     {
-        var order = new Order { Status = OrderStatus.Created };
+        var order = Order.InState(OrderStatus.Created);
 
         var result = order.Transition(OrderStatus.Preparing);
 
@@ -32,7 +32,7 @@ public class OrderStateMachineTests
     [Fact]
     public void Delivered_is_terminal_no_transition_allowed()
     {
-        var order = new Order { Status = OrderStatus.Delivered };
+        var order = Order.InState(OrderStatus.Delivered);
 
         Assert.True(order.Transition(OrderStatus.Refunded).IsFailure);  // Refunded is Day-7, not wired
         Assert.True(order.Transition(OrderStatus.Confirmed).IsFailure);
@@ -42,7 +42,7 @@ public class OrderStateMachineTests
     [Fact]
     public void Cancel_from_Created_succeeds_with_reason()
     {
-        var order = new Order { Status = OrderStatus.Created };
+        var order = Order.InState(OrderStatus.Created);
 
         var result = order.Cancel("changed my mind");
 
@@ -55,7 +55,7 @@ public class OrderStateMachineTests
     [Fact]
     public void Cancel_after_PickedUp_is_illegal()
     {
-        var order = new Order { Status = OrderStatus.PickedUp };
+        var order = Order.InState(OrderStatus.PickedUp);
 
         Assert.True(order.Cancel("too late").IsFailure);
         Assert.Equal(OrderStatus.PickedUp, order.Status);
