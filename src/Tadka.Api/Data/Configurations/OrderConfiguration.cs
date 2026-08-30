@@ -41,6 +41,9 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(o => o.CancellationReason).HasMaxLength(500);
 
         builder.HasMany(o => o.Items).WithOne().HasForeignKey("OrderId").OnDelete(DeleteBehavior.Cascade);
+        // Items is exposed read-only (IReadOnlyList over the private _items field), so EF must
+        // populate the backing field on materialization rather than the get-only property.
+        builder.Navigation(o => o.Items).UsePropertyAccessMode(PropertyAccessMode.Field);
 
         // Performance indexes (ADR-014). Added only where a real query pattern justifies them —
         // adding one per column "just in case" is the zombie-index anti-pattern (every index taxes
