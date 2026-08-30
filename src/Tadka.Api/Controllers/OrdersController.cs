@@ -3,6 +3,7 @@ using FluentValidation;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Tadka.Api.Contracts;
 using Tadka.Api.Contracts.Orders;
 using Tadka.Api.Contracts.Restaurants;
@@ -103,7 +104,25 @@ public class OrdersController(
             Payload = JsonSerializer.Serialize(placed)
         });
 
-        await _orderRepository.SaveChangesAsync();
+        try
+        {
+            await _orderRepository.SaveChangesAsync();
+        }
+        catch (DbUpdateException ex) when (IsUniqueViolation(ex) && !string.IsNullOrWhiteSpace(idempotencyKey))
+        {
+            // Concurrent replay: two requests with the same key both missed the Find above and
+            // both inserted. The unique constraint on the key (its PK) is the real race fix
+            // (ADR-011) — no second order is ever created. But the loser must still honour the
+            // idempotent contract: return the WINNER's order as 200, not bubble a 500. Without
+            // this, a concurrent double-tap 500s while a sequential one returns 200 — a subtle,
+            // test-invisible inconsistency, since the sequential path is served by the Find above.
+            _db.ChangeTracker.Clear();
+            var winnerId = await _idempotencyStore.FindOrderIdAsync(idempotencyKey);
+            if (winnerId is null)
+                throw;
+            var winner = await _orderRepository.GetByIdAsync(winnerId.Value);
+            return Ok(MapToResponse(winner!));
+        }
 
         // Publish in-process domain events AFTER commit (ADR-013): live-tracking/notification handlers.
         // The cross-service payment flow now rides the Outbox above (Kafka), not an in-process handler.
@@ -202,6 +221,9 @@ public class OrdersController(
         foreach (var domainEvent in events)
             await _mediator.Publish(domainEvent);
     }
+
+    private static bool IsUniqueViolation(DbUpdateException ex) =>
+        ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
     private static OrderResponse MapToResponse(Order o) => new(
         o.Id,
