@@ -51,6 +51,31 @@ public class OrderFlowIntegrationTests(TadkaApiFactory factory) : IClassFixture<
     }
 
     [Fact]
+    public async Task PlaceOrder_concurrently_with_same_Idempotency_Key_creates_only_one_order()
+    {
+        // The CONCURRENT double-tap: two requests with the same key fire at the same instant, so
+        // both miss the Find and both try to insert. The unique key means only one order is
+        // created, and the loser must return that order (200), never a 500. This is the path the
+        // sequential test above cannot exercise — that one is served entirely by the Find.
+        var request = await BuildOrderRequestAsync();
+        var key = Guid.NewGuid().ToString();
+
+        var responses = await Task.WhenAll(
+            PostOrderWithKeyAsync(request, key),
+            PostOrderWithKeyAsync(request, key));
+
+        // Neither request may 500. Exactly one Created (the winner), the other OK (the replay).
+        var codes = responses.Select(r => r.StatusCode).OrderBy(c => c).ToArray();
+        Assert.DoesNotContain(HttpStatusCode.InternalServerError, codes);
+        Assert.Contains(HttpStatusCode.Created, codes);
+        Assert.Contains(HttpStatusCode.OK, codes);
+
+        // Both responses describe the SAME order — no duplicate was placed.
+        var orders = await Task.WhenAll(responses.Select(r => r.Content.ReadFromJsonAsync<OrderResponse>()));
+        Assert.Equal(orders[0]!.Id, orders[1]!.Id);
+    }
+
+    [Fact]
     public async Task IllegalTransition_returns_422()
     {
         var orderId = await PlaceOrderAsync();
