@@ -51,10 +51,11 @@ public class OrderFlowIntegrationTests(TadkaApiFactory factory) : IClassFixture<
     }
 
     [Fact]
-    public async Task PlaceOrder_concurrent_same_Idempotency_Key_creates_only_one_order()
+    public async Task PlaceOrder_concurrently_with_same_Idempotency_Key_creates_only_one_order()
     {
-        // Sequential replay is 201 then 200 via Find. Two requests that both miss Find
-        // hit the unique constraint; the loser must still 200 with the same id, not 500.
+        // The CONCURRENT double-tap: two requests with the same key fire at the same instant, so both
+        // miss the Find and both try to insert. The unique key means only one order is created, and the
+        // loser must return that order (200), never a 500 — the path the sequential test cannot exercise.
         var request = await BuildOrderRequestAsync();
         var key = Guid.NewGuid().ToString();
 
@@ -62,14 +63,13 @@ public class OrderFlowIntegrationTests(TadkaApiFactory factory) : IClassFixture<
             PostOrderWithKeyAsync(request, key),
             PostOrderWithKeyAsync(request, key));
 
-        var created = responses.Count(r => r.StatusCode == HttpStatusCode.Created);
-        var ok = responses.Count(r => r.StatusCode == HttpStatusCode.OK);
-        Assert.Equal(1, created);
-        Assert.Equal(1, ok);
+        var codes = responses.Select(r => r.StatusCode).ToArray();
+        Assert.DoesNotContain(HttpStatusCode.InternalServerError, codes);
+        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.Created));
+        Assert.Equal(1, responses.Count(r => r.StatusCode == HttpStatusCode.OK));
 
-        var a = await responses[0].Content.ReadFromJsonAsync<OrderResponse>();
-        var b = await responses[1].Content.ReadFromJsonAsync<OrderResponse>();
-        Assert.Equal(a!.Id, b!.Id);
+        var orders = await Task.WhenAll(responses.Select(r => r.Content.ReadFromJsonAsync<OrderResponse>()));
+        Assert.Equal(orders[0]!.Id, orders[1]!.Id); // SAME order — no duplicate
     }
 
     [Fact]

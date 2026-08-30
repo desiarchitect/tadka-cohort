@@ -94,9 +94,12 @@ public class OrdersController(
         }
         catch (DbUpdateException ex) when (IsUniqueViolation(ex) && !string.IsNullOrWhiteSpace(idempotencyKey))
         {
-            // Concurrent replay: both requests missed the Find, both inserted. The unique
-            // constraint on the key is the actual race fix (ADR-011). The loser must return
-            // the winner's order as 200 — not 500.
+            // Concurrent replay: two requests with the same key both missed the Find above and
+            // both inserted. The unique constraint on the key (its PK) is the real race fix
+            // (ADR-011) — no second order is ever created. But the loser must still honour the
+            // idempotent contract: return the WINNER's order as 200, not bubble a 500. Without
+            // this, a concurrent double-tap 500s while a sequential one returns 200 — a subtle,
+            // test-invisible inconsistency, since the sequential path is served by the Find above.
             _db.ChangeTracker.Clear();
             var winnerId = await _idempotencyStore.FindOrderIdAsync(idempotencyKey);
             if (winnerId is null)

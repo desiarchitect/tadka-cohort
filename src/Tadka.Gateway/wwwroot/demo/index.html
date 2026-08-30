@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tadka Demo Console</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Tadka Demo Console</h1>
+      <p>Menu, orders, payments and live tracking in one page. Served from the gateway at <code>/demo/</code>.</p>
+    </header>
+
+    <section class="card" id="login-card">
+      <h2>Customer login</h2>
+      <label for="email">Email</label>
+      <input id="email" type="email" value="priya@tadka.test" autocomplete="username" />
+      <label for="password">Password</label>
+      <input id="password" type="password" value="Password123!" autocomplete="current-password" />
+      <div class="row">
+        <button type="button" id="btn-login">Log in</button>
+      </div>
+      <p class="hint">Seeded demo account. Password is in <code>AuthSeeder.DefaultPassword</code>.</p>
+      <p class="error hidden" id="login-error"></p>
+    </section>
+
+    <section class="card hidden" id="menu-card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin:0">Menu</h2>
+        <span class="status-pill" id="instance-pill" title="Which API instance answered (X-Tadka-Instance header, Day 6 scale-out)">instance: n/a</span>
+      </div>
+      <label for="restaurant-select">Restaurant</label>
+      <select id="restaurant-select"></select>
+      <div id="menu-list" class="menu-list"></div>
+      <div class="row">
+        <label class="inline-label" for="qty">Qty</label>
+        <input id="qty" type="number" min="1" max="9" value="2" class="qty-input" />
+        <button type="button" id="btn-refresh-menu" class="secondary">Refresh menu</button>
+      </div>
+      <p class="hint" id="menu-meta">Prices come from the server. Refresh repeatedly during the Day 6 scale-out demo to see which instance (and which cache) answers.</p>
+      <p class="error hidden" id="menu-error"></p>
+    </section>
+
+    <section class="card hidden" id="order-card">
+      <h2>Pay</h2>
+      <label for="idem-mode">Idempotency-Key mode (Day 4 break lever, ADR-011)</label>
+      <select id="idem-mode">
+        <option value="new-key">New key per tap (normal client)</option>
+        <option value="same-key">Same key on every tap (safe retry)</option>
+        <option value="no-key">No key (BROKEN - double-tap creates duplicates)</option>
+      </select>
+      <div class="row">
+        <button type="button" id="btn-pay">Pay</button>
+        <button type="button" id="btn-double-tap" class="ghost" title="Fires two Pay requests 80ms apart">Double tap</button>
+        <button type="button" id="btn-new-key" class="secondary" title="Rotate the shared key used by same-key mode">Rotate key</button>
+        <button type="button" id="btn-track" class="secondary" disabled>Reconnect SSE</button>
+      </div>
+      <p class="order-meta" id="order-meta"></p>
+      <ul class="tap-log" id="tap-log"></ul>
+      <p class="error hidden" id="order-error"></p>
+    </section>
+
+    <section class="card hidden" id="payment-card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin:0">Payment</h2>
+        <span class="status-pill" id="payment-pill">No payment yet</span>
+      </div>
+      <p class="hint" id="payment-meta">Polls <code>GET /api/v1/payments/{orderId}</code> every 2s (Day 8+, via the gateway). Watch this flip to <strong>Refunded</strong> in the Day 11 compensation demo.</p>
+      <p class="error hidden" id="payment-error"></p>
+    </section>
+
+    <section class="card hidden" id="stream-card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin:0">Live stream</h2>
+        <span class="status-pill" id="conn-pill">Disconnected</span>
+      </div>
+      <ul class="timeline" id="timeline"></ul>
+      <p class="hint" id="stream-hint">Events arrive over <code>GET /api/v1/orders/{id}/events</code> via Redis pub/sub.</p>
+    </section>
+
+    <section class="card hidden" id="map-card">
+      <div class="row" style="justify-content: space-between; align-items: center;">
+        <h2 style="margin:0">Delivery map</h2>
+        <span class="status-pill" id="map-pill">Waiting for rider</span>
+      </div>
+      <canvas id="map-canvas" width="640" height="280" aria-label="Bangalore delivery map"></canvas>
+      <p class="map-legend">
+        <span class="legend-dot restaurant"></span> Restaurant
+        <span class="legend-dot destination"></span> Your address
+        <span class="legend-dot rider"></span> Rider (polls every 2s)
+      </p>
+      <p class="hint" id="map-meta">Requires Delivery service (Day 11+). <code>GET /api/v1/deliveries/{orderId}/track</code></p>
+      <p class="error hidden" id="map-error"></p>
+    </section>
+
+    <section class="card hidden" id="kitchen-card">
+      <h2>Kitchen demo (class use)</h2>
+      <p class="hint">Advance status as the restaurant owner. Customers cannot PATCH status (ADR-031).</p>
+      <div class="row" id="kitchen-buttons"></div>
+      <p class="error hidden" id="kitchen-error"></p>
+    </section>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

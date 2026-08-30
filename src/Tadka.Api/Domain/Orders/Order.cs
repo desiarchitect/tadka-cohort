@@ -5,25 +5,54 @@ using Tadka.Api.Domain.Orders.Events;
 
 namespace Tadka.Api.Domain.Orders;
 
+/// <summary>
+/// The Order aggregate root. State is encapsulated: every property is read-only from the outside,
+/// and the ONLY way to change status is <see cref="Transition"/> / <see cref="Cancel"/>, which run
+/// the state machine first. There is deliberately no public setter for Status — a caller cannot do
+/// <c>order.Status = Delivered</c> and skip the rules. (This is the "aggregate root is a gatekeeper,
+/// not just a container" point taught on Day 2.)
+/// </summary>
 public class Order
 {
-    public Guid Id { get; set; }
-    public Guid CustomerId { get; set; }
-    public Guid RestaurantId { get; set; }
-    public OrderStatus Status { get; set; }
-    public List<OrderItem> Items { get; set; } = [];
-    public Money TotalAmount { get; set; } = null!;
-    public Address DeliveryAddress { get; set; } = null!;
-    public DateTime CreatedAt { get; set; }
-    public DateTime? ConfirmedAt { get; set; }
-    public DateTime? DeliveredAt { get; set; }
-    public DateTime? CancelledAt { get; set; }
-    public string? CancellationReason { get; set; }
+    private readonly List<OrderItem> _items = [];
+    private readonly List<IDomainEvent> _domainEvents = [];
+
+    // Parameterless ctor for EF Core materialization only. EF sets the private setters / backing
+    // fields when it reads a row; application code must use the constructor below.
+    private Order() { }
+
+    /// <summary>
+    /// Creates a new order. An order is always born <see cref="OrderStatus.Created"/> — you cannot
+    /// construct one directly in any other state. The <see cref="OrderFactory"/> uses this after it
+    /// has priced the items server-side and validated availability.
+    /// </summary>
+    public Order(Guid customerId, Guid restaurantId, List<OrderItem> items, Money totalAmount, Address deliveryAddress)
+    {
+        Id = Guid.NewGuid();
+        CustomerId = customerId;
+        RestaurantId = restaurantId;
+        Status = OrderStatus.Created;
+        _items.AddRange(items);
+        TotalAmount = totalAmount;
+        DeliveryAddress = deliveryAddress;
+        CreatedAt = DateTime.UtcNow;
+    }
+
+    public Guid Id { get; private set; }
+    public Guid CustomerId { get; private set; }
+    public Guid RestaurantId { get; private set; }
+    public OrderStatus Status { get; private set; }
+    public IReadOnlyList<OrderItem> Items => _items;
+    public Money TotalAmount { get; private set; } = null!;
+    public Address DeliveryAddress { get; private set; } = null!;
+    public DateTime CreatedAt { get; private set; }
+    public DateTime? ConfirmedAt { get; private set; }
+    public DateTime? DeliveredAt { get; private set; }
+    public DateTime? CancelledAt { get; private set; }
+    public string? CancellationReason { get; private set; }
 
     // Domain events raised by this aggregate, dispatched AFTER persistence (see ADR-013).
     // [NotMapped] — these never go to a column; they are in-memory until the controller dispatches them.
-    private readonly List<IDomainEvent> _domainEvents = [];
-
     [NotMapped]
     public IReadOnlyList<IDomainEvent> DomainEvents => _domainEvents;
 
@@ -31,6 +60,12 @@ public class Order
 
     // internal: only the aggregate and its factory (same assembly) decide what gets raised.
     internal void Raise(IDomainEvent domainEvent) => _domainEvents.Add(domainEvent);
+
+    // Test-only seam: build an order already in a given state so a unit test can exercise a
+    // transition from it without walking the whole machine. internal + [InternalsVisibleTo] means
+    // only the test assembly can reach it; production code cannot construct an out-of-thin-air
+    // Delivered order.
+    internal static Order InState(OrderStatus status) => new() { Status = status };
 
     // DDD: Encapsulate state transitions in the aggregate root
     public Result Transition(OrderStatus nextStatus)

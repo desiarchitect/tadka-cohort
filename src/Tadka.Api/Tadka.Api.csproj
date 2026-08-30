@@ -7,6 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The test project may reach internal test-seams (e.g. Order.InState) that are not public
+         API. Production code cannot. -->
+    <InternalsVisibleTo Include="Tadka.Api.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="FluentValidation.DependencyInjectionExtensions" Version="12.1.1" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.8" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.2" PrivateAssets="all" />

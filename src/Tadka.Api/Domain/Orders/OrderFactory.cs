@@ -36,17 +36,9 @@ public class OrderFactory
 
         var totalAmount = orderItems.Sum(i => i.UnitPrice.Amount * i.Quantity);
 
-        var order = new Order
-        {
-            Id = Guid.NewGuid(),
-            CustomerId = customerId,
-            RestaurantId = restaurant.Id,
-            Status = OrderStatus.Created,
-            Items = orderItems,
-            TotalAmount = new Money(totalAmount),
-            DeliveryAddress = deliveryAddress,
-            CreatedAt = DateTime.UtcNow
-        };
+        // The aggregate constructor stamps Id/CreatedAt and starts the order in Created — the
+        // factory's job is the server-side pricing and validation above, not setting raw state.
+        var order = new Order(customerId, restaurant.Id, orderItems, new Money(totalAmount), deliveryAddress);
 
         order.Raise(new OrderPlacedEvent(order.Id, order.CustomerId, order.RestaurantId));
 

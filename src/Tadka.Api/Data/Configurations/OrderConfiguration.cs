@@ -41,6 +41,9 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(o => o.CancellationReason).HasMaxLength(500);
 
         builder.HasMany(o => o.Items).WithOne().HasForeignKey("OrderId").OnDelete(DeleteBehavior.Cascade);
+        // Items is exposed read-only (IReadOnlyList over the private _items field), so EF must
+        // populate the backing field on materialization rather than the get-only property.
+        builder.Navigation(o => o.Items).UsePropertyAccessMode(PropertyAccessMode.Field);
 
         // Optimistic concurrency via PostgreSQL's xmin system column (ADR-012).
         // No extra column — Postgres already stamps every row with the id of the transaction that
