@@ -1,137 +1,150 @@
-# Day 6 — Runbook: Redis Cache + Live Order Tracking
+# Day 6 — Runbook: Redis cache-aside + SSE live tracking
 
-**Branch:** `day-06`  ·  **What's new:** Redis **cache-aside** on the menu (with a single-flight stampede lock and delete-on-write invalidation), and **live order tracking** via **Server-Sent Events over a Redis pub/sub backplane**. Now three containers: Postgres primary (5432) + replica (5433) + **Redis (6379)**.
+**Branch:** `day-06`. **What's new (taught):** Redis cache-aside + delete-on-write (ADR-018), single-flight `SET NX EX` lock (ADR-019), SSE `GET /orders/{id}/events` over Redis pub/sub (ADR-020). **Leftover on the branch, not Sunday lecture:** nginx scale-out (047), ETag (048), rate limit (049), edge+signed URLs (050), SSE replay (051).
 
-> New here? Read [`README.md`](README.md). Windows PowerShell → use `curl.exe`.
+**Three containers:** Postgres `5432`, replica `5433`, **Redis `6379`**. HTTP **5224**.
 
-## 1. Run it (postgres + replica + redis)
+> **Windows PowerShell:** `curl.exe`. Quote `@file`. `$RID` below is a PowerShell variable you set once.
 
-```bash
+| Thing | Value |
+|-------|--------|
+| Meghana | `a1b2c3d4-0001-4000-8000-000000000001` |
+| Biryani | `b1b2c3d4-0001-4000-8000-000000000001` |
+| Cache key | `restaurant:{Meghana}:menu` |
+| TTL | ~60 s |
+
+### Demo → code
+
+| When | What | Look for | Code |
+|---|---|---|---|
+| Miss → hit | DEL key, GET menu twice | EXISTS 0→1, TTL ~60 | `RestaurantsController.cs` 113 `GetOrSetAsync`; `RedisCacheService.cs` 19–28 hit |
+| Scan proof | 20 GETs, replica `pg_stat_user_tables` | **delta 0** | miss filled Redis; hits never touch DB |
+| Delete-on-write | PATCH availability | EXISTS 0, next GET 1 | `RestaurantsController.cs` 157 `RemoveAsync` |
+| Redis down | `docker compose stop redis` | menu **200**; SSE **503** | cache catch 62–66; `OrderTrackingController.cs` 31–35 |
+| Stampede lock | (inspect, no herd) | `lock:restaurant:…` | `RedisCacheService.cs` 31–33 `StringSetAsync` NX |
+| SSE | `curl.exe -N` + PATCH Confirmed | `event: Confirmed` | `OrderTrackingController.cs` 28; `RedisOrderTrackingBus.cs` 23, 45 |
+
+---
+
+## 0. Fresh start
+
+```powershell
 git checkout day-06
+docker compose down -v
+docker rm -f tadka-postgres tadka-postgres-replica tadka-redis
 docker compose up -d
-docker exec tadka-redis redis-cli ping        # PONG
-docker compose ps                              # postgres, postgres-replica, redis all healthy
+docker compose ps
+docker exec tadka-redis redis-cli ping
+dotnet test Tadka.slnx
 dotnet run --project src/Tadka.Api
 ```
 
-Handy variables:
-```bash
-RID=a1b2c3d4-0001-4000-8000-000000000001        # Meghana
-KEY=restaurant:$RID:menu
-ITEM=b1b2c3d4-0001-4000-8000-000000000001       # Chicken Biryani
+**Look for:** three healthy containers, **PONG**, tests **27/27**, listen **5224**.
+
+Set once:
+
+```powershell
+$RID  = "a1b2c3d4-0001-4000-8000-000000000001"
+$ITEM = "b1b2c3d4-0001-4000-8000-000000000001"
+$KEY  = "restaurant:${RID}:menu"
 ```
 
-## 2. Cache-aside: miss → hit, and the DB goes untouched (ADR-018)
+## 1. Cache-aside — miss then hit (ADR-018)
 
-```bash
-docker exec tadka-redis redis-cli DEL $KEY                     # start cold
-docker exec tadka-redis redis-cli EXISTS $KEY                  # 0
-curl -s -o /dev/null http://localhost:5224/api/v1/restaurants/$RID/menu    # 1st call: MISS → DB → populates Redis
-docker exec tadka-redis redis-cli EXISTS $KEY                  # 1 (cached)
-docker exec tadka-redis redis-cli TTL $KEY                     # ~60 (seconds)
-curl -s -o /dev/null http://localhost:5224/api/v1/restaurants/$RID/menu    # 2nd call: HIT (served from Redis)
+```powershell
+docker exec tadka-redis redis-cli DEL $KEY
+docker exec tadka-redis redis-cli EXISTS $KEY
+curl.exe -s -o NUL -w "HTTP %{http_code}`n" http://localhost:5224/api/v1/restaurants/$RID/menu
+docker exec tadka-redis redis-cli EXISTS $KEY
+docker exec tadka-redis redis-cli TTL $KEY
+curl.exe -s -o NUL -w "HTTP %{http_code}`n" http://localhost:5224/api/v1/restaurants/$RID/menu
 ```
-Prove the DB is **untouched** on cache hits (scan count flat across repeated GETs, measured on the replica):
-```bash
-SQL="select seq_scan+idx_scan from pg_stat_user_tables where schemaname='restaurant' and relname='menu_items';"
-B=$(docker exec tadka-postgres-replica psql -U tadka -d tadka -tAc "$SQL")
-for i in $(seq 1 20); do curl -s -o /dev/null http://localhost:5224/api/v1/restaurants/$RID/menu; done
-A=$(docker exec tadka-postgres-replica psql -U tadka -d tadka -tAc "$SQL")
-echo "menu_items DB scans: before=$B after=$A  (delta 0 = 20 cached GETs hit Redis, not the DB)"
+
+**Look for:** first GET miss (slower, ~282 ms class capture); EXISTS **1**; TTL **~60**; second GET faster (~23 ms).
+
+Scan-count proof (replica, 20 hits, **delta 0**):
+
+```powershell
+$SQL = "select seq_scan+idx_scan from pg_stat_user_tables where schemaname='restaurant' and relname='menu_items';"
+$B = docker exec tadka-postgres-replica psql -U tadka -d tadka -tAc $SQL
+1..20 | ForEach-Object { curl.exe -s -o NUL http://localhost:5224/api/v1/restaurants/$RID/menu }
+$A = docker exec tadka-postgres-replica psql -U tadka -d tadka -tAc $SQL
+Write-Host "before=$B after=$A"
 ```
-> Captured on a dev laptop: menu GET **~282 ms (miss → replica DB) → ~23 ms (hit → Redis)**.
 
-## 3. Invalidation: delete-on-write (ADR-018)
+## 2. Delete-on-write
 
-Change the menu → the cache key is deleted immediately, so customers never see a stale price:
-```bash
-curl -s -o /dev/null -X PATCH http://localhost:5224/api/v1/restaurants/$RID/menu/$ITEM/availability \
-  -H "Content-Type: application/json" -d '{"isAvailable":false}'
-docker exec tadka-redis redis-cli EXISTS $KEY                  # 0  (busted on write)
-curl -s -o /dev/null http://localhost:5224/api/v1/restaurants/$RID/menu
-docker exec tadka-redis redis-cli EXISTS $KEY                  # 1  (repopulated, fresh)
-# restore availability:
-curl -s -o /dev/null -X PATCH http://localhost:5224/api/v1/restaurants/$RID/menu/$ITEM/availability -H "Content-Type: application/json" -d '{"isAvailable":true}'
+```powershell
+curl.exe -s -o NUL -X PATCH http://localhost:5224/api/v1/restaurants/$RID/menu/$ITEM/availability -H "Content-Type: application/json" --data-binary "@docs/runbooks/menu-unavailable.json"
+docker exec tadka-redis redis-cli EXISTS $KEY
+curl.exe -s -o NUL http://localhost:5224/api/v1/restaurants/$RID/menu
+docker exec tadka-redis redis-cli EXISTS $KEY
+curl.exe -s -o NUL -X PATCH http://localhost:5224/api/v1/restaurants/$RID/menu/$ITEM/availability -H "Content-Type: application/json" --data-binary "@docs/runbooks/menu-available.json"
 ```
-> TTL (~60 s) is the safety net if a delete is ever missed; delete-on-write is the strategy. We **never** cache order status/payment (read-your-writes — stale there → duplicate orders).
 
-## 4. Redis is a *performance* dependency, not a correctness one
+**Look for:** EXISTS **0** after PATCH, **1** after next GET. Never cache **order status** or **payment**.
 
-```bash
+## 3. Redis down — same tool, two classifications
+
+```powershell
 docker compose stop redis
-curl -s -o /dev/null -w "menu with Redis DOWN: %{http_code}\n" http://localhost:5224/api/v1/restaurants/$RID/menu   # still 200 (no-op cache → DB), just slower
+curl.exe -s -o NUL -w "menu %{http_code}`n" http://localhost:5224/api/v1/restaurants/$RID/menu
+curl.exe -s -o NUL -w "sse %{http_code}`n" http://localhost:5224/api/v1/orders/00000000-0000-0000-0000-000000000001/events
 docker compose start redis
 ```
 
-## 5. Live order tracking: SSE over the Redis backplane (ADR-020)
+**Look for:** menu **200** (performance dep). SSE **503** (correctness dep for the stream). Orders still place without Redis.
 
-Open a stream for an order in **one terminal**:
-```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" \
-  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"'$RID'","items":[{"menuItemId":"'$ITEM'","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}' | sed -E 's/.*"id":"([^"]+)".*/\1/')
-curl -N http://localhost:5224/api/v1/orders/$ORDER/events        # streams; leave it open (Windows: curl.exe -N)
-```
-In a **second terminal**, advance the status:
-```bash
-curl -s -o /dev/null -X PATCH http://localhost:5224/api/v1/orders/$ORDER/status -H "Content-Type: application/json" -d '{"status":"Confirmed"}'
-curl -s -o /dev/null -X PATCH http://localhost:5224/api/v1/orders/$ORDER/status -H "Content-Type: application/json" -d '{"status":"Preparing"}'
-```
-The first terminal prints, live:
-```
-event: Created
-data: {"orderId":"…","status":"Created", …}
-event: Confirmed
-data: {"orderId":"…","status":"Confirmed", …}
-event: Preparing
-data: {"orderId":"…","status":"Preparing", …}
-```
-> Each status change is published to Redis channel `order:{id}`; the SSE endpoint (subscribed) streams it — so an update from *any* app instance reaches the connection held by *another* instance. Push, not poll.
+## 4. Stampede lock (inspect, no 10k herd)
 
-## 6. Scale-out: 3 replicas + nginx LB, HTTP efficiency, rate limiting, edge cache, signed URLs (Beats 4-10)
+Code: `RedisCacheService.cs` 31–33 `lock:{key}` `SET NX EX` 5s. Waiters retry ~80 ms × 5 then hit DB.
 
-```bash
-docker compose --profile scale-out up -d     # builds src/Tadka.Api/Dockerfile, starts api-1/2/3 + nginx on :8090
-curl -i http://localhost:8090/health          # X-Tadka-Instance shows which replica answered
-docker stop tadka-api-2-1                     # kill one — requests keep succeeding (nginx evicts + retries)
-docker start tadka-api-2-1                    # rejoins the rotation within ~20s
+You will not see an unlocked herd live (no disable lever). After a miss you may catch `lock:restaurant:…` with `redis-cli KEYS lock:*` if you are fast. **Hot key** (IPL one restaurant): recognize; do not solve today.
+
+## 5. SSE live tracking (ADR-020)
+
+**Terminal A** — new order, then stream. **`-N` is required** (otherwise nothing appears):
+
+```powershell
+curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+curl.exe -N http://localhost:5224/api/v1/orders/PASTE_ID/events
 ```
 
-- **Compression + ETag (ADR-048):** `curl -H "Accept-Encoding: gzip" -D - http://localhost:8090/api/v1/restaurants` → `Content-Encoding: gzip`; repeat with `If-None-Match: <etag>` → `304`.
-- **Rate limiting (ADR-049):** default 120/min, Redis-shared across all 3 replicas. `RateLimit:Algorithm=FixedWindow|SlidingWindow`, `RateLimit:WindowSeconds` (short window for a fast classroom demo of the boundary burst).
-- **State divergence (ADR-047):** set `Cache:Mode=InMemory` on the 3 replicas (see `scripts/` or a compose override) to watch per-replica cache divergence after a price update — the default (Redis) mode stays consistent.
-- **Edge cache (ADR-050):** `X-Edge-Cache: MISS|HIT` header on `/api/v1/restaurants*` responses. 30s TTL.
-- **Signed URLs (ADR-050):** `POST /api/v1/orders/{id}/invoice/sign` → time-limited link; `GET .../invoice?sig=&exp=`.
-- **SSE reconnect (ADR-051):** reconnect with `Last-Event-ID: <seq>` to replay missed status transitions.
+**Terminal B:**
 
-Full click-by-click sequences with captured numbers: `cohort-prep/day-06/break-kit-day-06.md` (Beats 4-10 + Bonus).
-
-```bash
-docker compose --profile scale-out down       # tear down when done (plain `docker compose down` for the base stack)
+```powershell
+curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json"
 ```
 
-## 7. Run the tests
+**Look for** in A: `event: Confirmed`. Channel `order:{id}` (`RedisOrderTrackingBus.cs` 23, 45). Replay/`Last-Event-ID` is on the branch — **not taught**.
 
-```bash
-dotnet test      # 27/27 — the shared factory (ETag tests included) runs Redis-free and deterministic;
-                  # RateLimiterTests spin up their own dedicated Redis Testcontainer, so no scale-out stack needed
+## 6. Scale-out preview only (not the lecture)
+
+```powershell
+docker compose --profile scale-out up -d
+curl.exe -i http://localhost:8090/health
+docker stop tadka-api-2-1
+docker start tadka-api-2-1
+docker compose --profile scale-out down
 ```
 
-## ✅ Done when
+Three questions, then **stop:** where is the cache; who counts rate limits; which box holds the SSE connection. Beats 4–10 = break-kit homework.
 
-- [ ] `redis-cli ping` → PONG; all three containers healthy.
-- [ ] Menu GET: 1st call caches the key (`EXISTS`→1, `TTL`→~60); repeated GETs add **0** DB scans (served from Redis); hit is much faster than miss.
-- [ ] A menu write deletes the key (`EXISTS`→0), and the next GET repopulates it fresh.
-- [ ] With Redis **stopped**, the menu still returns `200` (no-op fallback).
-- [ ] The SSE stream prints `Created → Confirmed → Preparing` as you PATCH the status.
-- [ ] `docker compose --profile scale-out up -d`: kill one replica mid-load, 0 client-visible failures; it rejoins after restart.
-- [ ] Gzip/brotli `Content-Encoding` present; matching `If-None-Match` → `304`.
-- [ ] 150 rapid requests → some `429`s with a real `Retry-After`, shared across all 3 replicas.
-- [ ] `dotnet test` → 27/27.
+## Done when (Sunday)
+
+- [ ] PONG; three containers healthy; 27/27
+- [ ] Miss then hit; 20 GETs **+0** replica scans
+- [ ] PATCH availability deletes the key
+- [ ] Redis stopped: menu **200**, SSE **503**
+- [ ] Two-terminal SSE prints Confirmed
 
 ## Troubleshooting
 
-- **`tadka-redis` name already in use:** `docker rm -f tadka-redis` then `docker compose up -d`.
-- **SSE prints nothing:** ensure you used `curl -N` (no buffering); on Windows PowerShell use `curl.exe -N`. Confirm Redis is up (`ping` → PONG) — without Redis the SSE endpoint returns `503`.
-- **Reset everything:** `docker compose down -v && docker compose up -d`, then `dotnet run`.
+| Symptom | What to do |
+|---------|------------|
+| `tadka-redis` in use | `docker rm -f tadka-redis`; `docker compose up -d` |
+| SSE blank | `curl.exe -N`. Redis up. 503 = Redis down (by design). |
+| PATCH 400 | Use `@docs/runbooks/menu-unavailable.json`, not inline JSON. |
+| Scan count moved | You DEL'd the key or Redis was down — hits were misses. |
 
-That's Weeks 1–3. Next up (Week 4): the payment-gateway brownout that forces the modular monolith + the first service extraction.
+HTTP caching / ETag / gzip: weekday, `day6-caching-compression` source. Next: Week 4 payment brownout.
