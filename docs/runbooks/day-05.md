@@ -1,190 +1,221 @@
-# Day 5 — Runbook: indexes, the pool, and a real read replica
+# Day 5 — Runbook: indexes, pool, replica, leftover events, history cursor
 
-**Branch:** `day-05`. **What's new:** performance indexes (ADR-014), a tuned connection pool (ADR-015), and a **real streaming read replica** with an EF read/write split (ADR-016). Partitioning is a standalone SQL experiment (ADR-017), not an app change.
+**Branch:** `day-05`. **What's new:** performance indexes (ADR-014), Npgsql pool Min 5 / Max 50 (ADR-015), streaming replica `:5433` + `TadkaReadDbContext` (ADR-016), partition **SQL experiment** (ADR-017), `GET /api/v1/orders/history` (ADR-046). Day 4's `OrderConfirmed` handler **stays**. **No Redis.**
 
-> **Windows PowerShell:** use `curl.exe`, not `curl`.
+> **Windows PowerShell:** use **`curl.exe`**. From the repo root. Quote `@file`. Do not paste `-d "{...}"`.
 
 | Thing | Value |
 |-------|--------|
 | API | `http://localhost:5224` |
-| Compose service | `postgres` (container `tadka-postgres`) |
-| **Primary** | `localhost:5432`, db/user `tadka`, password `tadka_local` |
-| **Replica** | `localhost:5433` (container `tadka-postgres-replica`) |
+| Primary | `localhost:5432` · container `tadka-postgres` · service `postgres` |
+| Replica | `localhost:5433` · container `tadka-postgres-replica` |
+| Creds | db/user `tadka`, password `tadka_local` |
 
-**Two Postgres containers today.** Run `docker compose down -v` when switching onto this branch, otherwise the replica initialises against a stale volume.
+**Two Postgres today.** `down -v` when switching onto this branch, or the replica clones a stale volume.
 
-Seed GUIDs (same as Day 3): Meghana `a1b2c3d4-0001-4000-8000-000000000001`, biryani `b1b2c3d4-0001-4000-8000-000000000001`, Priya `c1b2c3d4-0001-4000-8000-000000000001`.
+Seed GUIDs (menu / Priya — **not** the 200k history customer): Meghana `a1b2c3d4-0001-4000-8000-000000000001`, biryani `b1b2c3d4-0001-4000-8000-000000000001`, Priya `c1b2c3d4-0001-4000-8000-000000000001`.
+
+**200k seed customer** (order history / load): `00000000-0000-0000-0000-000000000000`.
+
+### Demo → code
+
+| When | What you run | Look for | Code |
+|---|---|---|---|
+| **Opening — leftover SMS** | New order, PATCH Confirmed | HTTP **204** + **`dotnet run`** line `Notification: order … confirmed` | `Order.cs` 81–84 Raise; `OrdersController.cs` 231 then 233; handler 16–21 |
+| Beat 1 — seq scan | `day05-induce-break.sql` then EXPLAIN | **Parallel Seq Scan** + **Sort** ~116 ms | Dropped indexes |
+| Beat 1 — fix | `day05-apply-fix.sql` then EXPLAIN | **Index Scan** ~5 ms, Sort gone | `OrderConfiguration.cs` 57–62 |
+| Beat 2 — pool | `measure-load.ps1` with pool=10 + break | p99 climbs; honesty: laptop may stay ~60 ms warm | `appsettings.Development.json` 9 `Maximum Pool Size=50` |
+| Beat 3 — replica | POST order, **immediately** replica `SELECT` | 0 rows or lag ~236 ms; API GET still **200** | `TadkaReadDbContext.cs`; `Program.cs` 16–22; `GET /orders/{id}` uses primary |
+| Partition | `day05-partition-demo.sql` | `Subplans Removed: 7`; status key buffers **+63%** | Throwaway tables, not `ordering.orders` |
+| History | `GET /api/v1/orders/history?customerId=0000…0000` | Cursor page, no `totalCount` | `OrdersController.cs` 168–210 |
+
+Spoken cue in class: **"Ab demo."**
 
 ---
 
 ## 0. Fresh start (pre-class)
 
-```bash
+```powershell
 git checkout day-05
 docker compose down -v
+docker rm -f tadka-postgres tadka-postgres-replica
+docker volume rm tadka_pgdata tadka_pgdata_replica tadka-cohort_pgdata
 docker compose up -d
 docker compose ps
-```
-
-Wait until **both** `tadka-postgres` and `tadka-postgres-replica` report healthy. Then:
-
-```bash
 dotnet build Tadka.slnx
+dotnet test Tadka.slnx
 dotnet run --project src/Tadka.Api
 ```
 
----
+**Look for:** both containers **(healthy)**. Tests **23 cases**. Listen **5224**. Replica log: `started streaming WAL from primary`.
+
+## 0b. Leftover from Day 4 — SMS after commit (class start)
+
+The **break** is drawn (SMS inside the txn un-confirms the order). Live is the **fix** already on this branch.
+
+**1.** New **Created** order, copy `"id"`:
+
+```powershell
+curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+```
+
+**2.** Watch the **`dotnet run` terminal**, then PATCH. Paste the id — `$ORDER` is not set:
+
+```powershell
+curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json"
+```
+
+**Look for:** curl **204**. API log `Notification: order PASTE_ID confirmed — SMS sent to customer …`.
+
+| If you see | Why |
+|---|---|
+| 404 `/orders//status` | Empty id. Paste the GUID. |
+| 422, no log line | That order was already Confirmed. POST a new one. |
+| 204 but no SMS line | You watched curl, not `dotnet run`. |
+
+`SaveChanges` is `OrdersController.cs` **231**. `DispatchAsync` is **233** (after). Leave it that way.
 
 ## 1. Seed 200k orders
 
-The break is invisible on 16 rows. This is what makes `EXPLAIN` bite.
+The break is invisible on 16 rows.
 
-```bash
+```powershell
 docker cp scripts/day05-seed-large.sql tadka-postgres:/tmp/seed.sql
-docker exec -i tadka-postgres psql -U tadka -d tadka -f /tmp/seed.sql
-```
-
-Verify, and expect roughly 200,001:
-
-```bash
+docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/seed.sql
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT count(*) FROM ordering.orders;"
 ```
 
-Run this against the **primary** (5432). It streams to the replica over WAL.
-
----
+Expect roughly **200,001**. Run against the **primary**. It streams to the replica.
 
 ## 2. Beat 1 — induce the seq scan, then fix it
 
-**Break it:**
+**Break:**
 
-```bash
+```powershell
 docker cp scripts/day05-induce-break.sql tadka-postgres:/tmp/break.sql
-docker exec -i tadka-postgres psql -U tadka -d tadka -f /tmp/break.sql
+docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/break.sql
 ```
 
-The script drops the performance indexes and runs the order-history `EXPLAIN ANALYZE`. Look for **`Parallel Seq Scan`** plus a **`Sort`** node, and read the execution time out loud.
+Look for **`Parallel Seq Scan`** plus a **`Sort`**. Read the execution time out loud. Ratio is the lesson, not the milliseconds.
 
-**Fix it:**
+**Fix:**
 
-```bash
+```powershell
 docker cp scripts/day05-apply-fix.sql tadka-postgres:/tmp/fix.sql
-docker exec -i tadka-postgres psql -U tadka -d tadka -f /tmp/fix.sql
+docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/fix.sql
 ```
 
-Re-run the same `EXPLAIN`. Two things change, and both are the lesson:
+Same EXPLAIN: **Index Scan**, Sort gone. Index is `(customer_id, created_at DESC)` — leftmost prefix is `customer_id` first.
 
-- `Parallel Seq Scan` becomes **`Index Scan`** (roughly 20× on a dev laptop)
-- the **`Sort` node disappears entirely**, because the index is already in `created_at DESC` order
-
-> **The ratio is the lesson, not the milliseconds.** Say that to the room once, early. Your absolute numbers will differ from mine.
-
----
+**Code:** `src/Tadka.Api/Data/Configurations/OrderConfiguration.cs` 57–62. Deliberately **not** indexed: `status`, `restaurant_id`.
 
 ## 3. Beat 2 — the pool
 
-Show that the connection count is a **memory budget**, not a preference:
+Each connection is an OS process (~1–3 MB):
 
-```bash
+```powershell
 docker exec tadka-postgres psql -U tadka -d tadka -c "SHOW max_connections;"
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT count(*) FROM pg_stat_activity WHERE datname='tadka';"
 ```
 
-Each of those rows is a **separate OS process** on the server at roughly 1–3 MB, which is the whole point of `[S3-B1a]`. Prove it:
+Shipped pool is **Max 50** (`appsettings.Development.json` line 9). To feel the squeeze in class: induce-break again, set `Maximum Pool Size=10` in that connection string, restart the API, then:
 
-```bash
-docker exec tadka-postgres ps -o pid,rss,cmd -C postgres | head
+```powershell
+pwsh scripts/measure-load.ps1 -Url "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&pageSize=10" -Concurrency 40 -Total 400
 ```
 
-Then squeeze the pool (connection string `Maximum Pool Size`) and put load on it while watching:
+**Honesty:** a warm laptop often holds p99 ~50–62 ms even at concurrency 80. The dramatic ~1188 ms is cold + seq scan + pool=10. Say so. Real exhaustion is `4 instances × 100 > max_connections 100` — PgBouncer is **Day 11**.
 
-```bash
-docker stats tadka-postgres --no-stream
-```
-
-> **Honesty note for the room:** one laptop cannot truly exhaust a well-sized pool. The formula is `concurrency × hold-time`, and the real exhaustion demo is Day 7's payment brownout. Say so rather than faking it.
-
----
+Then apply-fix and restore Max 50.
 
 ## 4. Beat 3 — the replica is real
 
-Confirm replication is actually streaming, not simulated:
-
-```bash
+```powershell
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT client_addr, state, sync_state FROM pg_stat_replication;"
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT pg_is_in_recovery();"
 ```
 
-`pg_is_in_recovery()` must return `t` on the replica. Now **CAP you can feel** — write to the primary, read the replica immediately:
+`pg_is_in_recovery()` must be `t`. Replica **rejects writes** (`cannot execute INSERT in a read-only transaction`).
 
-```bash
-curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d '{ "customerId":"c1b2c3d4-0001-4000-8000-000000000001", "restaurantId":"a1b2c3d4-0001-4000-8000-000000000001", "items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":1}], "deliveryAddress":{"line1":"1","line2":"2","city":"Bangalore","pincode":"560066","latitude":12.97,"longitude":77.75} }'
+**CAP you can feel** — POST, then query the replica **immediately**:
 
-docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT count(*) FROM ordering.orders WHERE customer_id='c1b2c3d4-0001-4000-8000-000000000001';"
-```
-
-Run the replica query **immediately** and the new order is not there yet. Measure the lag:
-
-```bash
+```powershell
+curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT now() - pg_last_xact_replay_timestamp() AS lag;"
 ```
 
-That gap is the reason **read-your-writes goes to the primary**. It is ADR-016's failure mode, written down before it was ever hit.
+Paste the new id into a replica `SELECT` **fast**. Zero rows (or lag ~236 ms) is the lesson. `GET /api/v1/orders/PASTE_ID` still **200** — that path uses the **primary**. If the row has already replicated, **do not fake it** — show the lag number.
 
-### Replica is not a backup
+**Replica is not a backup.** A `DELETE` on the primary reaches the replica in milliseconds.
 
-The `[S4-B6a]` beat. Take one backup so the room has touched it:
-
-```bash
+```powershell
 docker exec tadka-postgres pg_dump -U tadka -d tadka -f /tmp/tadka-backup.sql
-docker exec tadka-postgres ls -lh /tmp/tadka-backup.sql
 ```
 
-A `DELETE` on the primary reaches the replica in milliseconds. **A replica gives you another machine; a backup gives you another point in time.** RPO is how much data you can lose, RTO is how long recovery takes.
-
----
+**Code:** `TadkaReadDbContext.cs`; `Program.cs` 16–22 (fallback to primary if replica unset — tests do this).
 
 ## 5. Partitioning — standalone experiment
 
-Nothing about the running app changes here. Separate tables, both directions shown.
+Nothing in the app schema changes.
 
-```bash
+```powershell
 docker cp scripts/day05-partition-demo.sql tadka-postgres:/tmp/partition-demo.sql
-docker exec -i tadka-postgres psql -U tadka -d tadka -f /tmp/partition-demo.sql
+docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/partition-demo.sql
 ```
 
-Two results to read out:
+| Result | Meaning |
+|---|---|
+| `Subplans Removed: 7` | Range on immutable `created_at` — pruning works |
+| buffers **54 → 88 (+63%)** | List on mutable `status` — every update is DELETE+INSERT across partitions |
 
-- **The win** — partition on the immutable `created_at`, and a date-filtered query reports **`Subplans Removed`**. That is partition pruning.
-- **The trap** — partition on the mutable `status`, and every status change becomes a `DELETE` + `INSERT` across partitions, with visibly higher buffer counts.
-
-**Partitioning is not wrong. Partitioning on a column that changes is wrong.**
-
-### Sharding — read, do not run
-
-Sharding is board-only in class (`[S5-B5]`/`[S5-B6]`). The depth is already on this branch:
-
-- [`docs/database/instagram-sharding-case-study.md`](../database/instagram-sharding-case-study.md)
-- [`docs/demo-scripts/04-sharding-concept.sql`](../demo-scripts/04-sharding-concept.sql)
-
-The one number to carry: `hash % N` moves about **80%** of your keys when you add a server; consistent hashing with virtual nodes moves about **1/N**.
-
----
+**Do not partition `ordering.orders` today** (ADR-017). Sharding is board-only: `hash % N` moves ~80% on add-server; consistent hashing ~1/N.
 
 ## 6. Deep pagination
 
-```bash
-curl.exe -s "http://localhost:5224/api/v1/orders?customerId=c1b2c3d4-0001-4000-8000-000000000001&offset=3990&limit=10" -w "\n%{time_total}s\n"
+**Wrong:** `offset=` / `limit=` — the list API uses **`page` / `pageSize`**. Priya is **not** in the 200k seed.
+
+Offset (walk-and-throw), seed customer:
+
+```powershell
+curl.exe -s "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&page=800&pageSize=5"
 ```
 
-Compare against the keyset/cursor endpoint. `OFFSET` makes the database *walk and discard* every skipped row; a cursor seeks straight into the index. On the seeded data that is roughly **74×**.
+Keyset (same cost at any depth):
 
----
-
-## 7. Reset between runs
-
-```bash
-docker compose down -v && docker compose up -d
+```powershell
+curl.exe -s "http://localhost:5224/api/v1/orders/history?customerId=00000000-0000-0000-0000-000000000000&pageSize=10"
 ```
 
-Then re-run step 1. Re-seeding takes a couple of minutes, so do it **before** class, not during it.
+**Look for:** `nextCursor`, **no** `totalCount`. Code: `OrdersController.cs` 168–210.
+
+Optional toy (same Postgres):
+
+```powershell
+cd toydemo\day-03-api-primitives\cursor-pagination-toy
+node real-db.js --mode=break
+node real-db.js --mode=fix
+```
+
+## Done when
+
+- [ ] Both Postgres containers healthy; tests 23
+- [ ] New order → PATCH Confirmed → **204** + notification line on `dotnet run`
+- [ ] Seq Scan ~116 ms → Index Scan ~5 ms (ratio, not the exact ms)
+- [ ] You can explain 409 vs pool vs replica lag as **different** problems
+- [ ] Replica write rejected; CAP window shown or lag number spoken
+- [ ] Partition demo: pruning vs mutable-key buffers
+- [ ] `GET /orders/history` for `0000…0000` returns a cursor page
+
+## Troubleshooting
+
+| Symptom | What to do |
+|---------|------------|
+| Replica never healthy | `down -v` then `up -d`. It clones the primary on first boot. |
+| `42P07` / relation exists | Old volume. Wipe **both** `pgdata` volumes (§0). |
+| History empty / tiny | You used Priya. Use `00000000-0000-0000-0000-000000000000` after the 200k seed. |
+| `offset=` ignored | List API is `page` / `pageSize`. History is `cursor` / `pageSize`. |
+| No SMS log | New Created order; watch **`dotnet run`**, not curl. |
+| CAP replica already has the row | You were slow. Show `now() - pg_last_xact_replay_timestamp()`. Do not fake 0 rows. |
+| `measure-load.ps1` / `node` not found | `pwsh scripts/measure-load.ps1 …`. Install Node for the cursor toy. |
+
+Next: Day 6 — Redis cache-aside + SSE. Not tonight.
