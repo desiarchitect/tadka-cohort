@@ -66,7 +66,7 @@ Stop the app with `Ctrl+C`. Reset the database completely with `docker compose d
 
 ## ⚠️ Windows PowerShell + curl
 
-In **Windows PowerShell**, `curl` is an alias for `Invoke-WebRequest`, so `curl -X POST -d '{...}'` fails. Use **`curl.exe`** (the real curl, present on Windows 10+), or use the **Scalar UI**, or run the commands in **Git Bash / WSL**. The runbooks write `curl`; on PowerShell substitute `curl.exe`.
+In **Windows PowerShell**, `curl` is an alias for `Invoke-WebRequest`. Use **`curl.exe`**. Quote `"@docs/runbooks/place-order.json"`. Do not paste `-d "{...}"`.
 
 ## Common gotchas
 
