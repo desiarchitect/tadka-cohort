@@ -22,8 +22,8 @@ Seed GUIDs (menu / Priya — **not** the 200k history customer): Meghana `a1b2c3
 | When | What you run | Look for | Code |
 |---|---|---|---|
 | **Opening — leftover SMS** | New order, PATCH Confirmed | HTTP **204** + **`dotnet run`** line `Notification: order … confirmed` | `Order.cs` 81–84 Raise; `OrdersController.cs` 231 then 233; handler 16–21 |
-| Beat 1 — seq scan | `day05-induce-break.sql` then EXPLAIN | **Parallel Seq Scan** + **Sort** ~116 ms | Dropped indexes |
-| Beat 1 — fix | `day05-apply-fix.sql` then EXPLAIN | **Index Scan** ~5 ms, Sort gone | `OrderConfiguration.cs` 57–62 |
+| Beat 1 — seq scan | `day05-induce-break.sql` (**prints** EXPLAIN) | **Seq Scan** or **Parallel Seq Scan** + **Sort** | Drops the two history indexes |
+| Beat 1 — fix | `day05-apply-fix.sql` (**prints** EXPLAIN) | **Index Scan** using `ix_orders_customer_id_created_at`, **no Sort** | Recreates indexes; `OrderConfiguration.cs` 57–62 |
 | Beat 2 — pool | `measure-load.ps1` with pool=10 + break | p99 climbs; honesty: laptop may stay ~60 ms warm | `appsettings.Development.json` 9 `Maximum Pool Size=50` |
 | Beat 3 — replica | POST order, **immediately** replica `SELECT` | 0 rows or lag ~236 ms; API GET still **200** | `TadkaReadDbContext.cs`; `Program.cs` 16–22; `GET /orders/{id}` uses primary |
 | Partition | `day05-partition-demo.sql` | `Subplans Removed: 7`; status key buffers **+63%** | Throwaway tables, not `ordering.orders` |
@@ -89,25 +89,85 @@ Expect roughly **200,001**. Run against the **primary**. It streams to the repli
 
 ## 2. Beat 1 — induce the seq scan, then fix it
 
-**Break:**
+This is the order-history query: “Priya’s last 10 orders” — except the 200k seed uses customer `00000000-0000-0000-0000-000000000000`, **not** Priya. The API is `GET /api/v1/orders?customerId=…&pageSize=10`. Postgres sees:
+
+```sql
+SELECT * FROM ordering.orders
+WHERE "CustomerId" = '00000000-0000-0000-0000-000000000000'
+ORDER BY "CreatedAt" DESC
+LIMIT 10;
+```
+
+Without an index it **reads the whole table**, then **sorts**, then keeps 10 rows. With `(CustomerId, CreatedAt DESC)` it walks the index and stops at 10. **No app restart.** You only drop/recreate indexes on the **primary**.
+
+### 0. Seed first (or the break is invisible)
+
+16 seed orders are one page. Seq scan and index scan both look instant. §1 must already show ~**200,001**:
+
+```powershell
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT count(*) FROM ordering.orders;"
+```
+
+If that is ~16, run §1, then come back.
+
+### 1. Prove the indexes exist (optional)
+
+After `dotnet run`, EF created them. List:
+
+```powershell
+docker exec tadka-postgres psql -U tadka -d tadka -c "\di ordering.ix_orders*"
+```
+
+**Look for two names:** `ix_orders_customer_id_created_at` and `ix_orders_created_at`. If they are missing, you are not on `day-05` or migrations did not run.
+
+### 2. BREAK — drop the indexes and print the bad plan
+
+**What the file does:** `DROP INDEX` those two names, then `EXPLAIN ANALYZE` the query above. You do **not** run EXPLAIN by hand.
 
 ```powershell
 docker cp scripts/day05-induce-break.sql tadka-postgres:/tmp/break.sql
 docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/break.sql
 ```
 
-Look for **`Parallel Seq Scan`** plus a **`Sort`**. Read the execution time out loud. Ratio is the lesson, not the milliseconds.
+**How you know it failed** (scroll the plan, read `Execution Time` out loud):
 
-**Fix:**
+| In the output | Meaning |
+|---|---|
+| `Seq Scan` or `Parallel Seq Scan` on `orders` | Postgres walked the **table**, not an index |
+| `Sort` | It ordered ~all matching rows in memory, then took 10 |
+| `Execution Time: …` (often tens–hundreds of ms; capture laptop **~116 ms**) | Wall clock of this query. **Ratio** matters, not matching 116 exactly |
+
+You just made production-shaped order history **slow on purpose**. The API still returns 200 — HTTP does not show the scan.
+
+### 3. FIX — put the indexes back and print the good plan
+
+**What the file does:** `CREATE INDEX` `(CustomerId, CreatedAt DESC)` and `(CreatedAt DESC)`, `ANALYZE`, **same** `EXPLAIN ANALYZE`.
 
 ```powershell
 docker cp scripts/day05-apply-fix.sql tadka-postgres:/tmp/fix.sql
 docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/fix.sql
 ```
 
-Same EXPLAIN: **Index Scan**, Sort gone. Index is `(customer_id, created_at DESC)` — leftmost prefix is `customer_id` first.
+**How you know it is fixed:**
 
-**Code:** `src/Tadka.Api/Data/Configurations/OrderConfiguration.cs` 57–62. Deliberately **not** indexed: `status`, `restaurant_id`.
+| In the output | Meaning |
+|---|---|
+| `Index Scan using ix_orders_customer_id_created_at` | Postgres used the composite index |
+| **No** `Sort` node | Index is already `CreatedAt DESC` — leftmost prefix is **CustomerId** first |
+| `Execution Time` much smaller (capture **~5 ms**, about **20×**) | Same query, cheap path |
+
+Your milliseconds will differ. **116 → 5** is the captured ratio, not a pass/fail number.
+
+**Code (same indexes, EF):** `src/Tadka.Api/Data/Configurations/OrderConfiguration.cs` 57–62. Deliberately **not** indexed: `status`, `restaurant_id` (no query filters on them → write tax for nothing).
+
+### If you do not see Seq Scan
+
+| What you saw | Why |
+|---|---|
+| Fast plan, no Seq Scan, still have Sort or Index Scan | You skipped §1 seed, or already ran apply-fix |
+| Empty / tiny row counts in the plan | You explained Priya `c1b2c3d4-…`. Use `00000000-0000-0000-0000-000000000000` |
+| `DROP INDEX` then prompt, no plan | Old copy of the SQL (EXPLAIN is now **in** the file). Pull latest `day-05` |
+| `relation does not exist` | API never migrated. `dotnet run` on `day-05` first |
 
 ## 3. Beat 2 — the pool
 
