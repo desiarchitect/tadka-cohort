@@ -26,8 +26,8 @@ Seed GUIDs (menu / Priya — **not** the 200k history customer): Meghana `a1b2c3
 | **Opening — leftover SMS** | New order, PATCH Confirmed | HTTP **204** + **`dotnet run`** line `Notification: order … confirmed` | `Order.cs` 81–84 Raise; `OrdersController.cs` 231 then 233; handler 16–21 |
 | Beat 1 — seq scan | `day05-induce-break.sql` (**prints** EXPLAIN) | **Seq Scan** or **Parallel Seq Scan** + **Sort** | Drops the two history indexes |
 | Beat 1 — fix | `day05-apply-fix.sql` (**prints** EXPLAIN) | **Index Scan** using `ix_orders_customer_id_created_at`, **no Sort** | Recreates indexes; `OrderConfiguration.cs` 57–62 |
-| Beat 2 — pool | Same load 3×: baseline → drop index + pool=10 → restore | p99 up = queue (tickets + long SQL). Laptop may stay ~60 ms | `appsettings.Development.json` 9 |
-| Beat 3 — replica | INSERT on replica; POST; replica `SELECT` **same id**; GET API | read-only error; 0 rows or lag; GET **200** on primary | `GetById` primary; list/menu `_read` |
+| Beat 2 — pool | Same load 3× **with `-ProbeUrl` restaurants + menu**: baseline → drop index + pool=10 → restore | history p99 up **and** `probe restaurants` / `probe menu` p99 up (HTTP 200). Laptop may stay ~60 ms | `appsettings.Development.json` 9 |
+| Beat 3 — replica | How the copy works, then INSERT on replica; POST; replica `SELECT` **same id**; GET API | WAL stream (not C#); read-only error; 0 rows or lag; GET **200** on primary | `docker/replica-entrypoint.sh`; `GetById` primary; list/menu `_read` |
 | Partition | `day05-partition-demo.sql` — read `\echo` banners | A2 `Subplans Removed`; B1 vs B2 `Buffers:` | Throwaway tables, not `ordering.orders` |
 | History | EXPLAIN OFFSET vs `GET /orders/history` | OFFSET walks thousands of rows; JSON has `nextCursor`, no `totalCount` | `OrdersController.cs` 168–210 |
 
@@ -219,7 +219,7 @@ Beat 1 was: **one query is slow** (seq scan). Beat 2 is: **that slow query poiso
 Each request **borrows one ticket**, runs SQL, **returns the ticket**. The next waiter takes it.
 
 - **Indexed (Beat 1 fix):** SQL ~5 ms. Ticket comes back fast. 10 tickets are plenty for 40 arrivals — they overlap in time, they do not all hold a ticket at once.
-- **Seq scan (Beat 1 break):** SQL ~100 ms+. Ticket stays out longer. Now 40 arrivals and **10 tickets** means 30 people stand in the pool queue. Their HTTP time = wait-for-ticket + slow SQL. **Menu / health / someone else’s order history** use the **same 10 tickets**. One slow query makes the whole API feel down.
+- **Seq scan (Beat 1 break):** SQL ~100 ms+. Ticket stays out longer. Now 40 arrivals and **10 tickets** means 30 people stand in the pool queue. Their HTTP time = wait-for-ticket + slow SQL. **Menu / restaurant list / health** use the **same 10 tickets**. Those queries are small and indexed — they were never the problem. They get slow because they cannot borrow a ticket. One slow query makes the whole API feel down.
 
 That is the link: **pooling is not “faster SQL.”** Pooling is a **cap on how many SQLs run at once**. A cap is fine when each SQL is short. A cap + a seq scan = a queue.
 
@@ -230,7 +230,7 @@ We change **two knobs** so the queue is visible:
 | Make each SQL **long** | Drop the indexes again (`induce-break.sql`) | Same seq scan as Beat 1. Without this, pool=10 still looks fine. |
 | Make tickets **few** | `Maximum Pool Size=10` | 40 concurrent HTTP vs 10 tickets. Shipped 50 hides the queue on a laptop. |
 
-We **re-run the exact same** `measure-load.ps1` (same URL, 40 concurrent, 400 total) so the **only** things that changed are those two knobs. If you change the URL or skip the baseline, you cannot tell whether p99 moved because of the pool.
+We **re-run the exact same** `measure-load.ps1` (same history URL, 40 concurrent, 400 total, **same two `-ProbeUrl`s**) so the **only** things that changed are those two knobs. If you change the URL or skip the baseline, you cannot tell whether p99 moved because of the pool. The probes are 30 extra GETs each to `/restaurants` and Meghana `/menu`, overlapping the history storm — that is the live proof that **other** endpoints queue.
 
 **Ctrl+C first:** `$env:ConnectionStrings__TadkaDb` is read when `dotnet run` **starts**. The already-running API still has pool 50.
 
@@ -249,15 +249,24 @@ Load URL (200k seed customer, **not** Priya):
 
 ### 1. BASELINE — indexes ON, pool 50 (API already running from §0)
 
-**What we did:** 400 GETs, 40 at a time, **fast** SQL, **50** tickets.
+**What we did:** 400 history GETs, 40 at a time, **fast** SQL, **50** tickets. Plus 30 overlapping GETs each to restaurant list and Meghana’s menu (`-ProbeUrl`). Those two tables are small and indexed — they are **not** Beat 1.
+
+Idle first (API quiet — write the times; often well under 0.05s):
 
 ```powershell
-powershell -File scripts/measure-load.ps1 -Url "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&pageSize=10" -Concurrency 40 -Total 400
+curl.exe -s -o NUL -w "restaurants time=%{time_total}s HTTP %{http_code}`n" http://localhost:5224/api/v1/restaurants
+curl.exe -s -o NUL -w "menu time=%{time_total}s HTTP %{http_code}`n" http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu
 ```
 
-**How we identified “healthy”:** `n=400 concurrency=40 errors=0` and `p50=… p95=… p99=…`. **Write p99 on the board** (often ~5–20 ms). That number is the control.
+Then the load (copy this **same** line for steps 2 and 3):
 
-If `n=0` or `Invoke-One` errors: pull latest `day-05` (harness was rewritten).
+```powershell
+powershell -File scripts/measure-load.ps1 -Url "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&pageSize=10" -Concurrency 40 -Total 400 -ProbeUrl "http://localhost:5224/api/v1/restaurants","http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu"
+```
+
+**How we identified “healthy”:** `n=400 concurrency=40 errors=0` and `p50=… p95=… p99=…`. **Write history p99** (often ~5–20 ms). Also **write `probe restaurants` and `probe menu` p99** (should sit near the idle curls). Those three numbers are the control.
+
+If `n=0` or `Invoke-One` errors: pull latest `day-05` (harness was rewritten). If there is no `probe restaurants` line, this copy of the script has no `-ProbeUrl` — pull latest.
 
 ### 2. BREAK — seq scan + 10 tickets
 
@@ -296,23 +305,33 @@ $env:ConnectionStrings__TadkaDb = "Host=localhost;Port=5432;Database=tadka;Usern
 dotnet run --project src/Tadka.Api
 ```
 
-**Other terminal** — identical load to baseline (do not change URL, 40, or 400):
+**Other terminal** — idle-curl **menu and restaurant list again** (indexes on *orders* are gone; these tables were not touched). Times should still match step 1. That is the control: the queries themselves are fine.
 
 ```powershell
-powershell -File scripts/measure-load.ps1 -Url "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&pageSize=10" -Concurrency 40 -Total 400
+curl.exe -s -o NUL -w "restaurants time=%{time_total}s HTTP %{http_code}`n" http://localhost:5224/api/v1/restaurants
+curl.exe -s -o NUL -w "menu time=%{time_total}s HTTP %{http_code}`n" http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu
 ```
 
-**What that script does:** 400 HTTP GETs to order history; at most 40 in flight; prints `n`, `errors`, `p50/p95/p99` of **end-to-end HTTP time** (queue + SQL + network). It does not talk to Docker. It does not drop indexes.
+Then identical load to baseline (do not drop `-ProbeUrl`; do not change URL, 40, or 400):
 
-**How we identified the issue** — compare **this p99** to **step 1 p99**:
+```powershell
+powershell -File scripts/measure-load.ps1 -Url "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&pageSize=10" -Concurrency 40 -Total 400 -ProbeUrl "http://localhost:5224/api/v1/restaurants","http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu"
+```
+
+**What that script does:** 400 HTTP GETs to order history (max 40 in flight) **and**, overlapping that storm, 30 GETs to `/restaurants` and 30 to Meghana `/menu`. Prints history `n` / `errors` / `p50/p95/p99`, then two `probe …` lines. End-to-end HTTP time = queue + SQL + network. It does not talk to Docker. It does not drop indexes.
+
+**How we identified the issue** — compare **this** output to **step 1**:
 
 | Output | What happened |
 |---|---|
-| p99 **up** (capture cold ~**1188 ms** vs baseline ~**19 ms**) | Many requests waited for a free connection, then ran slow SQL |
+| history p99 **up** (capture cold ~**1188 ms** vs baseline ~**19 ms**) | Many history requests waited for a free connection, then ran slow SQL |
+| `probe restaurants` / `probe menu` p99 **up** vs step 1 (HTTP still 200, `errors` often 0) | **The proof.** Those queries did not seq-scan. They waited for a **ticket**. Menu SQL is still a few ms; HTTP time is queue. |
 | `errors` > 0 | Waited 5s, no ticket (`Timeout=5`) |
 | HTTP **200** on the rest | Not a crash. Dinner rush = **slow**, not 500 |
 
-**Honesty:** warm laptop p99 often **~50–62 ms**. Queue may not fill on one box. Model still holds. Day 11 = many APIs vs `max_connections`.
+Say this while pointing at the probe lines: **Menu bhi slow ho gaya. Restaurant list bhi slow ho gayi. Un queries mein koi problem nahi hai. Woh chhoti tables hain, indexed hain, hamesha fast thi. Toh woh kyun slow hain?** Because the pool is shared.
+
+**Honesty:** warm laptop history p99 often **~50–62 ms**, and probes may barely move. Queue may not fill on one box. Model still holds. Day 11 = many APIs vs `max_connections`. Do not fake a jump — if probes stay fast, say so and keep the causal chain on the board.
 
 ### 3. FIX — why putting the index **back** drops p99
 
@@ -322,7 +341,7 @@ The pool is still a waiting room. We did **not** “fix the pool.” We made eac
 
 Now each GET holds a ticket ~5 ms instead of ~100 ms. 10 (or 50) tickets turn over fast. The 40 concurrent callers almost never wait. **p99 is HTTP time; HTTP time was queue + SQL; SQL collapsed; p99 collapses.**
 
-That is why **the same** `measure-load.ps1` a third time is the proof: same 400 GETs, same 40-wide. If p99 is **near step 1** (capture ~**19 ms**), the queue is gone because **SQL is cheap again**, not because we invented a bigger pool (we actually restore Max **50**, which is extra headroom).
+That is why **the same** `measure-load.ps1` a third time is the proof: same 400 history GETs, same 40-wide, **same probes**. If history p99 is **near step 1** (capture ~**19 ms**) **and** `probe restaurants` / `probe menu` p99 are back near the idle curls, the queue is gone because **SQL is cheap again**, not because we invented a bigger pool (we actually restore Max **50**, which is extra headroom).
 
 Ctrl+C the API first.
 
@@ -339,7 +358,7 @@ dotnet run --project src/Tadka.Api
 
 Other terminal — **same** measure-load line as steps 1 and 2.
 
-**Fixed if:** p99 ≈ baseline. EXPLAIN from apply-fix is Index Scan. If p99 is still high, indexes did not come back (EXPLAIN still Seq Scan) or you forgot to Remove-Item the env var (still pool 10 — should still be OK if SQL is 5 ms).
+**Fixed if:** history p99 ≈ baseline **and** `probe restaurants` / `probe menu` p99 ≈ step 1 (near the idle curls). EXPLAIN from apply-fix is Index Scan. If history p99 is still high, indexes did not come back (EXPLAIN still Seq Scan) or you forgot to Remove-Item the env var (still pool 10 — should still be OK if SQL is 5 ms). If probes are still high while history is fine, you dropped `-ProbeUrl` on this run or compared to a different idle.
 
 **Takeaway:** production fix is **index the query**. Shrinking the pool was a **microscope** so the queue showed up. Do not ship Max=10 as the “fix.” Growing Max to 100 only postpones the queue and can hit Postgres `max_connections`.
 
@@ -356,6 +375,87 @@ Beat 1–2 lived on **one** Postgres (primary, port **5432**, container `tadka-p
      PRIMARY 5432                    REPLICA 5433
      (writes + "I just wrote this")  (copies PRIMARY via WAL, a few 100 ms late)
 ```
+
+**One sentence:** Docker **starts** two Postgreses. Postgres **copies** the bytes (once as a clone, then forever as WAL). Tadka C# **never copies a row**. It only chooses which of the two to query.
+
+### How a row gets to 5433
+
+There is no “sync this table” job in the API. Three layers, only the middle one replicates.
+
+| Layer | What it does | What it does **not** do |
+|---|---|---|
+| **Docker** | Two containers, two volumes, a compose network, Postgres flags, a `replicator` login | Copy rows. Compose is not a replicator. |
+| **Postgres** | First boot: byte-for-byte clone. After that: stream the primary’s WAL and replay it | Know about HTTP, EF, or “menu vs order” |
+| **App** | Writes + `GET /orders/{id}` → `TadkaDbContext` (5432). List / menu / history → `TadkaReadDbContext` (5433) | Ship SQL to the replica. `SaveChanges` on `_read` would still be a write — Postgres would **reject** it |
+
+**WAL** (write-ahead log) is the primary’s sequential tape of every change: `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, migrations. The replica is a **follower of that tape**, a few hundred milliseconds behind. That delay **is** Beat 3.
+
+#### 1. Docker — wiring
+
+`docker-compose.yml`:
+
+- Service `postgres` → container `tadka-postgres`, host port **5432**. Started with `wal_level=replica`, `max_wal_senders=10`, `max_replication_slots=10`. Those flags mean: keep enough WAL that a standby can follow, and allow that many replicas to connect.
+- Service `postgres-replica` → container `tadka-postgres-replica`, host port **5433** (inside the container still 5432). Custom entrypoint `docker/replica-entrypoint.sh`. `depends_on: postgres` healthy so the clone has a source.
+- Two volumes: `pgdata` and `pgdata_replica`. Wipe both (`down -v`) when switching onto this branch, or the replica clones a **stale** primary.
+
+On a **fresh** primary volume only, `docker/primary-init.sh` (mounted as `/docker-entrypoint-initdb.d/10-replication.sh`) runs once:
+
+1. `CREATE ROLE replicator WITH REPLICATION LOGIN` (password `replicator_pass`).
+2. `host replication replicator all scram-sha-256` appended to `pg_hba.conf`, then `pg_reload_conf()`.
+
+Without that role, `pg_basebackup` cannot attach. This is still not copying data — it is **permission to copy**.
+
+#### 2. Postgres — the actual copy (two phases)
+
+**Phase A — empty replica volume (first `compose up` after `down -v`).** `replica-entrypoint.sh` sees no `PG_VERSION` and runs:
+
+```
+pg_basebackup -h postgres -p 5432 -U replicator -D /var/lib/postgresql/data -Fp -Xs -R
+```
+
+| Flag | Meaning |
+|---|---|
+| `-h postgres` | Compose **service name** (DNS on the docker network), not `localhost`. From inside the replica container, `localhost` would be itself. |
+| `-U replicator` | The role from `primary-init.sh`. App user `tadka` is for SQL. This login is for **replication**. |
+| `-Fp` | Plain files (a data directory), not a tar. |
+| `-Xs` | Stream WAL while the backup runs so the clone is consistent. |
+| `-R` | Write `standby.signal` + `primary_conninfo` (`user=replicator host=postgres …`). That is what **turns this clone into a standby**. |
+
+`pg_basebackup` is a **byte-for-byte copy of the data directory**, not `INSERT` of rows. After `-R`, `SELECT pg_is_in_recovery()` is `t`. A physical standby in recovery **cannot take writes** (`cannot execute INSERT in a read-only transaction`). We did not set “read only” in C#. Postgres recovery did.
+
+**Phase B — every write after that.** Replica already has a data dir, so the entrypoint skips the clone and just `exec postgres`. The standby reconnects using `primary_conninfo` and **streams WAL**:
+
+```
+API or psql
+    →  INSERT / UPDATE / DELETE / Migrate on PRIMARY 5432
+    →  primary appends to WAL
+    →  replica walreceiver pulls WAL over the compose network
+    →  replica replays those bytes onto its own files
+    →  SELECT on 5433 sees the row  (milliseconds later)
+```
+
+`dotnet run` calls `Migrate()` **only** on `TadkaDbContext` (primary). The 200k seed is `docker exec tadka-postgres` (primary). Schema and rows reach 5433 because WAL followed — you do **not** migrate or seed the replica.
+
+Later `compose up` (volume still there): no second `pg_basebackup`. The existing standby resumes streaming. If the primary volume was recreated and the replica volume was not, the replica is a clone of a **dead** cluster — that is why §0 wipes **both**.
+
+**A `DELETE` / `DROP` on the primary is WAL too.** The replica copies the mistake. Two empty databases is not a backup. That is the later “replica ≠ backup” beat.
+
+#### 3. App — routing only (ADR-016)
+
+`appsettings.Development.json`: `TadkaDb` → `localhost:5432`, `TadkaDbReplica` → `localhost:5433`.
+
+`Program.cs` 16–22: `TadkaReadDbContext` uses the replica string (falls back to primary if missing — **tests** share one Postgres, they do not run real streaming). `NoTracking` because we will not `SaveChanges` this context. It is **convention**, not a lock: if someone wrote through `_read`, EF would send SQL and **Postgres** would reject it.
+
+Controllers pick a context per query:
+
+- Stale-OK (list, menu, `GET /orders?customerId=`, `GET /orders/history`) → `_read` → 5433
+- Writes, and `GET /orders/{id}` (the order you **just** placed) → primary → 5432
+
+That split is **not** replication. It is “which of the two copies do I trust for this GET.”
+
+**Open if you want the source, not the demo:** `docker-compose.yml` (flags + two services), `docker/primary-init.sh` (replicator role), `docker/replica-entrypoint.sh` (clone then start), `Data/TadkaReadDbContext.cs`, `Program.cs` 16–22 and 40–41 (`Migrate()` on primary only).
+
+### Why a replica, and what we hunt next
 
 **Why a replica at all?** Dinner-rush **reads** (browse menu, list history) outnumber writes. Those reads steal CPU from checkout. Replica takes **stale-tolerant** GETs. That is ADR-016.
 
