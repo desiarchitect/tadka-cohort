@@ -234,61 +234,87 @@ If `n=0` or `Invoke-One` errors: pull latest `day-05` (harness was rewritten).
 
 ### 2. BREAK — seq scan + 10 tickets
 
-**What we did, in order:**
+**Why this file again?** After Beat 1 **fix**, the indexes are **back**. Pool demo needs them **gone** again. We are not re-teaching EXPLAIN. We are turning hold-time back up.
 
-1. **Stop the API (Ctrl+C)** so the next start can pick up a new connection string.
-2. **Drop the two history indexes** — not because indexes are “the pool,” but because we need each request to **hold a ticket longer**. The file also reprints the Beat 1 bad EXPLAIN (Seq Scan + Sort). That is your proof the SQL is slow again.
-3. **Start the API with 10 tickets** in *this* terminal only (`$env:…` does not change `appsettings` on disk).
-4. **Other terminal: the same load command as step 1.** Same 40-wide / 400-total. We are asking: “did p99 move when SQL got slow and tickets got scarce?”
+`day05-induce-break.sql` does two things in **one** run:
+
+1. `DROP INDEX` `ix_orders_customer_id_created_at` and `ix_orders_created_at` (the two Beat 1 indexes).
+2. `EXPLAIN ANALYZE` the history query so you **see** Seq Scan + Sort on screen.
+
+It does **not** change C#, the pool, or the API. Only Postgres catalog: those indexes are missing until apply-fix.
+
+**Line by line**
 
 ```powershell
+# Copy the SQL file INTO the postgres container (path on your disk → /tmp/break.sql inside Docker).
 docker cp scripts/day05-induce-break.sql tadka-postgres:/tmp/break.sql
+
+# Run that file as user tadka on database tadka. Drops indexes, then prints EXPLAIN.
 docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/break.sql
 ```
 
-Confirm the plan still says **Seq Scan** / **Sort**. Then:
+**Look at that EXPLAIN before you continue.** You must see **Seq Scan** or **Parallel Seq Scan** and a **Sort**. If you still see **Index Scan**, the DROP did not run (wrong container, old SQL, or you are on primary vs a copy). Do not start the tiny pool yet — you would be measuring a fast query with 10 tickets (boring, p99 stays low).
+
+**Why drop, in one sentence:** Npgsql only hands out **10** connections. Each connection is busy until SQL **finishes**. Seq scan keeps a connection busy ~20× longer than an index scan. 40 overlapping GETs then wait on those 10. **The pool did not get slower. Each borrower stayed longer.**
+
+Then **Ctrl+C** the old API (still pool 50 in memory).
 
 ```powershell
+# This process only. Does NOT edit appsettings.Development.json on disk.
+# Maximum Pool Size=10 → at most 10 live Postgres sessions from this API.
+# Timeout=5 → if no ticket for 5 seconds, the HTTP call fails (errors++).
 $env:ConnectionStrings__TadkaDb = "Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=1;Maximum Pool Size=10;Timeout=5"
+
+# Start API. It reads the env var NOW. Leave this window running.
 dotnet run --project src/Tadka.Api
 ```
 
-`Timeout=5` = wait **5 seconds** for a free ticket, then the request errors. That is how `errors>0` can appear.
-
-**Other terminal — same command as baseline:**
+**Other terminal** — identical load to baseline (do not change URL, 40, or 400):
 
 ```powershell
 powershell -File scripts/measure-load.ps1 -Url "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&pageSize=10" -Concurrency 40 -Total 400
 ```
 
-**How we identified the issue:**
+**What that script does:** 400 HTTP GETs to order history; at most 40 in flight; prints `n`, `errors`, `p50/p95/p99` of **end-to-end HTTP time** (queue + SQL + network). It does not talk to Docker. It does not drop indexes.
 
-| What you compare | Meaning |
+**How we identified the issue** — compare **this p99** to **step 1 p99**:
+
+| Output | What happened |
 |---|---|
-| p99 **higher** than the number you wrote in step 1 | Requests sat in the **pool queue** (or ran slow SQL). Capture cold+contended ~**1188 ms**. |
-| `errors` > 0 | Waited 5s for a ticket and gave up (`Timeout=5`). |
-| HTTP still **200** on successes | This is **not** a 500 demo. The dinner-rush symptom is **hang / slow**, not crash. |
+| p99 **up** (capture cold ~**1188 ms** vs baseline ~**19 ms**) | Many requests waited for a free connection, then ran slow SQL |
+| `errors` > 0 | Waited 5s, no ticket (`Timeout=5`) |
+| HTTP **200** on the rest | Not a crash. Dinner rush = **slow**, not 500 |
 
-**Honesty — say this out loud:** a **warm** laptop often stays p99 **~50–62 ms** even at concurrency 80. That is **not** a fake demo. One process rarely keeps all 10 tickets busy. Real exhaustion is **several API instances**, each with pool 100, vs Postgres `max_connections=100`. That is **Day 11 (PgBouncer)**. If p99 barely moved, you still taught the **model** (tickets + hold time). Point at the Beat 1 EXPLAIN: SQL *is* slow; the laptop just did not fill the queue.
+**Honesty:** warm laptop p99 often **~50–62 ms**. Queue may not fill on one box. Model still holds. Day 11 = many APIs vs `max_connections`.
 
-### 3. FIX — short SQL again, 50 tickets again
+### 3. FIX — why putting the index **back** drops p99
 
-**What we did:** put indexes back (SQL ~5 ms, tickets return fast) and **remove** the env var so the API uses Max 50 from appsettings.
+The pool is still a waiting room. We did **not** “fix the pool.” We made each visit **short** again.
 
-Ctrl+C the API.
+`day05-apply-fix.sql`: `CREATE INDEX` those two names, `ANALYZE`, **same** EXPLAIN. You should see **Index Scan using ix_orders_customer_id_created_at**, **no Sort**, ~**5 ms**.
+
+Now each GET holds a ticket ~5 ms instead of ~100 ms. 10 (or 50) tickets turn over fast. The 40 concurrent callers almost never wait. **p99 is HTTP time; HTTP time was queue + SQL; SQL collapsed; p99 collapses.**
+
+That is why **the same** `measure-load.ps1` a third time is the proof: same 400 GETs, same 40-wide. If p99 is **near step 1** (capture ~**19 ms**), the queue is gone because **SQL is cheap again**, not because we invented a bigger pool (we actually restore Max **50**, which is extra headroom).
+
+Ctrl+C the API first.
 
 ```powershell
+# Forget pool=10. Next dotnet run uses appsettings Max 50.
 Remove-Item Env:ConnectionStrings__TadkaDb -ErrorAction SilentlyContinue
+
+# Copy + run FIX sql: CREATE INDEX + ANALYZE + EXPLAIN (must show Index Scan).
 docker cp scripts/day05-apply-fix.sql tadka-postgres:/tmp/fix.sql
 docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/fix.sql
+
 dotnet run --project src/Tadka.Api
 ```
 
-**Same** `measure-load.ps1` a third time.
+Other terminal — **same** measure-load line as steps 1 and 2.
 
-**How we know it is fixed:** p99 is back **near the baseline** from step 1 (capture ~**19 ms**). EXPLAIN from apply-fix should show **Index Scan** again.
+**Fixed if:** p99 ≈ baseline. EXPLAIN from apply-fix is Index Scan. If p99 is still high, indexes did not come back (EXPLAIN still Seq Scan) or you forgot to Remove-Item the env var (still pool 10 — should still be OK if SQL is 5 ms).
 
-**Takeaway:** first fix the **query** (index). Growing the pool only **delays** the queue and can hit `max_connections`. We shrink the pool in the demo to *see* the queue; in production we do not “fix seq scans by setting Max=10.”
+**Takeaway:** production fix is **index the query**. Shrinking the pool was a **microscope** so the queue showed up. Do not ship Max=10 as the “fix.” Growing Max to 100 only postpones the queue and can hit Postgres `max_connections`.
 
 ## 4. Beat 3 — the replica is real (lag, not a backup)
 
