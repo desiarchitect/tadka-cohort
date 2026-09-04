@@ -45,3 +45,5 @@ One more Postgres instance (~one box) + a NoTracking context + routing on a hand
 
 ## Revisit When
 At **service extraction (Week 6)**, read/write routing becomes per-service (each service owns its database), not per-context. Revisit the consistency policy if **replication lag exceeds ~2s** (then more reads must go to the primary, or use synchronous replication for those), or if the read:write ratio narrows enough that the replica is no longer worth its operational cost.
+
+When a **second** replica is added, routing stops being a static connection string and must answer **which replica**. At that point add **monotonic-read** handling (sticky user-to-replica, or an LSN/WAL token so a replica is used only after it has replayed the user's write) or keep consistency-sensitive reads on the primary. Driver multi-host lists know up/down, not lag; a proxy still cannot tell a stale-tolerant GET from a read-your-writes GET.
