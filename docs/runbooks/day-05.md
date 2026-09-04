@@ -37,61 +37,88 @@ Spoken cue in class: **"Ab demo."**
 
 ## 0. Fresh start (pre-class)
 
+**Why wipe:** Day 4 volume has no replica slot / old `ordering.orders`. `down` without `-v` leaves the disk. Next `dotnet run` can hit `42P07 relation already exists`, or the replica clones a stale primary.
+
 ```powershell
 git checkout day-05
+# Stop compose and DELETE volumes for THIS project.
 docker compose down -v
+# Shared name tadka-postgres: another clone may still own the container.
 docker rm -f tadka-postgres tadka-postgres-replica
 docker volume rm tadka_pgdata tadka_pgdata_replica tadka-cohort_pgdata
+# Start PRIMARY 5432 and REPLICA 5433. Replica clones primary on first boot (slow).
 docker compose up -d
 docker compose ps
 dotnet build Tadka.slnx
-dotnet test Tadka.slnx
-dotnet run --project src/Tadka.Api
+dotnet test Tadka.slnx          # 23 cases. Needs Docker (Testcontainers).
+dotnet run --project src/Tadka.Api   # migrates PRIMARY; replica gets schema via WAL
 ```
 
-**Look for:** both containers **(healthy)**. Tests **23 cases**. Listen **5224**. Replica log: `started streaming WAL from primary`.
+**How you know you are ready:** both `(healthy)`. Replica logs `started streaming WAL from primary`. API listens **5224**. `volume rm` “no such volume” is fine.
 
 ## 0b. Leftover from Day 4 — SMS after commit (class start)
 
-The **break** is drawn (SMS inside the txn un-confirms the order). Live is the **fix** already on this branch.
+**The issue (drawn, not curled):** naive code sends SMS **inside** the same DB transaction as Confirm. Gateway 500 → ROLLBACK → order is **not** Confirmed. Restaurant clicked Confirm; SMS vendor is down; business fact died. Also `Order` now knows `_sms`.
 
-**1.** New **Created** order, copy `"id"`:
+**The fix already in this branch:** `Order` only **raises a fact** (`OrderConfirmedEvent`). Controller **saves first**, then runs the handler (log line = fake SMS). If the handler throws, the row stays Confirmed.
+
+We cannot show the rollback live without flipping a leftover flag. Live = **prove dispatch is after commit**.
+
+**Why a new order:** PATCH Confirmed only fires the event on **Created → Confirmed**. Beat 2 leftover order is already Confirmed → **422**, no log.
 
 ```powershell
+# POST Priya + 2× biryani, no price. Server prices. Returns JSON including "id" and status Created.
+# Quote @ so PowerShell does not splat the path. Copy the id GUID. $ORDER is never set.
 curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 ```
 
-**2.** Watch the **`dotnet run` terminal**, then PATCH. Paste the id — `$ORDER` is not set:
+Put the **`dotnet run` window** on screen (not this curl window). Then:
 
 ```powershell
+# PATCH status Confirmed from a file (inline JSON breaks on PowerShell).
+# Empty PASTE_ID → /orders//status → 404.
 curl.exe -s -w "`nHTTP %{http_code}`n" -X PATCH http://localhost:5224/api/v1/orders/PASTE_ID/status -H "Content-Type: application/json" --data-binary "@docs/runbooks/status-confirmed.json"
 ```
 
-**Look for:** curl **204**. API log `Notification: order PASTE_ID confirmed — SMS sent to customer …`.
+**How we identified “it worked”:**
+
+| Where | Look for |
+|---|---|
+| curl | **HTTP 204** (empty body) |
+| `dotnet run` | `Notification: order PASTE_ID confirmed — SMS sent to customer …` |
+
+That line is `OrderConfirmedNotificationHandler` (16–21), called from `DispatchAsync` at `OrdersController.cs` **233**, which is **below** `SaveChanges` **231**. Raise is `Order.cs` 81–84.
 
 | If you see | Why |
 |---|---|
-| 404 `/orders//status` | Empty id. Paste the GUID. |
-| 422, no log line | That order was already Confirmed. POST a new one. |
-| 204 but no SMS line | You watched curl, not `dotnet run`. |
+| 404 `/orders//status` | Did not paste the id |
+| 422, no log | Already Confirmed. POST a **new** order |
+| 204, no SMS line | Watched curl, not `dotnet run` |
 
-`SaveChanges` is `OrdersController.cs` **231**. `DispatchAsync` is **233** (after). Leave it that way.
+**We did not un-confirm.** GET still `"status": "Confirmed"` even if you imagine the log line throwing.
 
 ## 1. Seed 200k orders
 
-The break is invisible on 16 rows.
+**Why:** Beat 1 EXPLAIN on **16** demo orders is instant with or without an index (one page). Seq scan only **hurts** when the table is large. The file inserts **200,000** extra rows across 50 fake customers (`0000…0000` … `…0049`), `created_at` over ~180 days, then `ANALYZE`. Priya is **not** in that set.
 
 ```powershell
+# Copy SQL into the PRIMARY container (not the replica — replica is read-only).
 docker cp scripts/day05-seed-large.sql tadka-postgres:/tmp/seed.sql
+# Run it. Takes a couple of minutes. WAL then streams copies to 5433.
 docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/seed.sql
+# Proof it landed.
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT count(*) FROM ordering.orders;"
 ```
 
-Expect roughly **200,001**. Run against the **primary**. It streams to the replica.
+**How we know it worked:** count ~**200,001** (200k + leftover demo orders). If ~16, the file did not run or you queried the replica too early.
+
+This seed is **required** for Beat 1, 2, 5, 6. Do it once per wiped volume.
 
 ## 2. Beat 1 — induce the seq scan, then fix it
 
-This is the order-history query: “Priya’s last 10 orders” — except the 200k seed uses customer `00000000-0000-0000-0000-000000000000`, **not** Priya. The API is `GET /api/v1/orders?customerId=…&pageSize=10`. Postgres sees:
+**The issue:** order history SQL with no matching index **reads the whole table**, sorts, then keeps 10 rows. HTTP still 200 — you only see it in **EXPLAIN**.
+
+This is “last 10 orders” — except the 200k seed uses customer `00000000-0000-0000-0000-000000000000`, **not** Priya. The API is `GET /api/v1/orders?customerId=…&pageSize=10`. Postgres sees:
 
 ```sql
 SELECT * FROM ordering.orders
@@ -431,69 +458,83 @@ docker exec tadka-postgres ls -lh /tmp/tadka-backup.sql
 
 **N replicas (class, no extra container):** two standbys at different lag → same user, two GETs, data can move **backwards**. Tadka stays on **one** replica. See `[S4-B7]` / ADR-016 Revisit-When.
 
-## 5. Partitioning — standalone experiment (not `ordering.orders`)
+## 5. Partitioning — experiment on **copies**, not the live `orders` table
 
-**What the file does:** builds throwaway tables `ordering.orders_by_month` and `ordering.orders_by_status`, copies data, runs four EXPLAIN blocks with `\echo` banners. **The running API is unchanged.** Needs the 200k seed (§1).
+**The issue:** one table, years of rows → vacuum, indexes, backups hurt. Instinct: split by month **or** by status.
+
+**Why not touch `ordering.orders`:** ADR-017 is **defer**. The file builds **throwaway** tables, copies 200k rows, runs EXPLAIN, leaves the API alone. Needs §1 seed.
+
+**Two experiments in one file**
+
+- **A — partition by `created_at` (immutable).** A row stays in one month file forever. Filter “this month” → Postgres can **skip** other months (**pruning**).
+- **B — partition by `status` (mutable).** Confirm/cancel **moves** the row: Postgres **DELETE + INSERT** across files, not an in-place UPDATE. That is the **trap**.
 
 ```powershell
+# Copy onto PRIMARY (replica cannot CREATE TABLE).
 docker cp scripts/day05-partition-demo.sql tadka-postgres:/tmp/partition-demo.sql
+# Creates orders_by_month / orders_by_status, INSERTs, four EXPLAIN blocks with \echo banners.
 docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/partition-demo.sql
 ```
 
-Scroll; do not read the whole wall. Four banners:
+**Do not read the whole wall.** Search the four banners:
 
-| Banner | What it ran | How you know |
+| Banner | What the SQL did | How we identified win / fail |
 |---|---|---|
-| `--- A1: no date filter` | count by customer, all months | Plan visits **many** partitions (no pruning) |
-| `--- A2: date filter matching ONE month` | same + this month’s `created_at` | **`Subplans Removed:`** (capture **7** of 8). **Win:** immutable `created_at` |
-| `--- B1: … SAME partition` | 5k `UPDATE` amount, status unchanged | Note **`Buffers:`** (capture **54/54**) |
-| `--- B2: … CROSS partition` | 5k `UPDATE` status Created→Delivered | **`Buffers:`** higher (capture **88/89, +63%**). **Fail:** mutable `status` = DELETE+INSERT |
+| `--- A1: no date filter` | `count(*)` one customer, **all** months | Plan touches **many** partitions. No prune possible. |
+| `--- A2: date filter matching ONE month` | same + `created_at` this month | **`Subplans Removed:`** (capture **7** of 8). **Win.** |
+| `--- B1: … SAME partition` | 5k `UPDATE` **amount**, status stays Created | Write down **`Buffers:`** (capture **54/54**) |
+| `--- B2: … CROSS partition` | 5k `UPDATE` **status** Created→Delivered | **`Buffers:`** higher (capture **88/89, +63%**). **Fail / trap.** |
 
-**Fixed / decision:** do **not** partition `ordering.orders` today (ADR-017). Sharding is board-only (`hash % N` ~80% move vs consistent hashing ~1/N).
+Clock on 5k updates is noisy — **Buffers / WAL**, not milliseconds.
 
-If A2 has no `Subplans Removed`: seed missing or “this month” partition empty — still read B1 vs B2 buffers.
+**“Fix” today:** do **not** partition Tadka orders. Do **not** partition on a column that **changes**. Sharding (more **machines**) is board-only: `hash % N` moves ~80% of keys when you add a server; consistent hashing ~1/N.
+
+If A2 has no `Subplans Removed`: seed missing or this month’s partition empty — still compare B1 vs B2 buffers.
 
 ## 6. Deep pagination — OFFSET walks, cursor seeks
 
-Priya is **not** in the 200k seed. List API is **`page` / `pageSize`**, not `offset` / `limit`. Seed customer `00000000-0000-0000-0000-000000000000` has ~4,000 orders.
+**The issue:** loyal customer, ~4,000 orders, scrolls to the **end**. Naive API: `page=800`. Postgres `LIMIT 5 OFFSET 3995` does **not** skip. It **reads ~4000 rows, sorts, throws 3995 away**, returns 5. Cost grows with page number. Page 2 is cheap; page 800 is not.
 
-### 1. BREAK — OFFSET (walk and throw)
+Priya is **not** in the 200k seed. Use `00000000-0000-0000-0000-000000000000`. List API is **`page` / `pageSize`**, not `offset=` / `limit=` (those query params are **ignored**).
 
-HTTP (page 800 × 5 = skip 3,995 rows):
+Indexes should be **on** (Beat 2 fix). If you left seq scan, OFFSET looks even worse and mixes two lessons.
+
+### 1. BREAK — prove OFFSET cost (EXPLAIN, not the JSON)
 
 ```powershell
+# Returns 5 orders as JSON. That does NOT show cost. You cannot see “threw 3995 away” in HTTP.
 curl.exe -s "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&page=800&pageSize=5"
 ```
 
-**That JSON does not prove cost.** Proof is EXPLAIN (indexes should be **on** — run apply-fix if you left Beat 2 broken):
+Proof is SQL on the **primary** (PowerShell single quotes so `"CustomerId"` survives):
 
 ```powershell
 docker exec tadka-postgres psql -U tadka -d tadka -c 'EXPLAIN ANALYZE SELECT * FROM ordering.orders WHERE "CustomerId" = ''00000000-0000-0000-0000-000000000000'' ORDER BY "CreatedAt" DESC LIMIT 5 OFFSET 3995;'
 ```
 
-**Failed if:** `actual rows` in the thousands (capture Sort/heap **~4000**), `Execution Time` tens–hundreds of ms (capture **~150 ms**). Postgres **read then discarded** the skipped rows.
+**How we identified the issue:** `actual rows` in the **thousands** (capture ~**4000**), `Execution Time` tens–hundreds of ms (capture **~150 ms**). That is “walk and throw.”
 
-PowerShell single quotes keep `"CustomerId"` intact. `''uuid''` is one SQL string.
+### 2. FIX — keyset: “rows after this (time, id)”, not “skip N”
 
-### 2. FIX — keyset HTTP shape + toy timing
+`GET /orders/history` uses `(CreatedAt, Id) < cursor` on the **same** composite index. Page 2 and page 800 cost about the **same**. Trade-off: **no** `totalCount`, **no** jump-to-page-40.
 
 ```powershell
 curl.exe -s "http://localhost:5224/api/v1/orders/history?customerId=00000000-0000-0000-0000-000000000000&pageSize=10"
 ```
 
-**Fixed (contract):** JSON has **`nextCursor`**, **no** `totalCount` / `totalPages`. Code: `OrdersController.cs` 168–210.
+**How we know the contract is fixed:** JSON has **`nextCursor`**, **no** `totalCount` / `totalPages`. Empty `nextCursor` = last page. Code: `OrdersController.cs` 168–210 (ADR-046). Offset list stays for small admin pages.
 
-**Fixed (cost)** — same Postgres, not Tadka HTTP:
+**How we know the cost is fixed** (optional Node toy, same `tadka-postgres`):
 
 ```powershell
 cd toydemo\day-03-api-primitives\cursor-pagination-toy
-node real-db.js --mode=break
-node real-db.js --mode=fix
+node real-db.js --mode=break    # deep OFFSET: many rows examined
+node real-db.js --mode=fix      # keyset: ~page-size rows
 ```
 
-**Look for:** break = deep OFFSET, many rows examined; fix = keyset, ~page-size rows. Folder says Day 3 in old docs — **taught today (Day 5)**.
+Folder name still says day-03; **taught today**. No `node` → EXPLAIN in step 1 is enough.
 
-Need Node.js. If `node` is missing, the EXPLAIN in step 1 is the live proof; the toy is optional.
+**Why two endpoints:** one URL cannot be both “infinite scroll, any depth” and “jump to page 40 of 200.”
 
 ## Done when
 
