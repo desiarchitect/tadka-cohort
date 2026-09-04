@@ -1,8 +1,8 @@
 # RUN-AND-TEST.md for Cursor Pagination Toy
 
 **Toy:** Cursor Pagination Toy
-**Day Introduced:** Day 03/04 (API design, contracts, pagination trade-offs)
-**Related Curriculum:** Day 3 (api-style-selection, pagination discussion in plan.md), interview-pack concepts (cursor vs offset), Gemini-style reviews (pagination as missing HLD nuance).
+**Day Introduced:** Day 5 (deep pagination). Do not run on Day 3 or Day 4.
+**Related Curriculum:** Day 5 Segment 6, ADR-046 `GET /api/v1/orders/history`.
 **Purpose:** Failure-first demonstration of why OFFSET pagination dies at scale and how cursor/keyset pagination fixes it. Matches the "show it, don't just tell it" rule.
 
 ## 1. Overview & Why This Toy Exists
