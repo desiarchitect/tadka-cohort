@@ -27,7 +27,7 @@ Seed GUIDs (menu / Priya — **not** the 200k history customer): Meghana `a1b2c3
 | Beat 1 — seq scan | `day05-induce-break.sql` (**prints** EXPLAIN) | **Seq Scan** or **Parallel Seq Scan** + **Sort** | Drops the two history indexes |
 | Beat 1 — fix | `day05-apply-fix.sql` (**prints** EXPLAIN) | **Index Scan** using `ix_orders_customer_id_created_at`, **no Sort** | Recreates indexes; `OrderConfiguration.cs` 57–62 |
 | Beat 2 — pool | Same load 3×: baseline → drop index + pool=10 → restore | p99 up = queue (tickets + long SQL). Laptop may stay ~60 ms | `appsettings.Development.json` 9 |
-| Beat 3 — replica | INSERT on replica; POST then replica `SELECT` by id; GET API | INSERT **error**; SELECT 0 rows or lag; GET **200** | `TadkaReadDbContext.cs`; `Program.cs` 16–22 |
+| Beat 3 — replica | INSERT on replica; POST; replica `SELECT` **same id**; GET API | read-only error; 0 rows or lag; GET **200** on primary | `GetById` primary; list/menu `_read` |
 | Partition | `day05-partition-demo.sql` — read `\echo` banners | A2 `Subplans Removed`; B1 vs B2 `Buffers:` | Throwaway tables, not `ordering.orders` |
 | History | EXPLAIN OFFSET vs `GET /orders/history` | OFFSET walks thousands of rows; JSON has `nextCursor`, no `totalCount` | `OrdersController.cs` 168–210 |
 
@@ -318,62 +318,118 @@ Other terminal — **same** measure-load line as steps 1 and 2.
 
 ## 4. Beat 3 — the replica is real (lag, not a backup)
 
-### 1. Prove streaming + read-only
+Beat 1–2 lived on **one** Postgres (primary, port **5432**, container `tadka-postgres`). Beat 3 is the **second** machine: replica port **5433**, container `tadka-postgres-replica`.
+
+### The story (say this before any command)
+
+```
+  POST /orders, PATCH status     GET /restaurants, GET /orders?customerId=
+           │                              │
+           ▼                              ▼
+     PRIMARY 5432                    REPLICA 5433
+     (writes + "I just wrote this")  (copies PRIMARY via WAL, a few 100 ms late)
+```
+
+**Why a replica at all?** Dinner-rush **reads** (browse menu, list history) outnumber writes. Those reads steal CPU from checkout. Replica takes **stale-tolerant** GETs. That is ADR-016.
+
+**The issue we are hunting:** replication is **not instant**. WAL has to ship and replay. If the app reads “the order I just placed” from the replica in that window, Postgres answers **0 rows**. The user paid; the app says 404. That is **not** a missing index. That is **read-your-writes** on a lagging copy.
+
+**We do not “break” the replica.** We **observe** lag, then prove the **API** does not use the replica for that GET.
+
+**The fix is routing, not “make lag zero.”** `GET /orders/{id}` uses the **primary** repository. List/menu/history use `_read` → replica (`Program.cs` 16–22). Tests use one Postgres (replica connection string falls back to primary).
+
+```
+Jo GET user ke APNE write ke turant baad aata hai  →  PRIMARY
+Baaki reads (list, menu, history)                  →  REPLICA
+```
+
+### 1. Prove there are two machines, and the second only **plays back**
 
 ```powershell
+# Ask the PRIMARY: is anyone streaming my WAL?
+# Look for a row: state = streaming. Empty = replica not connected (down -v, up -d).
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT client_addr, state, sync_state FROM pg_stat_replication;"
+
+# Ask the REPLICA: are you a standby?
+# t = yes, I only replay. f = you are talking to a primary (wrong container).
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT pg_is_in_recovery();"
 ```
 
-**Look for:** at least one row in `pg_stat_replication` (`streaming`). `pg_is_in_recovery()` = **`t`**.
-
-Write on the replica (must fail):
+**Why INSERT on the replica:** to prove it will not take writes. `tadka-postgres-replica` is in the command on purpose.
 
 ```powershell
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "INSERT INTO restaurant.restaurants (id, name) VALUES (gen_random_uuid(), 'should-fail');"
 ```
 
-**Failed (good) if:** `cannot execute INSERT in a read-only transaction` (or similar). If this **succeeds**, you hit the **primary** by mistake.
+**Identified (good) if:** `cannot execute INSERT in a read-only transaction`.  
+**Wrong machine if:** the INSERT **succeeds** — that was the primary. Check container name `tadka-postgres-replica`.
 
-### 2. BREAK — read-your-writes on the replica (lag)
+### 2. BREAK — see lag (empty SELECT on replica)
 
-Place an order on the **API** (writes primary). Copy `"id"` from JSON.
+**What we did:** write an order through the **API** (always primary). Then read that **same id** on the replica **in the same second**, bypassing the API.
 
 ```powershell
+# POST body is Priya + Meghana biryani (no price). API inserts on PRIMARY, returns JSON.
+# Copy the "id" field. Do not use $ORDER — paste the GUID.
 curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 ```
 
-**Immediately** (same second) on the **replica**:
+**Immediately** — other line, replica, **that** id:
 
 ```powershell
+# Direct SQL on the REPLICA. Not the API. Not the primary.
+# 0 rows = WAL has not replayed this INSERT yet. That is the bug the user would see
+# if GetById used the replica.
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT id FROM ordering.orders WHERE id = 'PASTE_ID';"
+
+# How far behind is replay? Capture ~236 ms. Not a pass/fail number.
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT now() - pg_last_xact_replay_timestamp() AS lag;"
 ```
 
-**How you know lag is real:** `SELECT id` returns **0 rows**, **or** `lag` is a few hundred ms (capture ~**236 ms**).
+**How we identified the issue:**
 
-If the row is **already there**, you were slow. **Do not fake 0 rows.** Show `lag` and say the window closed.
+| Output | Meaning |
+|---|---|
+| `SELECT id` → **0 rows** | Replica does not have the order yet. Lag window is open. |
+| `lag` a few hundred ms | Same fact as a clock. |
+| Row **already there** | You were slower than WAL. **Do not fake 0 rows.** Show `lag` and say the window closed. |
 
-### 3. FIX — the app sends that GET to the primary
+This is the **failure mode of ADR-016** if routing is wrong: place order → refresh → “order not found.”
+
+### 3. FIX — same id, through the API (primary)
+
+**Why this GET is the fix:** `OrdersController.GetById` uses `_orderRepository` → **primary** `TadkaDbContext`, not `_read`. So HTTP can 200 **while** replica SELECT is still empty.
 
 ```powershell
+# API, not docker exec. Paste the SAME id as step 2.
 curl.exe -s -w "`nHTTP %{http_code}`n" http://localhost:5224/api/v1/orders/PASTE_ID
 ```
 
-**Fixed if:** HTTP **200** and the JSON is the order you just placed — even while replica SELECT was empty. That path uses **primary** (`OrdersController` `GetById`, not `_read`).
+**Fixed if:** HTTP **200** and the JSON is that order (Priya, Meghana, line items). That is read-your-writes.
 
-List/menu/history GETs use `TadkaReadDbContext` → replica (`Program.cs` 16–22). Tests fall back to one Postgres.
+**Contrast (optional):** `GET /api/v1/restaurants` uses `_read` (replica). Stale by milliseconds is OK for a menu. `GET /api/v1/orders?customerId=…` history is also replica.
+
+**We did not make lag zero.** We **stopped using the replica** for the GET that must see the write.
 
 ### Replica is not a backup
 
-Do **not** `DELETE FROM ordering.orders` in class. A delete on the primary **copies to the replica in milliseconds**. Two copies of the mistake. Backup = another **time** (`pg_dump`), replica = another **machine**.
+Replica = **second machine**, same timeline, a bit late.  
+Backup = **second time** (yesterday’s data).
+
+A `DELETE` / `DROP` on the primary is sent on WAL too. The replica **copies the mistake**. Two empty databases is not recovery.
+
+Do **not** run `DELETE FROM ordering.orders` in class.
 
 ```powershell
+# Snapshot of PRIMARY right now, written inside the container. Proves "a backup file can exist."
+# It does NOT prove replica ≠ backup. Say that out loud.
 docker exec tadka-postgres pg_dump -U tadka -d tadka -f /tmp/tadka-backup.sql
 docker exec tadka-postgres ls -lh /tmp/tadka-backup.sql
 ```
 
-That only proves a dump file exists. The teaching point is spoken: replica ≠ PITR.
+**RPO** = how much data you can lose (nightly dump → 24 h). **RTO** = how long to restore. Replica answers “primary box died.” Backup answers “we ran DELETE.”
+
+**N replicas (class, no extra container):** two standbys at different lag → same user, two GETs, data can move **backwards**. Tadka stays on **one** replica. See `[S4-B7]` / ADR-016 Revisit-When.
 
 ## 5. Partitioning — standalone experiment (not `ordering.orders`)
 
