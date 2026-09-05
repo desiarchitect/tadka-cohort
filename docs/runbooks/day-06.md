@@ -2,7 +2,7 @@
 
 **Branch:** `day-06`. **What's new (taught):** Redis cache-aside + delete-on-write (ADR-018), single-flight `SET NX EX` lock (ADR-019), SSE `GET /orders/{id}/events` over Redis pub/sub (ADR-020). **Leftover on the branch, not Sunday lecture:** nginx scale-out (047), ETag (048), rate limit (049), edge+signed URLs (050), SSE replay (051).
 
-**Three containers:** Postgres primary `5432`, replica `5433`, **Redis `6379`**. HTTP **5224**. Tests **27/27**.
+**Three containers:** Postgres primary `5432`, replica `5433`, **Redis `6379`**. HTTP **5224**. Tests **28/28**.
 
 > **Windows PowerShell:** use **`curl.exe`**. Quote `@file`. `$RID` is a PowerShell variable you set once — leave it **unquoted** so it expands. Redis CLI walkthrough (PING, SET NX, pub/sub): [`docs/database/redis-cli.md`](../database/redis-cli.md).
 
@@ -96,13 +96,13 @@ docker rm -f tadka-postgres tadka-postgres-replica tadka-redis
 docker compose up -d
 docker compose ps
 docker exec tadka-redis redis-cli PING
-dotnet test Tadka.slnx          # 27 cases. Needs Docker.
+dotnet test Tadka.slnx          # 28 cases. Needs Docker.
 dotnet run --project src/Tadka.Api
 ```
 
 **What that does:** starts primary, replica, **and Redis**. `PING` is the Redis healthcheck you can see. `dotnet run` migrates the **primary** (same as Day 5); Redis has no schema.
 
-**How you know you are ready:** three containers `(healthy)`. `PONG`. Tests **27/27**. API **5224**.
+**How you know you are ready:** three containers `(healthy)`. `PONG`. Tests **28/28**. API **5224**.
 
 Set once in the terminal you will use for Redis + curl (these are PowerShell variables, not Docker):
 
@@ -262,12 +262,14 @@ curl.exe -s -o NUL -w "sse  HTTP %{http_code}`n" http://localhost:5224/api/v1/or
 
 The SSE URL’s GUID need not exist: Redis is down, so the action returns 503 **before** it cares about the order.
 
+Wait on the menu curl. Capture: menu **200** in ~12 s, SSE **503**. Leftover ADR-049 rate limiter is on every request; this branch **fails it open** when Redis is down so Sunday’s beat is not a 500.
+
 **How we identified the two classifications:**
 
 | Output | Meaning |
 |---|---|
-| menu HTTP **200** | `RedisCacheService` 62–66 fell back to SQL. Slower is OK. **500** would mean we treated Redis as required for reads |
-| sse HTTP **503** | `OrderTrackingController` 31–35: `_bus.IsEnabled` is `IConnectionMultiplexer.IsConnected`. Redis stopped → not connected → 503. **200 + blank** would lie |
+| menu HTTP **200** | Cache + leftover rate limiter **fail open**. First GET after the stop can take **~5–12 s** (Redis client timeout, then SQL). Do not Ctrl+C. **500** = you are not on this commit |
+| sse HTTP **503** body `Live tracking requires Redis` | Stream is a correctness dep. **200 + blank** would lie. `--max-time` if curl hangs |
 
 ### 2. FIX — start Redis again
 
@@ -371,7 +373,7 @@ Beats 4–10 of the break-kit are **homework**. Rate-limit depth is Day 11.
 
 ## Done when (Sunday)
 
-- [ ] `PONG`; three containers healthy; 27/27
+- [ ] `PONG`; three containers healthy; 28/28
 - [ ] Miss then hit (`time_total` down); 20 GETs **+0** replica scans
 - [ ] PATCH availability → `EXISTS` 0, next GET → 1
 - [ ] Redis stopped: menu **200**, SSE **503**
