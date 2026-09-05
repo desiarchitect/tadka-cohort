@@ -505,9 +505,11 @@ curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: applic
 
 ```powershell
 # Direct SQL on the REPLICA. Not the API. Not the primary.
+# EF columns are quoted PascalCase: "Id" not id. Unquoted id → "column does not exist"
+# (that is NOT a replica miss). PowerShell: outer single quotes; GUID in doubled singles.
 # 0 rows = WAL has not replayed this INSERT yet. That is the bug the user would see
 # if GetById used the replica.
-docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT id FROM ordering.orders WHERE id = 'PASTE_ID';"
+docker exec tadka-postgres-replica psql -U tadka -d tadka -c 'SELECT "Id" FROM ordering.orders WHERE "Id" = ''PASTE_ID'';'
 
 # How far behind is replay? Capture ~236 ms. Not a pass/fail number.
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT now() - pg_last_xact_replay_timestamp() AS lag;"
@@ -517,7 +519,8 @@ docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT now() - pg_
 
 | Output | Meaning |
 |---|---|
-| `SELECT id` → **0 rows** | Replica does not have the order yet. Lag window is open. |
+| `SELECT "Id"` → **0 rows** | Replica does not have the order yet. Lag window is open. |
+| `column "id" does not exist` | You queried unquoted `id`. EF column is `"Id"`. Not a replica miss. Re-run the quoted command. |
 | `lag` a few hundred ms | Same fact as a clock. |
 | Row **already there** | You were slower than WAL. **Do not fake 0 rows.** Show `lag` and say the window closed. |
 
@@ -656,6 +659,7 @@ Folder name still says day-03; **taught today**. No `node` → EXPLAIN in step 1
 | `offset=` ignored | List API is `page` / `pageSize`. History is `cursor` / `pageSize`. |
 | No SMS log | New Created order; watch **`dotnet run`**, not curl. |
 | CAP replica already has the row | You were slow. Show `now() - pg_last_xact_replay_timestamp()`. Do not fake 0 rows. |
+| `column "id" does not exist` | EF names are `"Id"`. Use the quoted SELECT in Beat 3. Unquoted `id` is not a replica miss. |
 | `measure-load.ps1` / `n=0` | `powershell -File scripts/measure-load.ps1 …` from repo root. API must be up. Pull latest `day-05` if `Invoke-One` errors. |
 | `node` not found | Optional toy. Beat 6 EXPLAIN OFFSET is enough. |
 
