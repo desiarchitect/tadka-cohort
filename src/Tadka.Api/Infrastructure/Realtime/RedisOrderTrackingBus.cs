@@ -18,7 +18,7 @@ public sealed class RedisOrderTrackingBus(IConnectionMultiplexer redis) : IOrder
     private const int RecentEventsCapacity = 20;
     private static readonly TimeSpan BufferTtl = TimeSpan.FromHours(6);
 
-    public bool IsEnabled => true;
+    public bool IsEnabled => _redis.IsConnected;
 
     private static RedisChannel Channel(Guid orderId) => RedisChannel.Literal($"order:{orderId}");
     private static RedisKey SeqKey(Guid orderId) => (RedisKey)$"order:{orderId}:seq";

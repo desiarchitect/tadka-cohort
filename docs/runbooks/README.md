@@ -9,7 +9,7 @@ Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself*
 | 3 | Full REST API `/api/v1` (14 endpoints), server-side pricing, state machine, RFC 7807 errors | [day-03.md](day-03.md) |
 | 4 | Hardening: idempotency, optimistic concurrency (409), domain events; integration tests | [day-04.md](day-04.md) |
 | 5 | Scaling: indexes (EXPLAIN), connection pool, streaming **read replica** + load test | [day-05.md](day-05.md) |
-| 6 | **Redis** cache-aside + stampede lock + invalidation, and **SSE live tracking** over a Redis backplane | [day-06.md](day-06.md) |
+| 6 | **Redis** cache-aside + stampede lock + invalidation, and **SSE live tracking** over a Redis backplane | [day-06.md](day-06.md) · CLI walkthrough [redis-cli.md](../database/redis-cli.md) |
 
 > Consolidated demo index (issue → fix → trade-off → captured numbers): the instructor pack's `cohort-prep/DEMOS.md`.
 
