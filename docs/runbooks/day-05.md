@@ -27,9 +27,9 @@ Seed GUIDs (menu / Priya — **not** the 200k history customer): Meghana `a1b2c3
 | Beat 1 — seq scan | `day05-induce-break.sql` (**prints** EXPLAIN) | **Seq Scan** or **Parallel Seq Scan** + **Sort** | Drops the two history indexes |
 | Beat 1 — fix | `day05-apply-fix.sql` (**prints** EXPLAIN) | **Index Scan** using `ix_orders_customer_id_created_at`, **no Sort** | Recreates indexes; `OrderConfiguration.cs` 57–62 |
 | Beat 2 — pool | Same load 3× **with `-ProbeUrl` restaurants + menu**: baseline → drop index + pool=10 → restore | history p99 up **and** `probe restaurants` / `probe menu` p99 up (HTTP 200). Laptop may stay ~60 ms | `appsettings.Development.json` 9 |
-| Beat 3 — replica | How the copy works, then INSERT on replica; POST; replica `SELECT` **same id**; GET API | WAL stream (not C#); read-only error; 0 rows or lag; GET **200** on primary | `docker/replica-entrypoint.sh`; `GetById` primary; list/menu `_read` |
+| Beat 3 — replica | How the copy works; `day05-replica-readonly.sql` on replica; POST; here-string `SELECT "Id"`; GET API | `cannot execute INSERT in a read-only transaction`; 0 rows or lag; GET **200** | `docker/replica-entrypoint.sh`; `GetById` primary; list/menu `_read` |
 | Partition | `day05-partition-demo.sql` — read `\echo` banners | A2 `Subplans Removed`; B1 vs B2 `Buffers:` | Throwaway tables, not `ordering.orders` |
-| History | EXPLAIN OFFSET vs `GET /orders/history` | OFFSET walks thousands of rows; JSON has `nextCursor`, no `totalCount` | `OrdersController.cs` 168–210 |
+| History | `day05-offset-explain.sql` then `GET /orders/history` | OFFSET `actual rows` ~4000; JSON has `nextCursor`, no `totalCount` | `OrdersController.cs` 168–210 |
 
 Spoken cue in class: **"Ab demo."**
 
@@ -484,12 +484,17 @@ docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT pg_is_in_re
 
 **Why INSERT on the replica:** to prove it will not take writes. `tadka-postgres-replica` is in the command on purpose.
 
+**Do not use `docker exec … psql -c "… \"Id\" …"` on Windows.** Docker/PowerShell strip the quotes. `"Id"` arrives as `Id` → Postgres folds to `id` → `column "id" does not exist`. That is **not** a replica miss. Beat 1 already uses `docker cp` + `psql -f` so quotes live in a file.
+
 ```powershell
-docker exec tadka-postgres-replica psql -U tadka -d tadka -c "INSERT INTO restaurant.restaurants (id, name) VALUES (gen_random_uuid(), 'should-fail');"
+# Copy SQL onto the REPLICA (quoted "Id" / "Name" stay in the file).
+docker cp scripts/day05-replica-readonly.sql tadka-postgres-replica:/tmp/readonly.sql
+docker exec tadka-postgres-replica psql -U tadka -d tadka -f /tmp/readonly.sql
 ```
 
 **Identified (good) if:** `cannot execute INSERT in a read-only transaction`.  
-**Wrong machine if:** the INSERT **succeeds** — that was the primary. Check container name `tadka-postgres-replica`.
+**Wrong machine if:** the INSERT **succeeds** — that was the primary. Check container name `tadka-postgres-replica`.  
+**Quotes died if:** `column "id" of relation "restaurants" does not exist` — you used `-c` with unquoted `id`. Use the file above.
 
 ### 2. BREAK — see lag (empty SELECT on replica)
 
@@ -505,13 +510,13 @@ curl.exe -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: applic
 
 ```powershell
 # Direct SQL on the REPLICA. Not the API. Not the primary.
-# EF columns are quoted PascalCase: "Id" not id. Unquoted id → "column does not exist"
-# (that is NOT a replica miss). PowerShell: outer single quotes; GUID in doubled singles.
-# 0 rows = WAL has not replayed this INSERT yet. That is the bug the user would see
-# if GetById used the replica.
-docker exec tadka-postgres-replica psql -U tadka -d tadka -c 'SELECT "Id" FROM ordering.orders WHERE "Id" = ''PASTE_ID'';'
+# Here-string (@' … '@) keeps "Id". Closing '@ MUST be at column 0.
+# Replace PASTE_ID with the GUID from POST. 0 rows = WAL has not replayed yet.
+@'
+SELECT "Id" FROM ordering.orders WHERE "Id" = 'PASTE_ID';
+'@ | docker exec -i tadka-postgres-replica psql -U tadka -d tadka
 
-# How far behind is replay? Capture ~236 ms. Not a pass/fail number.
+# How far behind is replay? Capture ~236 ms. Not a pass/fail number. No quoted columns — -c is fine.
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT now() - pg_last_xact_replay_timestamp() AS lag;"
 ```
 
@@ -520,7 +525,7 @@ docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT now() - pg_
 | Output | Meaning |
 |---|---|
 | `SELECT "Id"` → **0 rows** | Replica does not have the order yet. Lag window is open. |
-| `column "id" does not exist` | You queried unquoted `id`. EF column is `"Id"`. Not a replica miss. Re-run the quoted command. |
+| `column "id" does not exist` | Quotes never reached Postgres (`docker exec -c` on Windows). Use the here-string / `psql -f`, not `-c`. Not a replica miss. |
 | `lag` a few hundred ms | Same fact as a clock. |
 | Row **already there** | You were slower than WAL. **Do not fake 0 rows.** Show `lag` and say the window closed. |
 
@@ -609,10 +614,11 @@ Indexes should be **on** (Beat 2 fix). If you left seq scan, OFFSET looks even w
 curl.exe -s "http://localhost:5224/api/v1/orders?customerId=00000000-0000-0000-0000-000000000000&page=800&pageSize=5"
 ```
 
-Proof is SQL on the **primary** (PowerShell single quotes so `"CustomerId"` survives):
+Proof is SQL on the **primary**. Same quoting trap as Beat 3: `psql -c` on Windows eats `"CustomerId"`. File + `psql -f`:
 
 ```powershell
-docker exec tadka-postgres psql -U tadka -d tadka -c 'EXPLAIN ANALYZE SELECT * FROM ordering.orders WHERE "CustomerId" = ''00000000-0000-0000-0000-000000000000'' ORDER BY "CreatedAt" DESC LIMIT 5 OFFSET 3995;'
+docker cp scripts/day05-offset-explain.sql tadka-postgres:/tmp/offset.sql
+docker exec tadka-postgres psql -U tadka -d tadka -f /tmp/offset.sql
 ```
 
 **How we identified the issue:** `actual rows` in the **thousands** (capture ~**4000**), `Execution Time` tens–hundreds of ms (capture **~150 ms**). That is “walk and throw.”
@@ -659,7 +665,7 @@ Folder name still says day-03; **taught today**. No `node` → EXPLAIN in step 1
 | `offset=` ignored | List API is `page` / `pageSize`. History is `cursor` / `pageSize`. |
 | No SMS log | New Created order; watch **`dotnet run`**, not curl. |
 | CAP replica already has the row | You were slow. Show `now() - pg_last_xact_replay_timestamp()`. Do not fake 0 rows. |
-| `column "id" does not exist` | EF names are `"Id"`. Use the quoted SELECT in Beat 3. Unquoted `id` is not a replica miss. |
+| `column "id" does not exist` | Windows `docker exec -c` stripped `"Id"`. Use `psql -f` / here-string in Beat 3. Not a replica miss. |
 | `measure-load.ps1` / `n=0` | `powershell -File scripts/measure-load.ps1 …` from repo root. API must be up. Pull latest `day-05` if `Invoke-One` errors. |
 | `node` not found | Optional toy. Beat 6 EXPLAIN OFFSET is enough. |
 
