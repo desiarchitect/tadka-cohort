@@ -1,111 +1,188 @@
-# Day 8 — Runbook: Extract Payment into its own Service
+# Day 8 — Runbook: extract Payment (fault, not speed)
 
-**Branch:** `day-08`  ·  **What's new:** Payment is now a **separate service** (`Tadka.Payment.Api`) with its **own database** and an **HTTP** bridge (ADR-024/025/026). Day 7 fixed payment's *latency*; Day 8 fixes its *fault/security/data* coupling — a payment fault can no longer take the monolith down. The grep-clean Day-7 seam made this a **move, not a rewrite**. Now two apps + four infra containers (postgres 5432 + replica 5433 + redis 6379 + **payment-db 5434**).
+**Branch:** `day-08`. Day 7 fixed **latency in one process**. Today Payment is `Tadka.Payment.Api` on **`:5240`** with **`payment-db` `:5434`**. Driver: **fault isolation, PCI scope, data ownership** — not “it was slow.” ADRs 024–026.
 
-> New here? Read [`README.md`](README.md). Windows PowerShell → use `curl.exe`. Two apps run side by side (no Dockerfiles — compose is infra only).
+**Two apps, four containers.** Wound at the end stays **open** (Week 5 Kafka). Do not “fix” it.
 
-## 1. Run it (infra + BOTH apps)
+> **Windows:** `curl.exe`. Quote `@file`. Two terminals for the two `dotnet run`s.
 
-```bash
+| Thing | Value |
+|---|---|
+| Monolith | `http://localhost:5224` |
+| Payment | `http://localhost:5240` |
+| payment-db | `localhost:5434`, db `tadka_payment` |
+| POST body | `@docs/runbooks/place-order.json` |
+
+### Demo → code
+
+| When | What you run | Look for | Code |
+|---|---|---|---|
+| Happy path | POST, wait, GET both | order `Confirmed`; `:5240/payments/{id}` `Completed` | `HttpPaymentClient` |
+| Isolation | Ctrl+C Payment | menu **200**, health **200**, POST **201** in ms | two processes |
+| Wound | GET that order after Payment restart | still **`Created`**. New POST **does** Confirm | in-memory queue consumed, HTTP failed |
+| Own DB | `stop payment-db` | menu still **200** | ADR-026 |
+| Grep | Select-String **excluding Migrations** | no `FakePaymentGateway` / live `PaymentDbContext` | `BoundaryTests.cs` |
+
+---
+
+## How it is wired
+
+```
+POST :5224/orders  →  Channel  →  PaymentProcessor
+                                      │ HTTP
+                                      ▼
+                               :5240/payments   →  tadka_payment (5434)
+```
+
+| Job | Tadka (.NET) | Java | Node |
+|---|---|---|---|
+| Typed client | `IPaymentClient` + `HttpClient` | OpenFeign | axios wrapper |
+| Timeout/bulkhead | same Polly pipeline, now around the **network hop** | Resilience4j | Opossum |
+| Own database | `Tadka.Payment.Api` migrates `tadka_payment` | separate Spring datasource | separate Prisma schema |
+
+---
+
+## 0. Fresh start
+
+```powershell
 git checkout day-08
-docker compose up -d            # postgres(5432) + replica(5433) + redis(6379) + payment-db(5434)
-docker compose ps               # all four healthy
-```
-In **two terminals**:
-```bash
-# Terminal 1 — the Payment service (own DB on 5434), http://localhost:5240
-dotnet run --project src/Tadka.Payment.Api
-
-# Terminal 2 — the monolith, http://localhost:5224
-dotnet run --project src/Tadka.Api
-```
-```bash
-curl http://localhost:5240/health        # {"status":"Healthy","service":"payment"}
-curl http://localhost:5224/health        # Healthy
-```
-Each app migrates its **own** database on startup. Two databases now:
-```bash
-docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "\dt payment.*"   # payment.payments + payment.__EFMigrationsHistory
-docker exec tadka-postgres   psql -U tadka -d tadka        -c "\dn"              # no 'payment' schema here any more
+docker compose down -v
+docker compose up -d
+docker compose ps    # four healthy: postgres, replica, redis, payment-db
 ```
 
-Handy variables:
-```bash
-RID=a1b2c3d4-0001-4000-8000-000000000001; ITEM=b1b2c3d4-0001-4000-8000-000000000001; CID=c1b2c3d4-0001-4000-8000-000000000001
-BODY='{"customerId":"'$CID'","restaurantId":"'$RID'","items":[{"menuItemId":"'$ITEM'","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}'
+**Terminal 1**
+
+```powershell
+dotnet run --project src/Tadka.Payment.Api    # :5240
 ```
 
-## 2. The shipped path: order settles across the HTTP bridge (ADR-025)
+**Terminal 2**
 
-`POST /orders` still returns in **ms** (async preserved); the background processor calls the Payment **service** over HTTP; the order converges to `Confirmed`.
-```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
-sleep 1
-curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'        # Confirmed
-curl -s http://localhost:5240/payments/$ORDER                                                            # {"status":"Completed","gatewayReference":"FAKEPAY-…"}
+```powershell
+dotnet run --project src/Tadka.Api            # :5224
 ```
-> Captured on a dev laptop: `POST /orders` ~tens of ms; converges `Created → Confirmed` in ~hundreds of ms. The payment row lives in the **Payment service's** DB, not the monolith's.
 
-## 3. Fault isolation — kill Payment, the monolith lives (ADR-024)
-
-Stop the Payment service (Ctrl+C in Terminal 1, or kill `:5240`). The monolith keeps serving:
-```bash
-curl -s -o /dev/null -w "menu: %{http_code}\n"   http://localhost:5224/api/v1/restaurants/$RID/menu     # 200 — unaffected
-curl -s -o /dev/null -w "health: %{http_code}\n" http://localhost:5224/health                            # 200 — unaffected
-curl -s -o /dev/null -w "POST /orders: %{http_code} in %{time_total}s\n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY"   # 201 in ms
+```powershell
+curl.exe -s http://localhost:5240/health    # {"status":"Healthy","service":"payment"}
+curl.exe -s -w " HTTP %{http_code}`n" http://localhost:5224/health
 ```
-> On Day 7 (in-process) a payment fatal shared the monolith's host. Now it doesn't. To see a payment *crash* (not just "stopped"): run the service with `Payment__CrashOnCharge=true`, place an order → the **Payment service** process dies on the charge, but `curl http://localhost:5224/health` is still `200`. (`Environment.FailFast` — demo lever only.)
 
-## 4. The temporal-coupling gap — synchronous HTTP's cost (ADR-025 → earns Day 9)
+Each app migrates **its own** database.
 
-With the Payment service **still down**, place an order:
-```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
-sleep 3
-curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'        # still Created (PENDING — never settled)
+```powershell
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT tablename FROM pg_tables WHERE schemaname='payment';"
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT tablename FROM pg_tables WHERE schemaname='payment';"
 ```
-> The order was accepted (good — intake is decoupled), but the charge was **lost**: the queued item was consumed and the HTTP call failed. Synchronous HTTP couples caller and callee *in time*. **This is the cliffhanger Day 9 fixes** with Kafka + the Outbox pattern (durable, redelivered, idempotent) — restart the Payment service today and new orders settle again, but the pending one stays lost.
 
-## 5. Own-database isolation (ADR-026)
+**Look for:** payment-db has `payments`. Monolith payment schema may still **exist as an empty leftover** (0 tables). Teaching used to say “no payment schema” — **0 tables** is the proof. Data lives on **5434**.
 
-```bash
+`dotnet test` → **33 + 4** (monolith includes Day-6 leftovers + `BoundaryTests`).
+
+---
+
+## 1. Happy path — HTTP bridge (ADR-025)
+
+```powershell
+curl.exe -s -w "`nHTTP %{http_code} time=%{time_total}s`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+```
+
+Copy `"id"`. Wait 2 s.
+
+```powershell
+curl.exe -s http://localhost:5224/api/v1/orders/PASTE_ID
+curl.exe -s http://localhost:5240/payments/PASTE_ID
+```
+
+**Captured:** POST 201 `Created` (cold ~1.3 s, then tens of ms). GET order **`Confirmed`**. Payment service JSON `"status":"Completed"`, `FAKEPAY-…`.
+
+---
+
+## 2. BREAK isolation — Payment process gone, monolith lives (ADR-024)
+
+Ctrl+C **Terminal 1 only**.
+
+```powershell
+curl.exe -s -o NUL -w "menu HTTP %{http_code}`n" http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu
+curl.exe -s -o NUL -w "health HTTP %{http_code}`n" http://localhost:5224/health
+curl.exe -s -w "`nHTTP %{http_code} time=%{time_total}s`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+```
+
+**Identified (good):** menu **200**, health **200**, POST **201** in **~24 ms**, `"status":"Created"`. Day 7 in-process: a payment fatal shared the host.
+
+Optional crash (not “I stopped it”): Payment with `$env:Payment__CrashOnCharge="true"` then POST — `Environment.FailFast` kills **Payment only**. Demo lever, not production.
+
+---
+
+## 3. The wound — charge vanished (ADR-025) — **do not fix**
+
+Keep Payment **down**. Copy the id from §2 POST. Wait 3 s:
+
+```powershell
+curl.exe -s http://localhost:5224/api/v1/orders/PASTE_ID
+```
+
+**Look for:** still **`Created`**.
+
+Restart Payment (`dotnet run --project src/Tadka.Payment.Api`). Wait 2 s. GET **the same id** again.
+
+**Captured:** still **`Created`**. A **new** POST after Payment is up becomes **`Confirmed`**.
+
+The background worker **dequeued** the work item, HTTP failed, item is gone. Not in the queue, not in payment-db. User got **201**. You hear this from customers, not from monitoring.
+
+**Do not add retry in class.** Retry is also in memory. Week 5: Kafka + Outbox.
+
+---
+
+## 4. Own database (ADR-026)
+
+Payment can be up. Then:
+
+```powershell
 docker compose stop payment-db
-curl -s -o /dev/null -w "menu with payment-db DOWN: %{http_code}\n" http://localhost:5224/api/v1/restaurants/$RID/menu   # still 200 — the monolith has its OWN DB
+curl.exe -s -o NUL -w "menu HTTP %{http_code}`n" http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu
 docker compose start payment-db
 ```
-> A payment-database outage degrades only payment. On Day 7 (shared Postgres, payment migrated in the monolith's startup) the same outage could stop the whole app from booting.
 
-## 6. The boundary holds — grep proves it (ADR-024)
+**Look for:** menu **200**. Day 7: Payment migrated during monolith startup — a payment-DB outage could block boot.
 
-```bash
-# The monolith has NO payment domain/gateway/DbContext — only a typed HTTP client + the shared events:
-grep -rn "FakePaymentGateway\|PaymentDbContext\|Domain.Payments" src/Tadka.Api    # nothing
-ls src/Tadka.Api/Modules/Payments    # PayForOrderOnOrderPlaced, PaymentProcessor, PaymentWorkChannel, IPaymentClient, HttpPaymentClient, PaymentClientOptions, PaymentClientResilience
+---
+
+## 5. Grep the seam
+
+Old EF snapshots still mention `Domain.Payments`. **Exclude Migrations** or the demo “fails.”
+
+```powershell
+Get-ChildItem src\Tadka.Api -Recurse -Filter *.cs |
+  Where-Object { $_.FullName -notmatch '\\Migrations\\' } |
+  Select-String "FakePaymentGateway|PaymentDbContext"
 ```
 
-## 7. Run the tests
+**Look for:** no `FakePaymentGateway`. `PaymentDbContext` only in comments if at all. Live client: `Modules\Payments\HttpPaymentClient.cs`. `tests/Tadka.Api.Tests/Architecture/BoundaryTests.cs` fails the build on a stray import.
 
-```bash
-dotnet test      # 25/25 — monolith 21 (19 order-flow/state-machine + 2 payment-reaction) + Payment service 4
-```
-- Monolith `PaymentReactionTests`: publish `PaymentCompleted`/`PaymentFailed` → order Confirmed/Cancelled (the reaction seam, no network).
-- `Tadka.Payment.Api.Tests`: charge over HTTP → Completed; decline → Failed (200, a business outcome); slow gateway + tiny timeout → fast Failed; idempotent → one charge, same reference.
+---
 
-## ✅ Done when
+## Done when
 
-- [ ] `\dt payment.*` exists in **`tadka_payment`** (5434); the monolith's `tadka` DB has **no** payment schema.
-- [ ] Shipped: `POST /orders` returns `Created` in ms → converges to `Confirmed`; `GET :5240/payments/{id}` is `Completed`.
-- [ ] Payment service **down** → monolith `/health`, menu, and `POST /orders` all still `200`/`201`.
-- [ ] Payment down → a new order stays **pending** (the temporal-coupling gap).
-- [ ] `payment-db` stopped → monolith menu still `200`.
-- [ ] `grep` over the monolith finds no payment domain/gateway/DbContext.
-- [ ] `dotnet test` → **25/25**.
+- [ ] Four containers; `:5240` and `:5224` health 200
+- [ ] payment-db has `payments`; monolith payment schema has **0 tables**
+- [ ] Happy path: order Confirmed + `:5240/payments/{id}` Completed
+- [ ] Payment down: menu/health 200, POST 201 ms
+- [ ] That order stays `Created` after Payment restarts; a new order Confirms
+- [ ] `stop payment-db`: menu 200
+- [ ] Grep excluding Migrations is clean
+- [ ] `dotnet test` → **33 + 4**
 
 ## Troubleshooting
 
-- **Order never reaches Confirmed:** is the Payment service up on `:5240`? Check `Payment:ServiceUrl` in the monolith's `appsettings.Development.json`. The monolith log shows `Order … left PENDING — Payment service did not settle it` when it can't reach the service.
-- **Payment service won't start:** is `payment-db` (5434) healthy? `docker compose ps`. It owns its own DB.
-- **Port in use:** the Payment service uses `:5240` (see `Properties/launchSettings.json`), the monolith `:5224`.
-- **Reset everything:** `docker compose down -v && docker compose up -d`, then run both apps (each re-migrates its own DB).
+| Symptom | What to do |
+|---|---|
+| Order never Confirmed | Is `:5240` up? `Payment:ServiceUrl` = `http://localhost:5240` |
+| Payment will not start | `payment-db` healthy on 5434 |
+| Port in use | Payment **5240**, monolith **5224** |
+| Grep hits Designer.cs | You included `Migrations`. Exclude them |
+| `\dn` still lists `payment` | Empty leftover namespace. Check **tables**, not nspname |
 
-➡️ Next (Day 9): replace the synchronous HTTP bridge with **Kafka + the Outbox pattern** — a down Payment service means messages *wait*, not lost charges; at-least-once delivery + an idempotent consumer; the Saga pattern for the distributed transaction.
+**Do not** extract because Day 7 was slow. Slow is already fixed. Today is blast radius.
+
+Next: Week 5 — Kafka + Outbox for **this** stuck order.
