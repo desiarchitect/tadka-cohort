@@ -1,139 +1,237 @@
-# Day 7 — Runbook: The Payment Brownout → Isolate It & Earn the Boundary
+# Day 7 — Runbook: payment brownout → timeout + bulkhead → async
 
-**Branch:** `day-07`  ·  **What's new:** payment is finally wired in — and it teaches a failure. We reproduce the **payment-gateway brownout** (a slow gateway stalls order placement), then fix it three ways: a **Polly** timeout + bulkhead (ADR-021), a **modular monolith** with **MediatR** (ADR-022 — Payment gets its own `DbContext`, schema, and migration history; Ordering has zero references to it), and **asynchronous payment** off the request path (ADR-023). Same infra as Day 6 (Postgres primary 5432 + replica 5433 + Redis 6379).
+**Branch:** `day-07`. **What's new (taught):** payment is wired, and it **fails first**. Polly timeout + bulkhead (ADR-021), MediatR Payment module with its own `PaymentDbContext` / `payment` schema / migration history (ADR-022), async payment off the request path (ADR-023). Infra is Day 6: Postgres `5432`, replica `5433`, Redis `6379`. **No Kafka. No Payment HTTP service** (that is Day 8).
 
-> New here? Read [`README.md`](README.md). Windows PowerShell → use `curl.exe` (the `curl` alias is `Invoke-WebRequest`). The brownout levers are set via environment variables, shown below.
+**The number on the board:** Naive → Fix 1 → Fix 2. Fill it as you go. Captured here: **~8.8 s → ~2.9 s → ~20 ms**.
 
-## 1. Run it (shipped config = async payment, fast gateway)
+> **Windows PowerShell:** `curl.exe`. Quote `@file`. Env vars use **double underscore** (`Payment__Mode`). Wrong `_` = silent no-op (worse than an error). Each `$env:` lives only in **that** shell — open a fresh one to reset to shipped `appsettings.Development.json`.
 
-```bash
+| Thing | Value |
+|---|---|
+| API | `http://localhost:5224` |
+| POST body | `@docs/runbooks/place-order.json` (Priya + Meghana biryani) |
+| Payment tables | schema `payment` on the **same** Postgres as orders |
+
+### Env levers (read this before any restart)
+
+| Variable | Naive (break) | Fix 1 | Fix 2 / shipped |
+|---|---|---|---|
+| `Payment__Mode` | `Synchronous` | `Synchronous` | `Async` |
+| `Payment__Gateway__Behavior` | `Slow` | `Slow` | `Slow` or `Fast` |
+| `Payment__TimeoutSeconds` | `30` (no timeout) | `2` | `2` |
+| `Payment__MaxConcurrentCharges` | `1000` (unbounded) | `10` | `10` |
+
+Shipped file is **Async + Fast + 2s + 10**. Ctrl+C the API, set `$env:…`, `dotnet run` again. `dotnet run` already running **does not** reread env.
+
+### Demo → code
+
+| When | What you run | Look for | Code |
+|---|---|---|---|
+| Shipped | POST, wait, GET | 201 `Created` in tens of ms; GET `Confirmed`; payment `Completed` | `PaymentProcessor` hosted service |
+| Two histories | `pg_tables` schema `payment` | `payments` **and** `__EFMigrationsHistory` | `Program.cs` 106, 126 |
+| Brownout | Sync + Slow + timeout 30 | POST **~8.8 s**, still 201 | gateway sleeps 8 s on the request path |
+| Fix 1 | Sync + Slow + timeout 2 | POST **~2.9 s**; order `Cancelled`; `TimeoutRejectedException` | `PaymentResiliencePipeline.cs` 28–33 |
+| Fix 2 | Async + Slow | POST **~20 ms**, status `Created`; later `Cancelled` | `PaymentWorkChannel` + processor |
+| Grep | Select-String on Orders | **no matches** | ADR-022 seam |
+
+Spoken cue: **"Ab demo."**
+
+---
+
+## How payment is wired (.NET, and the same idea elsewhere)
+
+```
+POST /orders
+    → SaveChanges (order Created)
+    → MediatR Publish OrderPlaced
+         │
+         ├─ Synchronous mode: charge NOW (Polly around FakePaymentGateway)
+         └─ Async mode: enqueue; PaymentProcessor charges in the background
+    → HTTP returns  (async: milliseconds; sync: waits for the gateway)
+```
+
+| Job | Tadka (.NET) | Java | Node |
+|---|---|---|---|
+| Timeout + bulkhead | **Polly** v8 `AddTimeout` + `AddConcurrencyLimiter` | Resilience4j | Opossum / p-limit |
+| In-process events | **MediatR** `INotification` | Spring `ApplicationEventPublisher` | EventEmitter |
+| Off the request path | `Channel` + `BackgroundService` | `@Async` / queue | worker thread / Bull |
+
+Polly is not the lesson. **Bound how long one call holds a slot, and how many slots exist.**
+
+---
+
+## 0. Fresh start
+
+```powershell
 git checkout day-07
+docker compose down -v
+docker rm -f tadka-postgres tadka-postgres-replica tadka-redis
 docker compose up -d
-dotnet run --project src/Tadka.Api      # migrates BOTH contexts: core drops payment.payments; PaymentDbContext recreates it
-curl http://localhost:5224/health        # 200 Healthy
-```
-
-Two migration histories now exist — proof the module owns its data (ADR-022):
-```bash
-docker exec tadka-postgres psql -U tadka -d tadka -c "\dt payment.*"
-# payment.payments  AND  payment.__EFMigrationsHistory   (core's history stays in public.__EFMigrationsHistory)
-```
-
-Handy variables:
-```bash
-RID=a1b2c3d4-0001-4000-8000-000000000001        # Meghana
-ITEM=b1b2c3d4-0001-4000-8000-000000000001       # Chicken Biryani (₹299)
-CID=c1b2c3d4-0001-4000-8000-000000000001        # seeded customer
-BODY='{"customerId":"'$CID'","restaurantId":"'$RID'","items":[{"menuItemId":"'$ITEM'","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}'
-```
-
-## 2. The shipped path: async payment, status converges (ADR-023)
-
-`POST /orders` returns **immediately** as `Created`; the background processor charges the card and the order auto-confirms moments later.
-```bash
-curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*"status":"([^"]+)".*/order \1 returned status=\2/'
-# → status=Created  (returned in milliseconds — the gateway was NOT on the request path)
-ORDER=<paste the id>
-sleep 1
-curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/now: \1/'   # → Confirmed (payment settled in the background)
-docker exec tadka-postgres psql -U tadka -d tadka -x -c 'select * from payment.payments order by 1 desc limit 1;'   # Status=Completed, a GatewayReference, CompletedAt set
-```
-> Measured on a dev laptop: `POST` returns in **~tens of ms**; the order converges `Created → Confirmed` in **~400 ms**. Open the Day-6 SSE stream (`curl -N .../orders/$ORDER/events`) **before** placing the order to watch it move live.
-
-## 3. Reproduce the BROWNOUT (the naive baseline)
-
-Flip payment to the naive design — **synchronous, inside the order request** — and the gateway to a provider having an incident (**slow, 8 s**), with **no timeout** and an **unbounded** bulkhead (simulating "no resilience"). Stop the app and restart it with these env overrides:
-
-```powershell
-# Windows PowerShell:
-$env:Payment__Mode="Synchronous"; $env:Payment__Gateway__Behavior="Slow"; $env:Payment__Gateway__SlowDelaySeconds="8"
-$env:Payment__TimeoutSeconds="30"; $env:Payment__MaxConcurrentCharges="1000"
+dotnet test Tadka.slnx          # 32 cases on this merge. Needs Docker.
+# No Payment__* in this shell.
 dotnet run --project src/Tadka.Api
 ```
-```bash
-# bash: Payment__Mode=Synchronous Payment__Gateway__Behavior=Slow Payment__TimeoutSeconds=30 Payment__MaxConcurrentCharges=1000 dotnet run --project src/Tadka.Api
-```
-Time a single order:
-```bash
-curl -s -o /dev/null -w "POST /orders took %{time_total}s\n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY"
-# → ~9 s.  Every order is now hostage to the payment provider's latency. Under load this drains the
-#   primary connection pool (ADR-015) and order placement collapses for everyone. THIS is the brownout.
-```
-> Captured: **~9.2 s** per order. (Headline symptom = latency/throughput collapse on the order path. The pool-drain contagion to *other* endpoints is the multi-instance amplifier — same honest caveat as Day 5's pool demo.)
 
-## 4. Fix #1 — Polly timeout + bulkhead (ADR-021)
+**What it does:** migrates **core** then **Payment** (`PaymentDbContext` history in schema `payment`). Redis still there from Day 6.
 
-Keep payment synchronous (worst case) but give Polly a **2 s timeout** and a **bounded bulkhead**. A slow gateway now fails **fast and contained** instead of hanging 8 s. Restart:
-```powershell
-$env:Payment__Mode="Synchronous"; $env:Payment__Gateway__Behavior="Slow"; $env:Payment__TimeoutSeconds="2"; $env:Payment__MaxConcurrentCharges="10"
-dotnet run --project src/Tadka.Api
-```
-```bash
-curl -s -o /dev/null -w "POST /orders took %{time_total}s\n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY"
-# → ~2 s (warm). The charge is abandoned at the deadline → payment Failed → order Cancelled.
-docker exec tadka-postgres psql -U tadka -d tadka -x -c 'select * from payment.payments order by 1 desc limit 1;'
-# Status=Failed, FailureReason="TimeoutRejectedException: ... '00:00:02'"
-```
-> Captured: **9.2 s → ~2.1 s** (warm). Fail-fast trades a slow success for a fast, *handled* failure (the order cancels cleanly instead of the whole app stalling). The bulkhead caps how many charges can be in flight, so a sick gateway can't consume more than N slots.
-
-## 5. Fix #2 — async payment: take it off the request path entirely (ADR-023)
-
-The real fix: order creation shouldn't wait for the bank **at all**. Back to the shipped config (`Payment:Mode=Async`, fast gateway) — restart with **no env overrides** (or set `$env:Payment__Mode="Async"`). Now even with a **slow** gateway, `POST /orders` returns instantly:
-```powershell
-$env:Payment__Mode="Async"; $env:Payment__Gateway__Behavior="Slow"; $env:Payment__TimeoutSeconds="2"
-dotnet run --project src/Tadka.Api
-```
-```bash
-curl -s -o /dev/null -w "POST /orders took %{time_total}s\n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY"
-# → milliseconds, even though the gateway is slow. Payment happens in the background; with a slow+2s-timeout
-#   gateway the order will end up Cancelled, but ORDER INTAKE NEVER STALLS. Orders keep flowing through the incident.
-```
-> This is why Swiggy/Zomato show "order placed" instantly and surface payment a moment later. The in-memory queue is the right-sized step; its durable successor is **Kafka + Outbox (Week 5)**.
-
-## 6. A declined payment cancels the order (ADR-023)
+**Ready when:** three containers healthy, API **5224**, tests **32/32**.
 
 ```powershell
-$env:Payment__Mode="Async"; $env:Payment__Gateway__Behavior="Failing"
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT tablename FROM pg_tables WHERE schemaname='payment' ORDER BY 1;"
+```
+
+**Look for:** `payments` and `__EFMigrationsHistory`. Core history stays in `public`.
+
+---
+
+## 1. BASELINE — shipped async + fast (ADR-023)
+
+**Story:** Swiggy shows “order placed” immediately. The bank is not on that HTTP call.
+
+```powershell
+curl.exe -s -w "`nHTTP %{http_code} time=%{time_total}s`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+```
+
+Copy `"id"` and `"status"`. First hit after boot can be ~0.8 s (JIT). **Second** POST is the number:
+
+**Captured:** HTTP **201**, `status":"Created"`, warm **time=0.022s**.
+
+Wait 2 s, then:
+
+```powershell
+curl.exe -s http://localhost:5224/api/v1/orders/PASTE_ID
+```
+
+**Look for:** `"status":"Confirmed"`.
+
+Payment row (quoted `"Status"` — Windows `psql -c` strips quotes, use a here-string):
+
+```powershell
+@'
+SELECT "Status", "FailureReason", "CompletedAt" FROM payment.payments ORDER BY "CreatedAt" DESC LIMIT 1;
+'@ | docker exec -i tadka-postgres psql -U tadka -d tadka
+```
+
+**Look for:** `Completed`, empty `FailureReason`.
+
+Optional: `curl.exe -N http://localhost:5224/api/v1/orders/PASTE_ID/events` **before** POST — you should see `Created` then `Confirmed`.
+
+---
+
+## 2. BREAK — brownout (sync + slow, no timeout)
+
+**Story:** Naive design charges **inside** `POST /orders`. Gateway has an incident (8 s). No Polly timeout. Every checkout holds a thread and a DB connection for ~9 s. 50 pool slots ÷ 9 s ≈ **5.5 orders/sec** vs dinner-rush ~11/sec. Half capacity, no bug in your SQL.
+
+Ctrl+C the API. **Same window:**
+
+```powershell
+$env:Payment__Mode = "Synchronous"
+$env:Payment__Gateway__Behavior = "Slow"
+$env:Payment__Gateway__SlowDelaySeconds = "8"
+$env:Payment__TimeoutSeconds = "30"
+$env:Payment__MaxConcurrentCharges = "1000"
 dotnet run --project src/Tadka.Api
 ```
-```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
-sleep 1
-curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/status: \1/'   # → Cancelled (PaymentFailed → order.Cancel via the shared event)
+
+Other terminal:
+
+```powershell
+curl.exe -s -o NUL -w "BROWN HTTP %{http_code} time=%{time_total}s`n" --max-time 20 -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 ```
 
-## 7. The module boundary — grep proves it (ADR-022)
+**Identified if:** HTTP **201**, **time ≈ 8.8 s** (8 s sleep + overhead). Teaching capture was **9.2 s**. Your box will differ; **~8–10 s** is the brownout. **500** = not this commit (sync event snapshot).
 
-```bash
-# Ordering must have ZERO references to Payment. This returns nothing:
-grep -rn "Modules.Payments\|Domain.Payments\|PaymentDbContext" src/Tadka.Api/Domain/Orders src/Tadka.Api/Controllers/OrdersController.cs
+---
+
+## 3. FIX 1 — Polly 2 s timeout + bulkhead 10 (ADR-021)
+
+Still synchronous (worst case). Bound **duration** (timeout) and **fan-out** (bulkhead). Fail-fast: order **cancels** instead of the app hanging.
+
+Ctrl+C. Fresh values (overwrite the previous `$env:`):
+
+```powershell
+$env:Payment__Mode = "Synchronous"
+$env:Payment__Gateway__Behavior = "Slow"
+$env:Payment__TimeoutSeconds = "2"
+$env:Payment__MaxConcurrentCharges = "10"
+dotnet run --project src/Tadka.Api
 ```
-Ordering raises `OrderPlaced`; the Payment module reacts via a MediatR handler; Payment publishes `PaymentCompleted`/`PaymentFailed`; Ordering reacts. Neither references the other — they share only the event contract (`Domain/Common/Events`). That seam is what Day 8 extracts into a separate service.
 
-## 8. Run the tests
+Same POST curl as §2.
 
-```bash
-dotnet test      # 23/23 (19 from Days 1–6 + 4 new payment tests). The order-flow suite runs Payment in
-                 # "Off" mode (deterministic Day-4 semantics); PaymentModuleIntegrationTests drives
-                 # PaymentService directly: success→confirm, decline→cancel, Polly timeout fail-fast, idempotent one-charge.
+**Captured:** HTTP **201**, **time=2.86 s**, JSON `"status":"Cancelled"`, `TimeoutRejectedException` … `'00:00:02'`.
+
+Payment row: `"Status"=Failed`, same exception in `"FailureReason"`.
+
+**Is this better?** Ask the room. The user used to succeed slowly; now they get cancelled quickly. That is a real trade. Timeout ≠ bulkhead: timeout is **one** call; bulkhead is **how many** such calls at once.
+
+**Honesty:** capture was **~2.9 s** not 2.1 s. Warm vs cold; do not fake 2.1.
+
+---
+
+## 4. FIX 2 — async: intake never waits (ADR-023)
+
+The real fix: **do not put the bank on `POST /orders`.** Queue + background processor. Even a slow gateway returns in milliseconds. Order may later `Cancel` — **checkout still flows**.
+
+Ctrl+C.
+
+```powershell
+$env:Payment__Mode = "Async"
+$env:Payment__Gateway__Behavior = "Slow"
+$env:Payment__TimeoutSeconds = "2"
+$env:Payment__MaxConcurrentCharges = "10"
+dotnet run --project src/Tadka.Api
 ```
 
-## ✅ Done when
+```powershell
+curl.exe -s -w "`nHTTP %{http_code} time=%{time_total}s`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+```
 
-- [ ] `\dt payment.*` shows both `payment.payments` and `payment.__EFMigrationsHistory` (the module owns its migrations).
-- [ ] Shipped (async/fast): `POST /orders` returns `Created` in ms; the order converges to `Confirmed`; payment row is `Completed`.
-- [ ] Brownout (sync/slow/no-timeout): `POST /orders` ≈ 9 s.
-- [ ] Polly (sync/slow/2 s): `POST /orders` ≈ 2 s; payment `Failed` with `TimeoutRejectedException`; order `Cancelled`.
-- [ ] Async (slow gateway): `POST /orders` returns in ms — intake never stalls.
-- [ ] `Failing` gateway → order ends `Cancelled`.
-- [ ] The grep over Ordering returns nothing.
-- [ ] `dotnet test` → **23/23**.
+**Captured:** HTTP **201**, `"status":"Created"`, warm **time=0.021 s**. Four seconds later GET is `Cancelled` (gateway still slow + 2 s timeout) — **intake did not wait**.
+
+Shipped config is Async + **Fast**: same milliseconds, then GET **Confirmed**.
+
+In-memory channel is enough **inside one process**. Crash-loses-the-queue is **Day 8’s wound** / Week 5 Kafka. Do not add Kafka today.
+
+---
+
+## 5. The seam — grep (ADR-022)
+
+Day 8 is a **move**, not a rewrite, because Ordering does not reference Payment.
+
+```powershell
+Get-ChildItem src\Tadka.Api\Domain\Orders,src\Tadka.Api\Controllers\OrdersController.cs -Recurse -Filter *.cs |
+  Select-String "Modules.Payments|Domain.Payments|PaymentDbContext"
+```
+
+**Look for:** no output. If you get hits, you are not on committed `day-07`.
+
+`Domain/Payments/Payment.cs` still exists (the module). Grep **Orders + OrdersController only**.
+
+MediatR replaced the Day-4 hand-rolled dispatcher (`Program.cs` 46). `BoundaryTests.cs` that **fails the build** on a stray import ships on **day-08**, not today.
+
+---
+
+## Done when
+
+- [ ] `payment` schema has `payments` + `__EFMigrationsHistory`
+- [ ] Shipped: POST `Created` in tens of ms; GET `Confirmed`; payment `Completed`
+- [ ] Brownout: POST **~8–10 s**
+- [ ] Polly: POST **~3 s**; order `Cancelled`; `TimeoutRejectedException`
+- [ ] Async+Slow: POST **~20 ms** `Created` (later may Cancel)
+- [ ] Grep over Ordering is empty
+- [ ] `dotnet test` → **32/32**
 
 ## Troubleshooting
 
-- **`POST` returned 500 in Synchronous mode:** make sure you're on the committed `day-07` (the event-publish path snapshots events before dispatch to survive the synchronous re-entrant payment chain).
-- **Env override didn't take:** double-underscore is the .NET nesting separator (`Payment__Gateway__Behavior`). In PowerShell each `$env:` lasts for that shell; open a fresh shell to reset to the shipped `appsettings.Development.json` (async/fast).
-- **Payment row not appearing in async mode:** the background processor charges ~immediately, but give it a beat (`sleep 1`) before querying. Check the app log for `💳 Payment COMPLETED` / `❌ Payment FAILED`.
-- **Reset everything:** `docker compose down -v && docker compose up -d`, then `dotnet run` (re-applies both migration histories).
+| Symptom | What to do |
+|---|---|
+| Env did nothing | Single `_`. Must be `Payment__Gateway__Behavior`. Fresh shell to reset |
+| POST 500 in Synchronous | Need the snapshot-before-publish `PublishEventsAsync` on this branch |
+| Payment row missing | `sleep 2` in async; watch logs `Payment COMPLETED` / `FAILED` |
+| `column "status" does not exist` | EF `"Status"`. Use the here-string, not `psql -c "SELECT Status"` |
+| Reset | `docker compose down -v`, `up -d`, `dotnet run` with **no** Payment env |
 
-➡️ Next (Day 8): extract the Payment module into a **separate service** — its own database and an HTTP bridge (why HTTP before Kafka). The boundary you can already grep for becomes a network boundary.
+**Do not extract Payment because it was slow.** Slow is fixed **today** in one process. Day 8’s reason is fault / PCI / data.
+
+Next: Day 8 — `Tadka.Payment.Api` `:5240` + `payment-db` `:5434`.
