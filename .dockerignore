@@ -1,0 +1,12 @@
+# Local build output — must never land in a build context. Without this, a locally-built
+# src/**/obj/project.assets.json gets copied over the container's own fresh `dotnet restore`
+# output, and `dotnet publish --no-restore` fails claiming a package "was not found" even though
+# restore just succeeded (NETSDK1064) — the obj/ folder it reads from is the wrong one.
+**/bin/
+**/obj/
+
+.git/
+.vs/
+.vscode/
+node_modules/
+**/node_modules/

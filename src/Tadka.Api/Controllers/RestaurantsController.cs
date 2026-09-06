@@ -7,6 +7,7 @@ using Tadka.Api.Data;
 using Tadka.Api.Domain.Restaurants;
 using Tadka.Api.Domain.ValueObjects;
 using Tadka.Api.Exceptions;
+using Tadka.Api.Filters;
 using Tadka.Api.Infrastructure.Caching;
 
 namespace Tadka.Api.Controllers;
@@ -30,6 +31,7 @@ public class RestaurantsController : ControllerBase
     private static string MenuCacheKey(Guid restaurantId) => $"restaurant:{restaurantId}:menu";
 
     [HttpGet]
+    [ETagFilter]
     public async Task<ActionResult<PagedResponse<RestaurantResponse>>> GetAll(
         [FromQuery] string? city,
         [FromQuery] int page = 1,
@@ -99,6 +101,7 @@ public class RestaurantsController : ControllerBase
     }
 
     [HttpGet("{id:guid}/menu")]
+    [ETagFilter]
     public async Task<ActionResult<List<MenuItemResponse>>> GetMenu(
         Guid id,
         [FromQuery] string? category,

@@ -210,6 +210,7 @@ public class OrdersController(
             await _mediator.Publish(domainEvent);
     }
 
+
     private static bool IsUniqueViolation(DbUpdateException ex) =>
         ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation };
 
