@@ -74,7 +74,7 @@ curl -s -X PATCH http://localhost:5224/api/v1/orders/$ORDER/status \
 Illegal jump (skip states) on a **new** order → **`422`** (domain rule, not a 400):
 ```bash
 NEW=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" \
-  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}' | sed -E 's/.*"id":"([^"]+)".*/\1/')
+  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}' | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 curl -s -X PATCH http://localhost:5224/api/v1/orders/$NEW/status \
   -H "Content-Type: application/json" -d '{"status":"Delivered"}' -w "\n%{http_code}\n"
 # → 422 "Invalid State Transition"  (Created cannot jump straight to Delivered)

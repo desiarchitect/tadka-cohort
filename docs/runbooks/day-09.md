@@ -25,7 +25,7 @@ BODY='{"customerId":"'$CID'","restaurantId":"'$RID'","items":[{"menuItemId":"'$I
 ## 2. Happy path — the order settles across Kafka (ADR-027/029)
 
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 sleep 2
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Confirmed
 curl -s http://localhost:5240/payments/$ORDER                                                        # {"status":"Completed",...}
@@ -39,7 +39,7 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT topic, processed_at
 
 Stop the Payment service (Ctrl+C in its terminal, or kill `:5240`). Then place an order:
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 sleep 3
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Created (pending) — NOT lost
 # The message is WAITING in Kafka — consumer-group lag > 0:
@@ -73,7 +73,7 @@ Restart the Payment service with a declining gateway, then place an order:
 $env:Payment__Gateway__Behavior="Failing"; dotnet run --project src/Tadka.Payment.Api
 ```
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 sleep 3
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Cancelled (compensating action via payment-results=Failed)
 ```

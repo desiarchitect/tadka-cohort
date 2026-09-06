@@ -38,7 +38,7 @@ curl -s -o /dev/null -w "POST /orders (with token): %{http_code}\n" -X POST http
 A role check isn't enough; you can only touch **your own** resources.
 ```bash
 # Priya places an order (token from above), grab its id:
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 curl -s -o /dev/null -w "Priya reads her order: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN"   # 200
 
 # Rahul (a different customer) tries to read Priya's order → 403:

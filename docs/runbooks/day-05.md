@@ -48,7 +48,7 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "EXPLAIN ANALYZE SELECT * F
 A read of an order you *just* placed must hit the **primary** (the replica is milliseconds behind). The app routes it correctly:
 ```bash
 ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" \
-  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}' | sed -E 's/.*"id":"([^"]+)".*/\1/')
+  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}' | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 curl -s -o /dev/null -w "GET just-placed order: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER   # 200 (primary, always visible)
 # see the actual replication lag window:
 docker exec tadka-postgres-replica psql -U tadka -d tadka -c "SELECT round(extract(epoch from (now()-pg_last_xact_replay_timestamp()))*1000) AS lag_ms;"   # e.g. ~200 ms
