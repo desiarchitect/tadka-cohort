@@ -2,6 +2,7 @@
 # Phase 0: PostgreSQL only
 # Day 5: + PostgreSQL streaming read replica (ADR-016)
 # Day 6: + Redis (cache-aside + stampede lock + live-tracking pub/sub backplane — ADR-018/019/020)
+#         + `scale-out` profile (3 monolith replicas + nginx LB, ADR-047): `docker compose --profile scale-out up`
 # Day 8: Add Kafka + Zookeeper (first service extraction)
 # Day 13: Add Prometheus + Grafana
 
@@ -74,6 +75,79 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
+    restart: unless-stopped
+
+  # --- scale-out profile (Day 6, ADR-047) -----------------------------------
+  # `docker compose --profile scale-out up -d` — 3 monolith replicas + nginx LB in front.
+  # Not started by a plain `docker compose up` (no profile = infra-only, unchanged from before).
+  # 3 EXPLICIT services (not `--scale`) so nginx has stable hostnames for max_fails/fail_timeout
+  # health-check eviction to track — that's what makes "kill one, watch it evicted" demoable.
+  api-1:
+    build:
+      context: .
+      dockerfile: src/Tadka.Api/Dockerfile
+    profiles: ["scale-out"]
+    environment:
+      INSTANCE_NAME: api-1
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__TadkaDb: "Host=postgres;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=50"
+      ConnectionStrings__TadkaDbReplica: "Host=postgres-replica;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Maximum Pool Size=50"
+      ConnectionStrings__Redis: "redis:6379,abortConnect=false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api-2:
+    build:
+      context: .
+      dockerfile: src/Tadka.Api/Dockerfile
+    profiles: ["scale-out"]
+    environment:
+      INSTANCE_NAME: api-2
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__TadkaDb: "Host=postgres;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=50"
+      ConnectionStrings__TadkaDbReplica: "Host=postgres-replica;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Maximum Pool Size=50"
+      ConnectionStrings__Redis: "redis:6379,abortConnect=false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  api-3:
+    build:
+      context: .
+      dockerfile: src/Tadka.Api/Dockerfile
+    profiles: ["scale-out"]
+    environment:
+      INSTANCE_NAME: api-3
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__TadkaDb: "Host=postgres;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=50"
+      ConnectionStrings__TadkaDbReplica: "Host=postgres-replica;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Maximum Pool Size=50"
+      ConnectionStrings__Redis: "redis:6379,abortConnect=false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx-lb:
+    image: nginx:alpine
+    container_name: tadka-nginx-lb
+    profiles: ["scale-out"]
+    ports:
+      - "8090:80"
+    volumes:
+      - ./docker/nginx/lb.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api-1
+      - api-2
+      - api-3
     restart: unless-stopped
 
 volumes:

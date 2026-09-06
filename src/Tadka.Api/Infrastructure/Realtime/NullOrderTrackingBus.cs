@@ -10,6 +10,9 @@ public sealed class NullOrderTrackingBus : IOrderTrackingBus
 
     public Task PublishAsync(OrderTrackingEvent trackingEvent, CancellationToken ct = default) => Task.CompletedTask;
 
-    public Task<IAsyncDisposable> SubscribeAsync(Guid orderId, Func<OrderTrackingEvent, Task> onEvent, CancellationToken ct = default)
+    public Task<IAsyncDisposable> SubscribeAsync(Guid orderId, Func<SequencedTrackingEvent, Task> onEvent, CancellationToken ct = default)
         => throw new NotSupportedException("Live order tracking requires Redis (ADR-020).");
+
+    public Task<IReadOnlyList<SequencedTrackingEvent>> GetEventsSinceAsync(Guid orderId, long sinceSeq, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<SequencedTrackingEvent>>([]);
 }
