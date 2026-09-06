@@ -68,7 +68,7 @@ docker compose start redis
 Open a stream for an order in **one terminal**:
 ```bash
 ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" \
-  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"'$RID'","items":[{"menuItemId":"'$ITEM'","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}' | sed -E 's/.*"id":"([^"]+)".*/\1/')
+  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"'$RID'","items":[{"menuItemId":"'$ITEM'","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}' | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 curl -N http://localhost:5224/api/v1/orders/$ORDER/events        # streams; leave it open (Windows: curl.exe -N)
 ```
 In a **second terminal**, advance the status:

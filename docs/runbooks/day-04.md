@@ -19,8 +19,8 @@ A flaky network / impatient tap sends `POST /orders` twice. **Without** a key yo
 ```bash
 BODY='{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":2}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}'
 
-curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/order A = \1/'
-curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/order B = \1/'
+curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/order A = \1/'
+curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/order B = \1/'
 # → TWO different ids = two orders, customer billed twice.
 ```
 
@@ -39,7 +39,7 @@ Two people act on the **same** order at the same instant. With the `xmin` concur
 
 ```bash
 # place an order, grab its id
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 # fire two confirmations at once (bash):
 curl -s -o /dev/null -w "A=%{http_code} " -X PATCH http://localhost:5224/api/v1/orders/$ORDER/status -H "Content-Type: application/json" -d '{"status":"Confirmed"}' &
 curl -s -o /dev/null -w "B=%{http_code}\n" -X PATCH http://localhost:5224/api/v1/orders/$ORDER/status -H "Content-Type: application/json" -d '{"status":"Confirmed"}' &

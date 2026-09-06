@@ -97,7 +97,7 @@ $env:Payment__Mode="Async"; $env:Payment__Gateway__Behavior="Failing"
 dotnet run --project src/Tadka.Api
 ```
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 sleep 1
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/status: \1/'   # → Cancelled (PaymentFailed → order.Cancel via the shared event)
 ```

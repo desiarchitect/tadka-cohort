@@ -39,7 +39,7 @@ BODY='{"customerId":"'$CID'","restaurantId":"'$RID'","items":[{"menuItemId":"'$I
 
 `POST /orders` still returns in **ms** (async preserved); the background processor calls the Payment **service** over HTTP; the order converges to `Confirmed`.
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 sleep 1
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'        # Confirmed
 curl -s http://localhost:5240/payments/$ORDER                                                            # {"status":"Completed","gatewayReference":"FAKEPAY-…"}
@@ -60,7 +60,7 @@ curl -s -o /dev/null -w "POST /orders: %{http_code} in %{time_total}s\n" -X POST
 
 With the Payment service **still down**, place an order:
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 sleep 3
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'        # still Created (PENDING — never settled)
 ```
