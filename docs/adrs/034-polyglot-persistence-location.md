@@ -15,7 +15,7 @@ One store can't be ideal for both. Forcing live location into Postgres means a r
 ## Decision
 
 **Use the right store per workload (polyglot persistence):**
-- **Redis-geo for live location.** `GEOADD delivery:agents <lon> <lat> <agentId>` overwrites the previous position (no growing table); `GEOPOS` reads it in sub-ms; `GEOSEARCH` finds nearby agents (O(log N)). Ephemeral by design — if Redis restarts, the next ping (within seconds) repopulates it.
+- **Redis-geo for live location.** `GEOADD delivery:agents <lon> <lat> <agentId>` overwrites the previous position (no growing table); `GEOPOS` reads it in sub-ms. **Assignment is first-available today** (`FirstOrDefault` on `Available`) — we do **not** call `GEOSEARCH`. Nearest-N / `GEOSEARCH` is the named next move, not the shipped code. Ephemeral by design — if Redis restarts, the next ping (within seconds) repopulates it.
 - **Postgres for assignment + history.** `DeliveryAssignment` (order↔agent, status, timestamps) is durable, transactional, and survives restarts.
 
 ## Consequences

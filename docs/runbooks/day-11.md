@@ -1,6 +1,6 @@
 # Day 11 — Runbook: Extract Delivery (3rd service) + the API Gateway
 
-**Branch:** `day-11`  ·  **What's new:** the 3rd service — **`Tadka.Delivery.Api`** (own DB `delivery-db` 5435; **Redis-geo** live location; Kafka-driven assignment, ADR-033/034) — and a **YARP API gateway** (`Tadka.Gateway`, :8080, single entry + edge rate-limit, ADR-035). The order→payment→**delivery** flow is now a **3-participant Saga**. Now 4 services (monolith :5224, payment :5240, delivery :5250) behind one gateway (:8080). Also: **PgBouncer** (`:6432`, ADR-015 landed) — the Day-5 pool-exhaustion promise, paid off now that 2+ app instances actually exist.
+**Branch:** `day-11`  ·  **What's new:** the 3rd service — **`Tadka.Delivery.Api`** (own DB `delivery-db` 5435; **Redis-geo** live location; Kafka-driven assignment, ADR-033/034) — and a **YARP API gateway** (`Tadka.Gateway`, :8080, single entry + edge rate-limit, ADR-035). The order→payment→**delivery** flow is now a **3-participant Saga**. **3 services + gateway** (monolith :5224, payment :5240, delivery :5250, YARP :8080). Restaurant is still in the monolith — the 4th service is Day 12. Also: **PgBouncer** (`:6432`, ADR-015 landed) — the Day-5 pool-exhaustion promise, paid off now that 2+ app instances actually exist.
 
 > New here? Read [`README.md`](README.md). Windows PowerShell → `curl.exe`. Demo password `Password123!`. Deep Saga treatment: `cohort-prep/day-11/saga-deep-dive.md`.
 
@@ -23,7 +23,8 @@ BODY='{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c
 ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 sleep 3
 curl -s http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Confirmed (payment saga)
-curl -s http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"   # {"agentName":"Lakshmi","status":"Assigned",...}
+curl -s http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"   # {"agentName":"<first available>","status":"Assigned",...}
+# Assignment is FirstOrDefault(Available) — NOT nearest / GEOSEARCH. Whoever is Available wins. Reset agents if a prior run left them OnDelivery.
 ```
 Flow: order Created → paid → **Confirmed** → monolith publishes `order-confirmed` (Outbox→Kafka) → **Delivery consumes it → assigns a rider → publishes `delivery-assigned`**. The Saga now has 3 participants — see `saga-deep-dive.md` for choreography-vs-orchestration at this scale.
 
@@ -32,7 +33,10 @@ Flow: order Created → paid → **Confirmed** → monolith publishes `order-con
 ```bash
 curl -s -o /dev/null -X PUT http://localhost:5250/api/v1/deliveries/$ORDER/location -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"latitude":12.95,"longitude":77.64}'
 curl -s http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"   # location: {latitude:12.95, longitude:77.64}
-docker exec tadka-redis redis-cli GEOPOS delivery:agents <agentId>   # the raw geo entry (overwrite-latest, sub-ms)
+# agentId is in the track JSON (do not leave a placeholder). PowerShell:
+#   $track = curl.exe -s http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"
+#   # copy agentId from the JSON, then:
+docker exec tadka-redis redis-cli GEOPOS delivery:agents PASTE_AGENT_ID   # raw geo; overwrite-latest, sub-ms
 ```
 > Live location is **Redis GEOADD** (overwrites the latest, no growing table); the **assignment/history** is durable in the Delivery Postgres. Polyglot persistence — the right store per workload.
 
