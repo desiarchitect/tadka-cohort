@@ -1,0 +1,18 @@
+{
+  "customerId": "c1b2c3d4-0001-4000-8000-000000000001",
+  "restaurantId": "a1b2c3d4-0001-4000-8000-000000000001",
+  "items": [
+    {
+      "menuItemId": "b1b2c3d4-0001-4000-8000-000000000001",
+      "quantity": 2
+    }
+  ],
+  "deliveryAddress": {
+    "line1": "302, Prestige Lakeside",
+    "line2": "Whitefield",
+    "city": "Bangalore",
+    "pincode": "560066",
+    "latitude": 12.97,
+    "longitude": 77.75
+  }
+}
