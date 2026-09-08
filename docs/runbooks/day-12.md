@@ -68,7 +68,9 @@ See also **[decision-mode-matrix.md](decision-mode-matrix.md)**. Day 11 used **I
 - `scripts/backfill-menu-replica.ps1`, `expand-contract-demo.ps1`, `evolution-break.ps1`; `deploy/README.md` (cloud black-box reference).
 
 ## Ports
-monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway :8080 · postgres 5432 / replica 5433 / payment-db 5434 / delivery-db 5435 / restaurant-db 5436 · redis 6379 · kafka 9092 / kafka-ui 8090
+monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway :8080 · postgres 5432 / replica 5433 / payment-db 5434 / delivery-db 5435 / restaurant-db 5436 · redis 6379 · kafka 9092 / kafka-ui 8090 · **PgBouncer 6432** (Day 11, carried forward)
+
+PgBouncer is not a Day-12 teaching beat — the demo lives on `day-11`. The service stays in compose so later days don't lose it.
 
 ## Reset
 `docker compose down -v` clears all volumes (incl. the backfill's synthetic rows).

@@ -185,6 +185,25 @@ services:
       DYNAMIC_CONFIG_ENABLED: "true"
     restart: unless-stopped
 
+  # PgBouncer (Day 11, ADR-015 landed) — transaction-mode pooler in front of the primary.
+  # Carried forward so later days don't silently lose the Day-11 demo.
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: tadka-pgbouncer
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-tadka}:${POSTGRES_PASSWORD:-tadka_local}@postgres:5432/${POSTGRES_DB:-tadka}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "500"
+      DEFAULT_POOL_SIZE: "20"
+      AUTH_TYPE: scram-sha-256
+      ADMIN_USERS: ${POSTGRES_USER:-tadka}
+    restart: unless-stopped
+
   # ── Observability stack (Day 13, ADR-040) — PROFILE: observability (opt-in) ──────────────────────────
   # Instrument once with OpenTelemetry, export OTLP to the Collector, which fans out to Jaeger (traces) +
   # Prometheus (metrics); Grafana sits on top. The Collector is the vendor-neutral SEAM: swap Jaeger for
