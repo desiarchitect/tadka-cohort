@@ -23,7 +23,7 @@ Authentication (ADR-030) answers "who are you?"; now "**what may you do?**" A ro
 
 **RBAC + resource-based ownership, validated independently in every service.**
 - **RBAC:** `[Authorize(Roles=…)]` from the JWT `role` claim gates capabilities (Customer/RestaurantOwner/DeliveryAgent/Admin).
-- **Resource-ownership:** ASP.NET `IAuthorizationHandler`s answer "does *this* user own *this* resource?" — an order's `CustomerId` must match `sub`; a menu's restaurant must match the owner's `restaurantId` claim; `Admin` bypasses. Returns **403** (authenticated but not allowed) vs **401** (not authenticated).
+- **Resource-ownership:** an inline ownership check per controller action answers "does *this* user own *this* resource?" (e.g. `RestaurantsController.OwnsOrAdmin(restaurantId)` — `User.IsAdmin() || User.OwnedRestaurantId() == restaurantId`) — an order's `CustomerId` must match `sub`; a menu's restaurant must match the owner's `restaurantId` claim; `Admin` bypasses. Returns **403** (authenticated but not allowed) vs **401** (not authenticated).
 - **Validation location (sub-decision):** **per-service**, not gateway-only. Options were (a) gateway validates + forwards `X-User-Id`, (b) **every service validates the JWT itself**, (c) hybrid. We choose (b): the Payment service verifies the same token on its own HTTP endpoints. **Defense in depth** — the network is not a trust boundary; if someone reaches a service directly (no gateway exists yet anyway), it's still protected.
 
 ## Consequences
@@ -35,12 +35,12 @@ Authentication (ADR-030) answers "who are you?"; now "**what may you do?**" A ro
 - **ReBAC (OpenFGA/Zanzibar):** for deep relationship graphs (Drive-style sharing); Tadka's relationships are shallow; rejected.
 
 ## Cross-stack equivalents
-ASP.NET roles + `IAuthorizationHandler` ≈ **Spring Security** `@PreAuthorize` + `PermissionEvaluator` · **Node** middleware / **CASL** / NestJS Guards · **Go** middleware. Policy engines (stack-neutral): **OPA/Rego**, **OpenFGA/Zanzibar** (ReBAC), **Casbin** (RBAC/ABAC lib for many languages). RBAC→ABAC→ReBAC is the same escalation ladder everywhere.
+ASP.NET roles (`[Authorize(Roles=...)]`) + an inline ownership check ≈ **Spring Security** `@PreAuthorize` + `PermissionEvaluator` · **Node** middleware / **CASL** / NestJS Guards · **Go** middleware. Policy engines (stack-neutral): **OPA/Rego**, **OpenFGA/Zanzibar** (ReBAC), **Casbin** (RBAC/ABAC lib for many languages). RBAC→ABAC→ReBAC is the same escalation ladder everywhere.
 
 ## References
 - ADR-030 (the JWT claims this reads), ADR-032 (PII access is itself an authz concern), ADR-024 (the Payment service that must validate too)
 - `cohort-prep/day-10/option-space.md`, `break-kit-day-10.md` (403 cross-owner; forged-token rejected per-service)
-- Implementation: monolith authorization policies + `IAuthorizationHandler`s; JWT bearer in the Payment service
+- Implementation: monolith `[Authorize(Roles=...)]` + inline `OwnsOrAdmin`/ownership checks in each controller; JWT bearer in the Payment service
 
 ## Revisit When
 Adopt **ABAC** when a real context rule appears (amount/time/geo); **OPA/PBAC** when policy must be owned/audited outside code or spans many services; **ReBAC (OpenFGA)** if sharing/hierarchy graphs appear. Re-evaluate gateway-vs-service validation when the **API gateway** lands (keep per-service as the floor).
