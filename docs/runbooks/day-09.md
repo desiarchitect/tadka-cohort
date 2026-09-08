@@ -82,7 +82,7 @@ curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]
 
 ```bash
 grep -rn "FakePaymentGateway\|PaymentDbContext\|Domain.Payments\|IPaymentClient" src/Tadka.Api    # nothing — Ordering talks to Payment ONLY via Kafka events
-dotnet test    # 33/33 — monolith 24 (incl. 3 architecture/boundary) + Payment service 9 (incl. 5 PoisonMessageTracker). (Kafka off in tests.)
+dotnet test    # 34/34 — monolith 25 (incl. 3 architecture/boundary) + Payment service 9 (incl. 5 PoisonMessageTracker). (Kafka off in tests.)
 ```
 
 ## 7. Poison messages: silent loss vs quarantine (ADR-050/051)
@@ -132,7 +132,7 @@ The payments count is unchanged after a FULL replay of the entire topic — the 
 - [ ] **Catch-up:** Payment down → order pending + **lag > 0**; restart → order `Confirmed` + **lag 0** (nothing lost).
 - [ ] No `order_id` has more than one payment (idempotent); a `Failing` gateway → order `Cancelled` (saga compensation).
 - [ ] `grep` over the monolith finds no payment internals / no `IPaymentClient` (Kafka-only).
-- [ ] `dotnet test` → **33/33**.
+- [ ] `dotnet test` → **34/34**.
 - [ ] `inject-poison.ps1 -Mode Malformed`: 2x retry then routed to `order-placed.dlq`; a healthy order right after settles normally.
 - [ ] `inject-poison.ps1 -Mode MissingRequiredField`: processes with NO error and NO DLQ entry — the payment's currency silently defaults to `INR`.
 - [ ] Full offset reset + replay: payments count unchanged, zero duplicate `OrderId` rows.
