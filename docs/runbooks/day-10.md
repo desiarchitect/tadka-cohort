@@ -91,7 +91,7 @@ Break (the anti-pattern, made visible): `Payment__LogRawCardNumber=true dotnet r
 
 ## 7. Run the tests
 ```bash
-dotnet test    # 43/43 — monolith 32 (incl. 4 auth/ownership + 4 FieldCipher) + Payment 11 (incl. per-service 401 + 6 CardTokenizer).
+dotnet test    # 44/44 — monolith 33 (incl. 4 auth/ownership + 4 FieldCipher) + Payment 11 (incl. per-service 401 + 6 CardTokenizer).
                # Existing suites pass via a TestAuthHandler (default Admin); X-Test-NoAuth/X-Test-Auth drive 401/403.
 ```
 
@@ -104,7 +104,7 @@ dotnet test    # 43/43 — monolith 32 (incl. 4 auth/ownership + 4 FieldCipher) 
 - [ ] `Demo__EncryptPiiAtRest=false` (fresh volume) shows plaintext instead.
 - [ ] A charge with `cardNumber` stores only `CardToken`/`CardLast4`; no PAN column exists in `payment.payments`.
 - [ ] `Payment__LogRawCardNumber=true` makes the raw card number appear in the log (the anti-pattern, on purpose).
-- [ ] `dotnet test` → **43/43**.
+- [ ] `dotnet test` → **44/44**.
 
 ## Troubleshooting
 - **Login returns 401 for a seeded user:** the startup `AuthSeeder` sets real hashes on first boot; if you migrated before Day 10, `docker compose down -v && docker compose up -d` then `dotnet run` to re-seed.
