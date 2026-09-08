@@ -32,7 +32,7 @@ curl -s http://localhost:5240/payments/$ORDER                                   
 ```
 Flow: `POST /orders` (ms) → outbox row (same txn as the order) → OutboxRelay → Kafka `order-placed` → Payment charges → Kafka `payment-results` → monolith confirms. See it in the order DB:
 ```bash
-docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT topic, processed_at IS NOT NULL AS sent FROM ordering.outbox_messages ORDER BY created_at DESC LIMIT 3;"
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Topic\", \"ProcessedAt\" IS NOT NULL AS sent FROM ordering.outbox_messages ORDER BY \"CreatedAt\" DESC LIMIT 3;"
 ```
 
 ## 3. THE HEADLINE — consumer-down catch-up: messages WAIT, not lost (ADR-027) — heals Day 8
@@ -62,7 +62,7 @@ docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-serv
 
 A redelivered `order-placed` does not double-charge: the **Inbox** (`payment.inbox_messages`) skips a seen message-id, and the **one-charge unique index** on `payment.payments(order_id)` is the hard guard. Replay the topic from the start with a throwaway group and watch only one payment per order:
 ```bash
-docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT order_id, count(*) FROM payment.payments GROUP BY order_id HAVING count(*) > 1;"   # 0 rows — never a double charge
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"OrderId\", count(*) FROM payment.payments GROUP BY \"OrderId\" HAVING count(*) > 1;"   # 0 rows — never a double charge
 ```
 (Deterministic proof is in `Tadka.Payment.Api.Tests` — charge twice → one payment, same reference.)
 
@@ -82,10 +82,12 @@ curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]
 
 ```bash
 grep -rn "FakePaymentGateway\|PaymentDbContext\|Domain.Payments\|IPaymentClient" src/Tadka.Api    # nothing — Ordering talks to Payment ONLY via Kafka events
-dotnet test    # 33/33 — monolith 24 (incl. 3 architecture/boundary) + Payment service 9 (incl. 5 PoisonMessageTracker). (Kafka off in tests.)
+dotnet test    # 34/34 — monolith 25 (incl. 3 architecture/boundary) + Payment service 9 (incl. 5 PoisonMessageTracker). (Kafka off in tests.)
 ```
 
-## 7. Poison messages: silent loss vs quarantine (ADR-050/051)
+## 7. Poison messages: silent loss vs quarantine (ADR-050/051) — **Could-tier / weekday**
+
+> Cut this in class if the clock is tight. The catch-up demo (§3) is the never-cut headline. This beat is weekday lab + `break-kit-day-09.md` Beat 6.
 
 A message that fails processing is NOT retried forever by a plain manual-commit loop —
 `Consumer.Consume()` advances the fetch position on every call regardless of commit, so a failed
@@ -132,7 +134,7 @@ The payments count is unchanged after a FULL replay of the entire topic — the 
 - [ ] **Catch-up:** Payment down → order pending + **lag > 0**; restart → order `Confirmed` + **lag 0** (nothing lost).
 - [ ] No `order_id` has more than one payment (idempotent); a `Failing` gateway → order `Cancelled` (saga compensation).
 - [ ] `grep` over the monolith finds no payment internals / no `IPaymentClient` (Kafka-only).
-- [ ] `dotnet test` → **33/33**.
+- [ ] `dotnet test` → **34/34**.
 - [ ] `inject-poison.ps1 -Mode Malformed`: 2x retry then routed to `order-placed.dlq`; a healthy order right after settles normally.
 - [ ] `inject-poison.ps1 -Mode MissingRequiredField`: processes with NO error and NO DLQ entry — the payment's currency silently defaults to `INR`.
 - [ ] Full offset reset + replay: payments count unchanged, zero duplicate `OrderId` rows.

@@ -47,7 +47,8 @@ curl -s -o /dev/null -w "Rahul reads Priya's order: %{http_code}\n" http://local
 
 # owner1 owns Meghana; editing ANOTHER restaurant's menu → 403 (role RestaurantOwner passes, ownership fails):
 O1=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"owner1@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
-curl -s -o /dev/null -w "owner1 edits OTHER restaurant menu: %{http_code}\n" -X PATCH "http://localhost:5224/api/v1/restaurants/a1b2c3d4-0002-4000-8000-000000000002/menu/$(uuidgen)" -H "Authorization: Bearer $O1" -H "Content-Type: application/json" -d '{"price":{"amount":1}}'   # 403
+# Truffles menu item (owner1 owns Meghana, not Truffles — role passes, ownership fails):
+curl -s -o /dev/null -w "owner1 edits OTHER restaurant menu: %{http_code}\n" -X PATCH "http://localhost:5224/api/v1/restaurants/a1b2c3d4-0002-4000-8000-000000000002/menu/b1b2c3d4-0002-4000-8000-000000000002" -H "Authorization: Bearer $O1" -H "Content-Type: application/json" -d '{"price":{"amount":1}}'   # 403
 ```
 > **401 vs 403:** 401 = not authenticated (no/invalid token); 403 = authenticated but not allowed (wrong owner). `Admin` bypasses ownership.
 
@@ -65,14 +66,16 @@ curl -s -o /dev/null -w "payment GET (with token): %{http_code}\n" http://localh
 ```bash
 curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $RAHUL"   # Rahul sees p***@tadka.test, +91••••••01
 ```
-GDPR right-to-be-forgotten → **anonymise** (not hard-delete — order history must reconcile):
+GDPR right-to-be-forgotten → **anonymise** (not hard-delete — order history must reconcile). **This burns Priya** (`c1b2c3d4-0001…`) for the rest of the day — reset volumes after, or forget a throwaway user.
 ```bash
 curl -s -o /dev/null -w "forget: %{http_code}\n" -X POST http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001/forget -H "Authorization: Bearer $TOKEN"   # 204
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\",\"Email\" FROM identity.users WHERE \"Id\"='c1b2c3d4-0001-4000-8000-000000000001';"   # [deleted], deleted+…@tadka.invalid
 ```
 > **Honest limit:** events already emitted to Kafka / the outbox aren't retro-scrubbed — we **minimise PII in events** (they carry IDs + amounts, not phone/address) and rely on crypto-shredding for the rest.
 
-## 6. Field-level encryption at rest (ADR-045) + payment tokenization (ADR-046)
+## 6. Field-level encryption at rest + payment tokenization — **weekday lab** (later numbered ADR-052 / ADR-053)
+
+> Not in the 120-minute class. ADR-030/031/032 are the day's core. On this branch the encrypt/tokenize tests still count toward **44/44**. Later branches reuse **045** for restaurant-reject; encrypt/tokenize become **052/053**. Do not teach "ADR-045" as encryption after Day 11.
 
 Phone is encrypted at rest with AES-GCM (`Demo:EncryptPiiAtRest`, default `true`):
 ```bash
@@ -91,7 +94,7 @@ Break (the anti-pattern, made visible): `Payment__LogRawCardNumber=true dotnet r
 
 ## 7. Run the tests
 ```bash
-dotnet test    # 43/43 — monolith 32 (incl. 4 auth/ownership + 4 FieldCipher) + Payment 11 (incl. per-service 401 + 6 CardTokenizer).
+dotnet test    # 44/44 — monolith 33 (incl. 4 auth/ownership + 4 FieldCipher) + Payment 11 (incl. per-service 401 + 6 CardTokenizer).
                # Existing suites pass via a TestAuthHandler (default Admin); X-Test-NoAuth/X-Test-Auth drive 401/403.
 ```
 
@@ -104,7 +107,7 @@ dotnet test    # 43/43 — monolith 32 (incl. 4 auth/ownership + 4 FieldCipher) 
 - [ ] `Demo__EncryptPiiAtRest=false` (fresh volume) shows plaintext instead.
 - [ ] A charge with `cardNumber` stores only `CardToken`/`CardLast4`; no PAN column exists in `payment.payments`.
 - [ ] `Payment__LogRawCardNumber=true` makes the raw card number appear in the log (the anti-pattern, on purpose).
-- [ ] `dotnet test` → **43/43**.
+- [ ] `dotnet test` → **44/44**.
 
 ## Troubleshooting
 - **Login returns 401 for a seeded user:** the startup `AuthSeeder` sets real hashes on first boot; if you migrated before Day 10, `docker compose down -v && docker compose up -d` then `dotnet run` to re-seed.

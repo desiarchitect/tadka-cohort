@@ -16,7 +16,7 @@ Storing the high-frequency location pings in a relational database like Postgres
 
 We will adopt a polyglot persistence strategy for the Delivery service, utilizing specialized datastores for specific workloads:
 
-- **Redis (Geospatial) for Live Location:** We will use Redis with its native Geo commands (`GEOADD`, `GEOPOS`, `GEOSEARCH`) to handle location pings. This provides O(log N) performance, bounded memory usage (overwriting previous positions), and sub-millisecond latency. While Redis data is ephemeral, this is acceptable; in the event of a restart, the cache is repopulated by the next incoming pings within seconds.
+- **Redis (Geospatial) for Live Location:** We use Redis Geo commands `GEOADD` / `GEOPOS` for the live ping (O(log N), overwrite-latest, sub-ms). **Assignment itself is first-available** (`FirstOrDefault` on `Available`) — we do **not** call `GEOSEARCH` today. `GEOSEARCH` (nearest-N) is the named next move when proximity matching is earned; do not teach the shipped code as nearest-rider. Redis is ephemeral: a restart is repopulated by the next incoming pings within seconds.
 - **Postgres for Assignment History:** We will use a standard relational database for durable, transactional records such as order assignments, agent status changes, and auditing data.
 
 ## Consequences

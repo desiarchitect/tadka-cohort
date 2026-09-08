@@ -12,6 +12,15 @@ Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself*
 | 4 | Hardening: idempotency, optimistic concurrency (409), domain events; integration tests | [day-04.md](day-04.md) |
 | 5 | Scaling: indexes (EXPLAIN), connection pool, streaming **read replica** + load test | [day-05.md](day-05.md) |
 | 6 | **Redis** cache-aside + stampede lock + invalidation, and **SSE live tracking** over a Redis backplane | [day-06.md](day-06.md) |
+| 7 | Payment brownout → Polly timeout/bulkhead, modular monolith, async off the request path | [day-07.md](day-07.md) |
+| 8 | Extract Payment: own process + own DB + HTTP bridge; fault isolation; temporal-coupling wound | [day-08.md](day-08.md) |
+| 9 | Kafka + Outbox/Inbox + Saga; consumer-down catch-up (messages wait, not lost) | [day-09.md](day-09.md) |
+| 10 | JWT + RBAC + resource ownership + PII (masking, right-to-be-forgotten) | [day-10.md](day-10.md) |
+| 11 | Extract Delivery (3rd service) + YARP gateway + Redis-geo + PgBouncer | [day-11.md](day-11.md) |
+| 12 | Extract Restaurant (4th service) + local read model + zero-downtime backfill | [day-12.md](day-12.md) |
+| 13 | Observability: OpenTelemetry traces/metrics/logs; saga as one trace | [day-13.md](day-13.md) |
+| 14 | Resilience & chaos: circuit breaker, retry, graceful degradation | [day-14.md](day-14.md) |
+| 16 | Load test + cost model + portfolio | [day-16.md](day-16.md) |
 
 > Consolidated demo index (issue → fix → trade-off → captured numbers): the instructor pack's `cohort-prep/DEMOS.md`.
 
@@ -32,7 +41,7 @@ cd tadka
 Each day is a **branch**. Switch to the day you're working on:
 
 ```bash
-git checkout day-03      # day-01 … day-06
+git checkout day-03      # day-01 … day-16 (each branch is that day's code + its runbook)
 ```
 
 ## The shape of every day
