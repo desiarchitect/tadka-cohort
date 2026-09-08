@@ -3,6 +3,7 @@
 # Day 5: + PostgreSQL streaming read replica (ADR-016)
 # Day 6: + Redis (cache-aside + stampede lock + live-tracking pub/sub backplane — ADR-018/019/020)
 # Day 8: Add Kafka + Zookeeper (first service extraction)
+# Day 11: + PgBouncer (ADR-015 landed — multi-instance connection pooling)
 # Day 13: Add Prometheus + Grafana
 
 services:
@@ -157,6 +158,26 @@ services:
       KAFKA_CLUSTERS_0_NAME: tadka
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
       DYNAMIC_CONFIG_ENABLED: "true"
+    restart: unless-stopped
+
+  # PgBouncer (Day 11, ADR-015 landed) — transaction-mode pooler in front of the primary.
+  # Day 5 showed one app instance can't truly exhaust a 10-pool; Day 11 is the first day with
+  # 2+ Tadka.Api instances, so this is where the promised multi-instance demo lands.
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    container_name: tadka-pgbouncer
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-tadka}:${POSTGRES_PASSWORD:-tadka_local}@postgres:5432/${POSTGRES_DB:-tadka}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: "500"
+      DEFAULT_POOL_SIZE: "20"
+      AUTH_TYPE: scram-sha-256
+      ADMIN_USERS: ${POSTGRES_USER:-tadka}
     restart: unless-stopped
 
 volumes:
