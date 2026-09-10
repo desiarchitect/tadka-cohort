@@ -72,12 +72,19 @@ ASPNETCORE_URLS=http://localhost:5225 ConnectionStrings__TadkaDb="Host=localhost
 pwsh docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1 -Urls "http://localhost:5224","http://localhost:5225" -Label "DIRECT :5432" -RequestsPerInstance 150
 # -> some requests fail: Npgsql "sorry, too many clients already" (real Postgres connection-limit error)
 
-# Now point BOTH instances at PgBouncer :6432 instead (same Maximum Pool Size=60) and repeat:
+# Restart BOTH instances pointed at PgBouncer :6432 instead. In transaction-pooling mode, a
+# physical connection can be handed to a different client between statements, so .NET's OWN
+# client-side pooling must be turned off (Pooling=false) — otherwise Npgsql may try to reuse
+# session state PgBouncer has already wiped, producing confusing EF Core errors on anything
+# beyond a stateless read (see docs/database/connection-pooling-guide.md):
+ASPNETCORE_URLS=http://localhost:5224 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api &
+ASPNETCORE_URLS=http://localhost:5225 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api &
+
 pwsh docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1 -Urls "http://localhost:5224","http://localhost:5225" -Label "VIA PGBOUNCER :6432" -RequestsPerInstance 150
 # -> 0 failures. Proof of multiplexing:
 PGPASSWORD=tadka_local docker exec tadka-postgres psql -U tadka -h tadka-pgbouncer -p 5432 -d pgbouncer -c "SHOW POOLS;"
 ```
-> **Captured (real run):** direct-to-Postgres — **296/300 succeeded, 4 failed** with `"sorry, too many clients already"` (an honest ~1.3% failure rate, not inflated for effect). Via PgBouncer — **300/300, twice in a row, 0 failures**; `SHOW POOLS` showed **~110 client-side connections multiplexed onto ~14-16 physical backend connections**. The qualitative story — zero Postgres-level errors through the pooler vs. real ones without it, plus the client-vs-backend connection-count gap — is the lesson, not the exact failure count. Full numbers: ADR-015.
+> **Captured (real run):** direct-to-Postgres — **296/300 succeeded, 4 failed** with `"sorry, too many clients already"` (an honest ~1.3% failure rate, not inflated for effect). Via PgBouncer — **300/300, twice in a row, 0 failures**; `SHOW POOLS` showed **~110 client-side connections multiplexed onto ~14-16 physical backend connections**. The qualitative story — zero Postgres-level errors through the pooler vs. real ones without it, plus the client-vs-backend connection-count gap — is the lesson, not the exact failure count. **Note:** the captured run above used the same `Maximum Pool Size=60` connection string on both legs for a clean apples-to-apples comparison; `Pooling=false` is the config a real service should ship with once it's actually behind PgBouncer, per `connection-pooling-guide.md` — mention this distinction if a student asks why the demo command differs from the production one. Full numbers: ADR-015.
 
 ## 7. Run the tests
 ```bash

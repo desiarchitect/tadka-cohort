@@ -42,7 +42,7 @@ The failure rate direct-to-Postgres is modest (~1.3%) — this is an honest numb
 - Bigger pool alone does **not** fix a slow query — it just delays exhaustion; you'd need an ever-bigger pool. Indexes (ADR-014) fix the root cause.
 
 ### Cost (₹ / effort)
-Zero infra — a connection-string setting. PgBouncer (deferred) is one more process to run/monitor; we pay that only when multiple instances make it necessary.
+Zero infra for the pool-size tuning itself — a connection-string setting. PgBouncer (landed Day 11) is one more process to run/monitor — one extra `docker-compose.yml` service, no code change to run behind it beyond pointing the connection string at `:6432`.
 
 ## Alternatives Considered
 - **Leave the default (100)** — hides the problem on a laptop, then 4 instances × 100 = 400 connections crush a default-configured Postgres. Rejected.

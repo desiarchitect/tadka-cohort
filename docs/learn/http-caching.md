@@ -1,6 +1,6 @@
 # Learn: HTTP caching — the layer *above* Redis
 
-> **Weekday homework for Day 6.** In class we cache inside the app, with Redis. That is one caching layer. There are two more, and they sit *above* your server: the client, and the CDN. This guide is the reading; the code is already on your branch (`ETagFilterAttribute`, ADR-048). One page, one decision each.
+> **Weekday homework for Day 6.** In class we cache inside the app, with Redis. That is one caching layer. There are two more, and they sit *above* your server: the client, and the CDN. This guide is the reading; Tadka's conditional-GET implementation (`ETagFilterAttribute`) isn't on every branch — check `git log --all --oneline -- src/Tadka.Api/Filters/ETagFilterAttribute.cs` if you want to see the actual code. One page, one decision each.
 
 Today's Redis cache answers *"do not ask Postgres the same question twice."* HTTP caching answers a bigger one: *"do not send the same bytes over the network twice."* The cheapest request is the one that never reaches your server.
 
