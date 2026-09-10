@@ -71,8 +71,10 @@ some of that data has already left your database as an immutable event?
 **Java:** Logback ships a `TurboFilter`/custom `PatternLayout` hook for masking PII in log lines
 before they're written — genuinely first-class support, not a bolt-on. For column-level
 encryption, Hibernate's `@ColumnTransformer` or a JPA `AttributeConverter` lets you encrypt and
-decrypt transparently on read/write, the same shape as the EF Core value converter behind
-`identity.users.Phone`'s AES-GCM encryption on this branch (`Demo:EncryptPiiAtRest`, ADR-045).
+decrypt transparently on read/write, the same shape as the EF Core value converter Tadka uses for
+`identity.users.Phone`'s AES-GCM encryption (`Demo:EncryptPiiAtRest`) on the branches that ship it
+— check `git log --all --oneline -- src/Tadka.Api/Infrastructure/Security/FieldCipher.cs` if you
+want to see it; it isn't present on every branch.
 
 **Node:** `pino`'s built-in `redact` option takes a list of paths (`'req.headers.authorization'`,
 `'user.phone'`) and masks them automatically at log time — arguably a cleaner out-of-the-box
