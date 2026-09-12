@@ -2,7 +2,7 @@
 
 **Branch:** `day-06`  ·  **What's new:** Redis **cache-aside** on the menu (with a single-flight stampede lock and delete-on-write invalidation), and **live order tracking** via **Server-Sent Events over a Redis pub/sub backplane**. Now three containers: Postgres primary (5432) + replica (5433) + **Redis (6379)**.
 
-> New here? Read [`README.md`](README.md). Windows PowerShell → use `curl.exe`.
+> New here? Read [`README.md`](README.md). Windows PowerShell → use `curl.exe`. Redis command gym (open in a browser, then the same commands on `tadka-redis`): [`toydemo/day-06-cache-realtime/redis-cli-playground/index.html`](../../toydemo/day-06-cache-realtime/redis-cli-playground/index.html).
 
 ## 1. Run it (postgres + replica + redis)
 

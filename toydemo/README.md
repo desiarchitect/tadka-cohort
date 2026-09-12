@@ -25,6 +25,7 @@ tadka/toydemo/
 │   ├── cursor-pagination-toy/ # real-db.js + optional index.js
 │   └── grpc-vs-rest-toy/      # real-bench.js + optional index.js
 ├── day-06-cache-realtime/
+│   ├── redis-cli-playground/  # index.html — Hour-1 command gym
 │   ├── rate-limiter-toy/
 │   ├── hot-key-stampede-toy/  # real-redis.js
 │   └── stateful-websocket-toy/ # real-chat.js

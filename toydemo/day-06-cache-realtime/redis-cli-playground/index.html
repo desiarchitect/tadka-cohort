@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tadka Day 6 — Redis CLI playground</title>
+  <style>
+    :root {
+      --navy: #1e2a4a;
+      --navy-2: #152038;
+      --cream: #f1ece0;
+      --coral: #e86a52;
+      --gold: #c9974a;
+      --muted: #8a8a7a;
+      --ok: #10b981;
+      --term: #1a1a2e;
+      --green: #00ff41;
+      --amber: #ffb000;
+      --red: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      font-family: Calibri, "Segoe UI", sans-serif;
+      background: var(--cream);
+      color: var(--navy);
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      min-height: 100vh;
+    }
+    header {
+      background: var(--navy);
+      color: #fff;
+      padding: 16px 24px 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+    header .eyebrow { color: var(--coral); font-size: 12px; letter-spacing: 2px; font-weight: 700; margin: 0 0 4px; }
+    header h1 { margin: 0; font-family: Verdana, sans-serif; font-size: 22px; font-weight: 700; }
+    header p { margin: 6px 0 0; color: #c9d0e0; font-size: 14px; max-width: 720px; }
+    .progress { color: var(--gold); font-size: 13px; font-weight: 700; }
+    .banner {
+      background: #fff7e6;
+      border-bottom: 1px solid #ead9b0;
+      padding: 10px 24px;
+      font-size: 13.5px;
+      color: #5c4a22;
+    }
+    .banner strong { color: var(--navy); }
+    .wrap {
+      display: grid;
+      grid-template-columns: minmax(280px, 340px) 1fr;
+      min-height: 0;
+    }
+    @media (max-width: 900px) { .wrap { grid-template-columns: 1fr; } }
+    aside {
+      background: #fff;
+      border-right: 1px solid #ddd6c6;
+      overflow: auto;
+      padding: 12px;
+    }
+    .lab {
+      border: 1px solid #e4ddd0;
+      border-radius: 8px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      cursor: pointer;
+      background: #fff;
+    }
+    .lab.active { border-color: var(--coral); box-shadow: 0 0 0 2px rgba(232,106,82,.15); }
+    .lab.done { border-color: var(--ok); }
+    .lab h3 { margin: 0 0 4px; font-size: 14px; display: flex; gap: 8px; align-items: center; }
+    .tick { width: 16px; height: 16px; border-radius: 50%; border: 2px solid #ccc; flex: none; }
+    .lab.done .tick { background: var(--ok); border-color: var(--ok); }
+    .lab p, .lab .why { margin: 0; font-size: 12.5px; color: #555; }
+    main { display: grid; grid-template-rows: auto 1fr auto; min-height: 0; }
+    .start, .detail {
+      padding: 12px 16px;
+      border-bottom: 1px solid #ddd6c6;
+      background: #fff;
+    }
+    .start pre, .detail pre, .real pre {
+      margin: 8px 0 0;
+      background: var(--navy-2);
+      color: var(--green);
+      padding: 10px 12px;
+      border-radius: 6px;
+      font: 12.5px/1.45 "Courier New", monospace;
+      overflow-x: auto;
+      white-space: pre-wrap;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+    button, .copy {
+      background: var(--navy);
+      color: #fff;
+      border: 0;
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    button.ghost { background: #fff; color: var(--navy); border: 1px solid #ccc; }
+    button.ok { background: var(--ok); }
+    button.warn { background: var(--coral); }
+    .copy { background: var(--gold); color: var(--navy); font-weight: 700; }
+    .term-wrap { background: var(--term); color: var(--green); display: flex; flex-direction: column; min-height: 280px; }
+    .term {
+      flex: 1;
+      overflow: auto;
+      padding: 12px 16px;
+      font: 13.5px/1.5 "Courier New", Consolas, monospace;
+      white-space: pre-wrap;
+    }
+    .term .in { color: #fff; }
+    .term .err { color: var(--red); }
+    .term .meta { color: var(--amber); }
+    .prompt {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      background: #111827;
+      border-top: 1px solid #333;
+    }
+    .prompt span { color: var(--amber); font: 13.5px "Courier New", monospace; }
+    .prompt input {
+      flex: 1;
+      background: transparent;
+      border: 0;
+      color: #fff;
+      font: 13.5px "Courier New", monospace;
+      outline: none;
+    }
+    .sub {
+      background: #0f172a;
+      color: #9ae6b4;
+      font: 12.5px/1.45 "Courier New", monospace;
+      padding: 8px 16px;
+      max-height: 120px;
+      overflow: auto;
+      border-top: 1px solid #333;
+    }
+    .sub h4 { margin: 0 0 4px; color: #94a3b8; font-family: Calibri, sans-serif; font-size: 11px; letter-spacing: 1px; }
+    .trap { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .hint { font-size: 13px; color: #444; margin: 6px 0 0; }
+    .fail { color: var(--coral); font-size: 13px; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <div class="eyebrow">DESI ARCHITECT · DAY 6 · REDIS FUNDAMENTALS</div>
+      <h1>Redis CLI playground</h1>
+      <p>Type commands on the left-hand <code>redis&gt;</code>. Then run the same ones against the real Day-6 container. Practice the five types: string, hash, list, set, sorted set.</p>
+    </div>
+    <div class="progress" id="progress">0 / 9 labs</div>
+  </header>
+  <div class="banner">
+    The prompt is a <strong>teaching subset</strong>, not Redis 7. Strings, hashes, lists, sets, sorted sets, TTL, NX, and SCAN are real enough to learn. Persistence, Lua, Cluster, and GEO (Day 11) are not. Real Redis is <code>tadka-redis</code>.
+  </div>
+  <div class="wrap">
+    <aside id="labs"></aside>
+    <main>
+      <section class="start">
+        <strong>0. Start Redis — same container as class, not a second one</strong>
+        <pre id="start-cmd">docker compose up -d redis
+docker exec tadka-redis redis-cli ping
+docker exec -it tadka-redis redis-cli</pre>
+        <div class="row">
+          <button class="copy" data-copy="docker compose up -d redis">Copy compose</button>
+          <button class="copy" data-copy="docker exec tadka-redis redis-cli ping">Copy ping</button>
+          <button class="ghost" id="mark-start">I got PONG from tadka-redis</button>
+          <span class="hint">Name in use? <code>docker rm -f tadka-redis</code> then compose up again. Windows: no local redis-cli — docker exec is the client.</span>
+        </div>
+      </section>
+      <section class="detail" id="detail"></section>
+      <div class="term-wrap">
+        <div class="term" id="out"></div>
+        <div class="prompt">
+          <span>redis&gt;</span>
+          <input id="cli" autocomplete="off" spellcheck="false" placeholder="PING   ·   help   ·   clear">
+        </div>
+        <div class="sub">
+          <h4>SUBSCRIBER PANE (simulator) — channels you SUBSCRIBE to, plus order:demo for the PUBLISH lab</h4>
+          <div id="feed">(listening on order:demo)</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+<script>
+const RID = "a1b2c3d4-0001-4000-8000-000000000001";
+const MENU_KEY = `restaurant:${RID}:menu`;
+const LOCK_KEY = `lock:${MENU_KEY}`;
+const MENU_JSON = '{"name":"Chicken Biryani","price":299,"currency":"INR"}';
+const STORE_KEY = "tadka-redis-cli-playground-v2";
+
+const LABS = [
+  { id: "start", n: 0, title: "Start Redis", why: "Same compose service as the Day 6 runbook. No second container.",
+    try: "docker exec tadka-redis redis-cli ping", expect: "PONG",
+    real: "docker exec tadka-redis redis-cli ping",
+    body: "From the tadka repo root. Then click “I got PONG”. The simulator PING always works so Hour 1 never blocks on Docker." },
+  { id: "strings", n: 1, title: "String — SET / GET", why: "The cache primitive. Tadka Day 6 stores the menu as one JSON string.",
+    try: "SET greeting namaste\nGET greeting\nTYPE greeting", expect: "OK then namaste then string",
+    real: "docker exec tadka-redis redis-cli SET greeting namaste\ndocker exec tadka-redis redis-cli GET greeting\ndocker exec tadka-redis redis-cli TYPE greeting",
+    body: "SET writes. GET reads. Missing key → (nil). Re-SET replaces the old value. TYPE greeting → string." },
+  { id: "ttl", n: 2, title: "Expiry — EX / TTL / EXPIRE", why: "TTL is the cache safety net if a delete-on-write is missed.",
+    try: "SET key value EX 60\nTTL key\nEXPIRE key 10\nPERSIST key", expect: "TTL is a positive number; -1 after PERSIST; -2 if the key is gone",
+    real: "docker exec tadka-redis redis-cli SET key value EX 60\ndocker exec tadka-redis redis-cli TTL key",
+    body: "EX on SET is how the menu gets a 60s TTL. TTL -1 = no expiry. TTL -2 = key does not exist." },
+  { id: "del", n: 3, title: "EXISTS / DEL", why: "Delete-on-write: restaurant updates the menu → delete the key → next GET is a miss.",
+    try: "SET demo:hello biryani\nEXISTS demo:hello\nDEL demo:hello\nGET demo:hello", expect: "EXISTS 1, DEL 1, GET (nil)",
+    real: "docker exec tadka-redis redis-cli SET demo:hello biryani\ndocker exec tadka-redis redis-cli EXISTS demo:hello\ndocker exec tadka-redis redis-cli DEL demo:hello",
+    body: "DEL returns how many keys were removed. Works on every type, not just strings." },
+  { id: "hash", n: 4, title: "Hash — HSET / HGET / HGETALL", why: "Field-level updates without rewriting a whole JSON blob. Tadka still uses a string so GET is readable.",
+    try: "HSET restaurant:meghana name Meghana city Bangalore orders 0\nHGET restaurant:meghana city\nHINCRBY restaurant:meghana orders 1\nHGETALL restaurant:meghana\nTYPE restaurant:meghana", expect: "city = Bangalore; orders = 1; TYPE hash",
+    real: "docker exec tadka-redis redis-cli HSET restaurant:meghana name Meghana city Bangalore orders 0\ndocker exec tadka-redis redis-cli HGET restaurant:meghana city\ndocker exec tadka-redis redis-cli HINCRBY restaurant:meghana orders 1\ndocker exec tadka-redis redis-cli HGETALL restaurant:meghana\ndocker exec tadka-redis redis-cli TYPE restaurant:meghana",
+    body: "HGET one field. HGETALL every field. HINCRBY is atomic. GET restaurant:meghana → WRONGTYPE (it is not a string)." },
+  { id: "list", n: 5, title: "List — RPUSH / LRANGE / LPOP", why: "Ordered, allows duplicates. The SSE replay buffer on the branch (order:{id}:recent) is a list.",
+    try: "RPUSH order:demo:recent Created\nRPUSH order:demo:recent Confirmed\nRPUSH order:demo:recent Preparing\nLRANGE order:demo:recent 0 -1\nLLEN order:demo:recent\nLINDEX order:demo:recent -1", expect: "Created, Confirmed, Preparing — last index is Preparing",
+    real: "docker exec tadka-redis redis-cli RPUSH order:demo:recent Created Confirmed Preparing\ndocker exec tadka-redis redis-cli LRANGE order:demo:recent 0 -1\ndocker exec tadka-redis redis-cli LLEN order:demo:recent\ndocker exec tadka-redis redis-cli LINDEX order:demo:recent -1",
+    body: "RPUSH appends the tail (timeline). LPUSH prepends the head. LRANGE 0 -1 is the whole list. LPOP / RPOP remove from a end." },
+  { id: "set", n: 6, title: "Set — SADD / SISMEMBER / SINTER", why: "Unique membership. No duplicates, no order. Intersection is a cheap “and” query.",
+    try: "SADD cuisines:bangalore biryani dosa burger\nSADD veg:bangalore dosa idli\nSISMEMBER cuisines:bangalore biryani\nSMEMBERS cuisines:bangalore\nSINTER cuisines:bangalore veg:bangalore\nSCARD cuisines:bangalore", expect: "SISMEMBER 1; SINTER is dosa; SCARD 3",
+    real: "docker exec tadka-redis redis-cli SADD cuisines:bangalore biryani dosa burger\ndocker exec tadka-redis redis-cli SADD veg:bangalore dosa idli\ndocker exec tadka-redis redis-cli SISMEMBER cuisines:bangalore biryani\ndocker exec tadka-redis redis-cli SMEMBERS cuisines:bangalore\ndocker exec tadka-redis redis-cli SINTER cuisines:bangalore veg:bangalore",
+    body: "SADD twice with the same member counts as one. SINTER = cuisines that are also veg." },
+  { id: "zset", n: 7, title: "Sorted set — ZADD / ZRANGE / ZSCORE", why: "Members unique like a set, ordered by score. Leaderboards. Day 11 GEO is this under the hood.",
+    try: "ZADD restaurants:rating 4.6 meghana 4.2 truffles 4.8 vidyarthi\nZRANGE restaurants:rating 0 -1 WITHSCORES\nZREVRANGE restaurants:rating 0 0 WITHSCORES\nZSCORE restaurants:rating meghana\nZRANK restaurants:rating truffles", expect: "lowest rating first; ZREVRANGE top is vidyarthi; ZRANK truffles = 0",
+    real: "docker exec tadka-redis redis-cli ZADD restaurants:rating 4.6 meghana 4.2 truffles 4.8 vidyarthi\ndocker exec tadka-redis redis-cli ZRANGE restaurants:rating 0 -1 WITHSCORES\ndocker exec tadka-redis redis-cli ZREVRANGE restaurants:rating 0 0 WITHSCORES\ndocker exec tadka-redis redis-cli ZSCORE restaurants:rating meghana",
+    body: "ZRANGE is low→high. ZREVRANGE is high→low. ZRANK is 0-based from the bottom. GEOADD (Day 11) is a sorted set of geohashes." },
+  { id: "scan", n: 8, title: "KEYS vs SCAN", why: "KEYS blocks Redis. Fine on this laptop. Suicide at dinner rush. SCAN walks in cursor steps.",
+    try: "SET restaurant:a:menu 1\nSET restaurant:b:menu 2\nKEYS restaurant:*\nSCAN 0 MATCH restaurant:* COUNT 10", expect: "both list the keys; KEYS prints a production warning",
+    real: "docker exec tadka-redis redis-cli KEYS restaurant:*\ndocker exec tadka-redis redis-cli SCAN 0 MATCH restaurant:*",
+    body: "Class demos may use KEYS. Never ship KEYS *." },
+  { id: "menu", n: 9, title: "Tadka menu key (string)", why: "Exact key shape from the runbook. JSON string so redis-cli GET is readable (not a hash, not MessagePack).",
+    try: `SET ${MENU_KEY} '${MENU_JSON}' EX 60\nGET ${MENU_KEY}\nTTL ${MENU_KEY}\nTYPE ${MENU_KEY}`, expect: "JSON back, TTL ~60, TYPE string",
+    real: `docker exec tadka-redis redis-cli SET ${MENU_KEY} "${MENU_JSON.replace(/"/g, '\\"')}" EX 60\ndocker exec tadka-redis redis-cli GET ${MENU_KEY}\ndocker exec tadka-redis redis-cli TTL ${MENU_KEY}`,
+    body: "Meghana = " + RID + ". After the live menu GET in class this key appears for real. Compare with the hash lab: one blob vs fields." },
+  { id: "lock", n: 10, title: "SET NX EX — stampede lock", why: "ADR-019. NX = set only if missing (one winner). EX = crashed holder cannot deadlock.",
+    try: `SET ${LOCK_KEY} token-A NX EX 10\nSET ${LOCK_KEY} token-B NX EX 10\nGET ${LOCK_KEY}`, expect: "first OK, second (nil), GET token-A",
+    real: `docker exec tadka-redis redis-cli SET ${LOCK_KEY} token-A NX EX 10\ndocker exec tadka-redis redis-cli SET ${LOCK_KEY} token-B NX EX 10\ndocker exec tadka-redis redis-cli GET ${LOCK_KEY}`,
+    body: "If lock TTL < refresh time, two refreshers can race — tolerable, not a herd. Token + owns-it check on DEL so you never delete someone else’s lock." },
+  { id: "pubsub", n: 11, title: "PUBLISH — SSE backplane peek", why: "ADR-020. Status change publishes; the SSE endpoint subscribes. Fire-and-forget — if nobody is listening, the message is gone.",
+    try: "SUBSCRIBE order:demo\nPUBLISH order:demo Confirmed", expect: "subscriber pane shows Confirmed",
+    real: "Terminal A: docker exec -it tadka-redis redis-cli SUBSCRIBE order:demo\nTerminal B: docker exec tadka-redis redis-cli PUBLISH order:demo Confirmed",
+    body: "Real SUBSCRIBE needs -it and a second terminal. The pane below fakes the subscriber. Not fine for payments. Pub/sub is not a data structure you GET later." },
+  { id: "trap", n: 12, title: "Trap — do not cache order status", why: "Read:write is low and staleness causes duplicate orders. Menu = AP. Order/payment = not cached.",
+    try: "(decision, not a command)", expect: "Refuse to cache it",
+    real: "(there is nothing to run — this is the eligibility matrix)",
+    body: "Customer places an order, cache says Created, restaurant confirms, customer refreshes, cache still says Created, they order again.",
+    trap: true }
+];
+
+const store = new Map();
+const subs = new Set(["order:demo"]);
+const history = [];
+let histIdx = -1;
+let done = loadDone();
+let active = 0;
+const seen = { keys: false, scan: false, nxOk: false, nxNil: false, published: false, greeting: false, ttl: false, del: false, menu: false, hash: false, list: false, set: false, zset: false };
+const WRONGTYPE = "(error) WRONGTYPE Operation against a key holding the wrong kind of value";
+
+function loadDone() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY) || "[]"); } catch { return []; }
+}
+function saveDone() { localStorage.setItem(STORE_KEY, JSON.stringify(done)); }
+
+function now() { return Date.now(); }
+function entry(k) {
+  const e = store.get(k);
+  if (!e) return null;
+  if (e.expireAt != null && now() >= e.expireAt) { store.delete(k); return null; }
+  return e;
+}
+function glob(pat) {
+  let r = "^";
+  for (const c of pat) {
+    if (c === "*") r += ".*";
+    else if (c === "?") r += ".";
+    else r += /[.*+?^${}()|[\]\\]/.test(c) ? "\\" + c : c;
+  }
+  return new RegExp(r + "$");
+}
+function tokenize(s) {
+  const out = [];
+  let i = 0;
+  while (i < s.length) {
+    while (s[i] === " ") i++;
+    if (i >= s.length) break;
+    if (s[i] === '"' || s[i] === "'") {
+      const q = s[i++];
+      let buf = "";
+      while (i < s.length && s[i] !== q) {
+        if (s[i] === "\\" && i + 1 < s.length) { buf += s[i + 1]; i += 2; continue; }
+        buf += s[i++];
+      }
+      if (s[i] === q) i++;
+      out.push(buf);
+    } else {
+      let buf = "";
+      while (i < s.length && s[i] !== " ") buf += s[i++];
+      out.push(buf);
+    }
+  }
+  return out;
+}
+function bulk(arr) {
+  if (!arr.length) return "(empty array)";
+  return arr.map((x, i) => `${i + 1}) "${x}"`).join("\n");
+}
+function ttlOf(e) {
+  if (!e) return -2;
+  if (e.expireAt == null) return -1;
+  return Math.max(0, Math.ceil((e.expireAt - now()) / 1000));
+}
+function empty(type) {
+  if (type === "string") return "";
+  if (type === "list") return [];
+  if (type === "hash") return {};
+  if (type === "set") return new Set();
+  if (type === "zset") return new Map();
+}
+function need(k, type) {
+  const e = entry(k);
+  if (!e) return null;
+  if (e.type && e.type !== type) return { err: WRONGTYPE };
+  if (!e.type) e.type = type;
+  return e;
+}
+function ensure(k, type) {
+  const e = entry(k);
+  if (!e) {
+    const fresh = { type, expireAt: null, value: empty(type) };
+    store.set(k, fresh);
+    return fresh;
+  }
+  if (e.type !== type) return { err: WRONGTYPE };
+  return e;
+}
+function lrange(arr, start, stop) {
+  const n = arr.length;
+  if (start < 0) start = n + start;
+  if (stop < 0) stop = n + stop;
+  start = Math.max(0, start);
+  stop = Math.min(n - 1, stop);
+  if (n === 0 || start > stop) return [];
+  return arr.slice(start, stop + 1);
+}
+function zsorted(map) {
+  return [...map.entries()].sort((a, b) => a[1] === b[1] ? (a[0] < b[0] ? -1 : 1) : a[1] - b[1]);
+}
+
+function run(line) {
+  const t = tokenize(line.trim());
+  if (!t.length) return "";
+  const cmd = t[0].toUpperCase();
+  const a = t.slice(1);
+  switch (cmd) {
+    case "PING": return a[0] || "PONG";
+    case "ECHO": return a[0] ?? "(error) ERR wrong number of arguments";
+    case "HELP": return helpText(a[0]);
+    case "CLEAR": document.getElementById("out").textContent = ""; return { silent: true };
+    case "FLUSHDB": store.clear(); return "OK  (simulator only — tadka-redis is untouched)";
+    case "SET": return cmdSet(a);
+    case "GET": {
+      if (!a[0]) return "(error) ERR wrong number of arguments";
+      const e = entry(a[0]);
+      if (!e) return "(nil)";
+      if (e.type !== "string") return WRONGTYPE;
+      if (a[0] === "greeting" && e.value === "namaste") seen.greeting = true;
+      if (a[0] === MENU_KEY) seen.menu = true;
+      return e.value;
+    }
+    case "DEL": {
+      let n = 0;
+      for (const k of a) if (entry(k) && store.delete(k)) n++;
+      if (n) seen.del = true;
+      return n;
+    }
+    case "EXISTS": {
+      let n = 0;
+      for (const k of a) if (entry(k)) n++;
+      return n;
+    }
+    case "TTL": return ttlOf(entry(a[0]));
+    case "PTTL": {
+      const e = entry(a[0]);
+      if (!e) return -2;
+      if (e.expireAt == null) return -1;
+      return Math.max(0, e.expireAt - now());
+    }
+    case "EXPIRE": {
+      const e = entry(a[0]);
+      const sec = Number(a[1]);
+      if (!e || !Number.isFinite(sec)) return 0;
+      e.expireAt = now() + sec * 1000;
+      seen.ttl = true;
+      return 1;
+    }
+    case "PERSIST": {
+      const e = entry(a[0]);
+      if (!e || e.expireAt == null) return 0;
+      e.expireAt = null;
+      return 1;
+    }
+    case "TYPE": { const e = entry(a[0]); return e ? e.type : "none"; }
+    case "STRLEN": {
+      const e = entry(a[0]);
+      if (!e) return 0;
+      if (e.type !== "string") return WRONGTYPE;
+      return e.value.length;
+    }
+    case "INCR": {
+      if (!a[0]) return "(error) ERR wrong number of arguments";
+      const e = entry(a[0]);
+      if (e && e.type !== "string") return WRONGTYPE;
+      const n = e ? Number(e.value) : 0;
+      if (e && !Number.isFinite(n)) return "(error) ERR value is not an integer";
+      store.set(a[0], { type: "string", value: String(n + 1), expireAt: e ? e.expireAt : null });
+      return n + 1;
+    }
+    case "HSET": return cmdHset(a);
+    case "HGET": {
+      if (a.length < 2) return "(error) ERR wrong number of arguments";
+      const e = need(a[0], "hash");
+      if (e && e.err) return e.err;
+      if (!e) return "(nil)";
+      const v = e.value[a[1]];
+      if (v != null && a[0] === "restaurant:meghana") seen.hash = true;
+      return v == null ? "(nil)" : v;
+    }
+    case "HGETALL": {
+      const e = need(a[0], "hash");
+      if (e && e.err) return e.err;
+      if (!e) return "(empty array)";
+      const pairs = [];
+      for (const [f, v] of Object.entries(e.value)) { pairs.push(f, v); }
+      if (pairs.length && a[0] === "restaurant:meghana") seen.hash = true;
+      return bulk(pairs);
+    }
+    case "HDEL": {
+      const e = need(a[0], "hash");
+      if (e && e.err) return e.err;
+      if (!e) return 0;
+      let n = 0;
+      for (const f of a.slice(1)) if (f in e.value) { delete e.value[f]; n++; }
+      return n;
+    }
+    case "HEXISTS": {
+      const e = need(a[0], "hash");
+      if (e && e.err) return e.err;
+      return e && a[1] in e.value ? 1 : 0;
+    }
+    case "HKEYS": {
+      const e = need(a[0], "hash");
+      if (e && e.err) return e.err;
+      return e ? bulk(Object.keys(e.value)) : "(empty array)";
+    }
+    case "HVALS": {
+      const e = need(a[0], "hash");
+      if (e && e.err) return e.err;
+      return e ? bulk(Object.values(e.value)) : "(empty array)";
+    }
+    case "HLEN": {
+      const e = need(a[0], "hash");
+      if (e && e.err) return e.err;
+      return e ? Object.keys(e.value).length : 0;
+    }
+    case "HINCRBY": {
+      if (a.length < 3) return "(error) ERR wrong number of arguments";
+      const e = ensure(a[0], "hash");
+      if (e.err) return e.err;
+      const cur = Number(e.value[a[1]] || 0);
+      const inc = Number(a[2]);
+      if (!Number.isInteger(cur) || !Number.isInteger(inc)) return "(error) ERR value is not an integer";
+      e.value[a[1]] = String(cur + inc);
+      if (a[0] === "restaurant:meghana") seen.hash = true;
+      return cur + inc;
+    }
+    case "LPUSH": return cmdPush(a, "left");
+    case "RPUSH": return cmdPush(a, "right");
+    case "LPOP": return cmdPop(a, "left");
+    case "RPOP": return cmdPop(a, "right");
+    case "LRANGE": {
+      if (a.length < 3) return "(error) ERR wrong number of arguments";
+      const e = need(a[0], "list");
+      if (e && e.err) return e.err;
+      if (!e) return "(empty array)";
+      const items = lrange(e.value, Number(a[1]), Number(a[2]));
+      if (items.length && a[0] === "order:demo:recent") seen.list = true;
+      return bulk(items);
+    }
+    case "LLEN": {
+      const e = need(a[0], "list");
+      if (e && e.err) return e.err;
+      return e ? e.value.length : 0;
+    }
+    case "LINDEX": {
+      const e = need(a[0], "list");
+      if (e && e.err) return e.err;
+      if (!e) return "(nil)";
+      let i = Number(a[1]);
+      if (i < 0) i = e.value.length + i;
+      const v = e.value[i];
+      if (v != null && a[0] === "order:demo:recent") seen.list = true;
+      return v == null ? "(nil)" : v;
+    }
+    case "SADD": return cmdSadd(a);
+    case "SREM": {
+      const e = need(a[0], "set");
+      if (e && e.err) return e.err;
+      if (!e) return 0;
+      let n = 0;
+      for (const m of a.slice(1)) if (e.value.delete(m)) n++;
+      return n;
+    }
+    case "SISMEMBER": {
+      const e = need(a[0], "set");
+      if (e && e.err) return e.err;
+      const yes = !!(e && e.value.has(a[1]));
+      if (yes && a[0].startsWith("cuisines:")) seen.set = true;
+      return yes ? 1 : 0;
+    }
+    case "SMEMBERS": {
+      const e = need(a[0], "set");
+      if (e && e.err) return e.err;
+      if (!e) return "(empty array)";
+      if (e.value.size && a[0].startsWith("cuisines:")) seen.set = true;
+      return bulk([...e.value]);
+    }
+    case "SCARD": {
+      const e = need(a[0], "set");
+      if (e && e.err) return e.err;
+      return e ? e.value.size : 0;
+    }
+    case "SINTER": {
+      if (!a.length) return "(error) ERR wrong number of arguments";
+      const sets = a.map(k => need(k, "set"));
+      if (sets.some(s => s && s.err)) return WRONGTYPE;
+      const first = sets[0] && sets[0].value ? sets[0].value : new Set();
+      const out = [...first].filter(m => sets.every(s => s && s.value.has(m)));
+      if (out.length) seen.set = true;
+      return bulk(out);
+    }
+    case "ZADD": return cmdZadd(a);
+    case "ZRANGE": return cmdZrange(a, false);
+    case "ZREVRANGE": return cmdZrange(a, true);
+    case "ZSCORE": {
+      const e = need(a[0], "zset");
+      if (e && e.err) return e.err;
+      if (!e || !e.value.has(a[1])) return "(nil)";
+      seen.zset = true;
+      return String(e.value.get(a[1]));
+    }
+    case "ZRANK": {
+      const e = need(a[0], "zset");
+      if (e && e.err) return e.err;
+      if (!e || !e.value.has(a[1])) return "(nil)";
+      const rank = zsorted(e.value).findIndex(([m]) => m === a[1]);
+      seen.zset = true;
+      return rank;
+    }
+    case "ZREM": {
+      const e = need(a[0], "zset");
+      if (e && e.err) return e.err;
+      if (!e) return 0;
+      let n = 0;
+      for (const m of a.slice(1)) if (e.value.delete(m)) n++;
+      return n;
+    }
+    case "ZCARD": {
+      const e = need(a[0], "zset");
+      if (e && e.err) return e.err;
+      return e ? e.value.size : 0;
+    }
+    case "KEYS": {
+      seen.keys = true;
+      const pat = glob(a[0] || "*");
+      const keys = [...store.keys()].filter(k => entry(k) && pat.test(k));
+      return "(teaching) KEYS blocks Redis in production — use SCAN.\n" + bulk(keys);
+    }
+    case "SCAN": {
+      seen.scan = true;
+      let match = "*", count = 10;
+      for (let i = 1; i < a.length; i++) {
+        const o = (a[i] || "").toUpperCase();
+        if (o === "MATCH") match = a[++i];
+        else if (o === "COUNT") count = Number(a[++i]) || 10;
+      }
+      const pat = glob(match);
+      const keys = [...store.keys()].filter(k => entry(k) && pat.test(k)).slice(0, count);
+      return `1) "0"\n2) ${keys.length ? "\n" + keys.map((k, i) => `   ${i + 1}) "${k}"`).join("\n") : "(empty array)"}`;
+    }
+    case "SUBSCRIBE":
+      a.forEach(ch => subs.add(ch));
+      renderFeed(`subscribe ${a.join(" ")}`);
+      return bulk(["subscribe", a[0] || "", String(subs.size)]);
+    case "PUBLISH": {
+      const ch = a[0], msg = a.slice(1).join(" ");
+      if (!ch) return "(error) ERR wrong number of arguments";
+      seen.published = true;
+      if (subs.has(ch)) renderFeed(`message ${ch} ${msg}`);
+      return subs.has(ch) ? 1 : 0;
+    }
+    case "GEOADD":
+    case "GEOPOS":
+    case "GEOSEARCH":
+      return "(teaching) GEO is Day 11 — live rider location. Not in this playground.";
+    default:
+      return `(error) ERR unknown command '${cmd}', with args beginning with: ${a[0] || ""}`;
+  }
+}
+
+function cmdSet(a) {
+  if (a.length < 2) return "(error) ERR wrong number of arguments";
+  const key = a[0];
+  let value = a[1];
+  let nx = false, xx = false, ex = null;
+  for (let i = 2; i < a.length; i++) {
+    const o = a[i].toUpperCase();
+    if (o === "NX") nx = true;
+    else if (o === "XX") xx = true;
+    else if (o === "EX") { ex = Number(a[++i]) * 1000; }
+    else if (o === "PX") { ex = Number(a[++i]); }
+    else value += " " + a[i];
+  }
+  const exists = !!entry(key);
+  if (nx && exists) { if (key.startsWith("lock:")) seen.nxNil = true; return "(nil)"; }
+  if (xx && !exists) return "(nil)";
+  store.set(key, { type: "string", value, expireAt: ex != null ? now() + ex : null });
+  if (nx) seen.nxOk = true;
+  if (ex != null) seen.ttl = true;
+  if (key === "greeting" && value === "namaste") seen.greeting = true;
+  if (key === MENU_KEY) seen.menu = true;
+  return "OK";
+}
+
+function cmdHset(a) {
+  if (a.length < 3 || (a.length - 1) % 2 !== 0) return "(error) ERR wrong number of arguments";
+  const e = ensure(a[0], "hash");
+  if (e.err) return e.err;
+  let added = 0;
+  for (let i = 1; i < a.length; i += 2) {
+    if (!(a[i] in e.value)) added++;
+    e.value[a[i]] = a[i + 1];
+  }
+  if (a[0] === "restaurant:meghana") seen.hash = true;
+  return added;
+}
+
+function cmdPush(a, side) {
+  if (a.length < 2) return "(error) ERR wrong number of arguments";
+  const e = ensure(a[0], "list");
+  if (e.err) return e.err;
+  const items = a.slice(1);
+  if (side === "left") e.value.unshift(...items.reverse());
+  else e.value.push(...items);
+  if (a[0] === "order:demo:recent") seen.list = true;
+  return e.value.length;
+}
+
+function cmdPop(a, side) {
+  const e = need(a[0], "list");
+  if (e && e.err) return e.err;
+  if (!e || !e.value.length) return "(nil)";
+  return side === "left" ? e.value.shift() : e.value.pop();
+}
+
+function cmdSadd(a) {
+  if (a.length < 2) return "(error) ERR wrong number of arguments";
+  const e = ensure(a[0], "set");
+  if (e.err) return e.err;
+  let n = 0;
+  for (const m of a.slice(1)) {
+    const before = e.value.size;
+    e.value.add(m);
+    if (e.value.size > before) n++;
+  }
+  if (a[0].startsWith("cuisines:") || a[0].startsWith("veg:")) seen.set = true;
+  return n;
+}
+
+function cmdZadd(a) {
+  if (a.length < 3 || (a.length - 1) % 2 !== 0) return "(error) ERR wrong number of arguments";
+  const e = ensure(a[0], "zset");
+  if (e.err) return e.err;
+  let added = 0;
+  for (let i = 1; i < a.length; i += 2) {
+    const score = Number(a[i]), member = a[i + 1];
+    if (!Number.isFinite(score)) return "(error) ERR value is not a valid float";
+    if (!e.value.has(member)) added++;
+    e.value.set(member, score);
+  }
+  if (a[0] === "restaurants:rating") seen.zset = true;
+  return added;
+}
+
+function cmdZrange(a, rev) {
+  if (a.length < 3) return "(error) ERR wrong number of arguments";
+  const e = need(a[0], "zset");
+  if (e && e.err) return e.err;
+  if (!e) return "(empty array)";
+  const withScores = a.some(x => String(x).toUpperCase() === "WITHSCORES");
+  let arr = zsorted(e.value);
+  if (rev) arr = arr.slice().reverse();
+  const slice = lrange(arr, Number(a[1]), Number(a[2]));
+  if (slice.length) seen.zset = true;
+  const out = [];
+  for (const [m, s] of slice) {
+    out.push(m);
+    if (withScores) out.push(String(s));
+  }
+  return bulk(out);
+}
+
+function helpText(c) {
+  const all = `Supported:
+  string  SET GET INCR TTL EXPIRE PERSIST
+  hash    HSET HGET HGETALL HDEL HEXISTS HKEYS HVALS HLEN HINCRBY
+  list    LPUSH RPUSH LPOP RPOP LRANGE LLEN LINDEX
+  set     SADD SREM SISMEMBER SMEMBERS SCARD SINTER
+  zset    ZADD ZRANGE ZREVRANGE ZSCORE ZRANK ZREM ZCARD
+  keys    DEL EXISTS TYPE KEYS SCAN
+  pubsub  SUBSCRIBE PUBLISH
+  misc    PING FLUSHDB CLEAR HELP
+SET key value [EX seconds] [NX|XX]
+KEYS pattern     (dev only — blocks Redis)
+GEOADD is Day 11 — not here.`;
+  if (!c) return all;
+  return all;
+}
+
+function renderFeed(line) {
+  const el = document.getElementById("feed");
+  const prev = el.textContent === "(listening on order:demo)" ? "" : el.textContent + "\n";
+  el.textContent = (prev + line).split("\n").slice(-12).join("\n");
+}
+
+function print(line, cls) {
+  const out = document.getElementById("out");
+  const span = document.createElement("div");
+  if (cls) span.className = cls;
+  span.textContent = line;
+  out.appendChild(span);
+  out.scrollTop = out.scrollHeight;
+}
+
+function execLine(line) {
+  if (!line.trim()) return;
+  history.push(line);
+  histIdx = history.length;
+  print("redis> " + line, "in");
+  const res = run(line);
+  if (res && res.silent) return;
+  const text = String(res);
+  print(text, text.startsWith("(error)") ? "err" : (text.startsWith("(teaching)") ? "meta" : ""));
+  maybeComplete();
+}
+
+function maybeComplete() {
+  if (seen.greeting) mark("strings");
+  if (seen.ttl) mark("ttl");
+  if (seen.del) mark("del");
+  if (seen.hash) mark("hash");
+  if (seen.list) mark("list");
+  if (seen.set) mark("set");
+  if (seen.zset) mark("zset");
+  if (seen.keys && seen.scan) mark("scan");
+  if (seen.menu) mark("menu");
+  if (seen.nxOk && seen.nxNil) mark("lock");
+  if (seen.published) mark("pubsub");
+  paintLabs();
+}
+
+function mark(id) {
+  if (!done.includes(id)) { done.push(id); saveDone(); }
+}
+
+function paintLabs() {
+  const root = document.getElementById("labs");
+  root.innerHTML = "";
+  LABS.forEach((lab, i) => {
+    const d = document.createElement("div");
+    d.className = "lab" + (done.includes(lab.id) ? " done" : "") + (i === active ? " active" : "");
+    d.innerHTML = `<h3><span class="tick"></span>${lab.n}. ${lab.title}</h3><p class="why">${lab.why}</p>`;
+    d.onclick = () => { active = i; paintLabs(); paintDetail(); };
+    root.appendChild(d);
+  });
+  document.getElementById("progress").textContent = `${done.length} / ${LABS.length} labs`;
+}
+
+function paintDetail() {
+  const lab = LABS[active];
+  const el = document.getElementById("detail");
+  el.innerHTML = `<strong>${lab.n}. ${lab.title}</strong>
+    <p class="hint">${lab.body}</p>
+    <p class="hint"><em>Why:</em> ${lab.why}</p>
+    <pre>${lab.try}</pre>
+    <div class="row">
+      <button class="copy" data-copy="${encodeURIComponent(lab.try)}">Try in simulator</button>
+      <button class="copy" data-copy="${encodeURIComponent(lab.real)}">Copy for tadka-redis</button>
+    </div>
+    <p class="hint"><em>Expect:</em> ${lab.expect}</p>
+    ${lab.trap ? `<div class="trap">
+      <button class="warn" id="trap-yes">Yes — SET order:42:status Created EX 30</button>
+      <button class="ok" id="trap-no">No — never cache order status</button>
+    </div><div id="trap-msg"></div>` : ""}`;
+  el.querySelectorAll(".copy").forEach(b => {
+    const raw = decodeURIComponent(b.getAttribute("data-copy"));
+    b.onclick = ev => {
+      ev.preventDefault();
+      if (b.textContent.includes("simulator")) {
+        raw.split("\n").forEach(line => {
+          if (line.startsWith("docker") || line.startsWith("Terminal") || line.startsWith("(")) return;
+          execLine(line);
+        });
+      } else {
+        navigator.clipboard.writeText(raw).catch(() => {});
+        b.textContent = "Copied";
+        setTimeout(() => b.textContent = "Copy for tadka-redis", 900);
+      }
+    };
+  });
+  const yes = document.getElementById("trap-yes");
+  const no = document.getElementById("trap-no");
+  if (yes) yes.onclick = () => {
+    document.getElementById("trap-msg").innerHTML = `<p class="fail">That is the failure mode. Cache still says Created, customer orders again, you have a duplicate. Thirty seconds is an eternity for a hungry customer. Do not cache order status or payment.</p>`;
+  };
+  if (no) no.onclick = () => { mark("trap"); paintLabs(); document.getElementById("trap-msg").innerHTML = `<p class="hint">Correct. Menu = AP (60s stale is harmless). Order / payment = not cached.</p>`; };
+}
+
+document.getElementById("cli").addEventListener("keydown", e => {
+  const input = e.target;
+  if (e.key === "Enter") { execLine(input.value); input.value = ""; }
+  else if (e.key === "ArrowUp") {
+    if (!history.length) return;
+    histIdx = Math.max(0, histIdx - 1);
+    input.value = history[histIdx];
+    e.preventDefault();
+  } else if (e.key === "ArrowDown") {
+    histIdx = Math.min(history.length, histIdx + 1);
+    input.value = history[histIdx] || "";
+    e.preventDefault();
+  }
+});
+
+document.querySelectorAll("button.copy[data-copy]").forEach(b => {
+  b.addEventListener("click", () => {
+    navigator.clipboard.writeText(b.getAttribute("data-copy")).catch(() => {});
+  });
+});
+document.getElementById("mark-start").onclick = () => { mark("start"); paintLabs(); };
+
+print("Tadka Day 6 Redis playground. Type PING or help. This is not Redis 7.", "meta");
+paintLabs();
+paintDetail();
+document.getElementById("cli").focus();
+</script>
+</body>
+</html>
