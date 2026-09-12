@@ -146,6 +146,11 @@
     .trap { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
     .hint { font-size: 13px; color: #444; margin: 6px 0 0; }
     .fail { color: var(--coral); font-size: 13px; margin-top: 6px; }
+    table.cmds { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 13px; }
+    table.cmds th { text-align: left; font-size: 11px; letter-spacing: 0.6px; color: #6b6458; padding: 4px 8px 4px 0; border-bottom: 1px solid #e4ddd0; }
+    table.cmds td { vertical-align: top; padding: 6px 10px 6px 0; border-bottom: 1px solid #f0ebe3; }
+    table.cmds code { font: 12px/1.4 "Courier New", monospace; color: var(--navy); background: #efe9dc; padding: 1px 5px; border-radius: 3px; white-space: nowrap; }
+    table.cmds .reply { color: #3d6b4f; font: 12px/1.4 "Courier New", monospace; white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -172,7 +177,7 @@ docker exec -it tadka-redis redis-cli</pre>
           <button class="copy" data-copy="docker compose up -d redis">Copy compose</button>
           <button class="copy" data-copy="docker exec tadka-redis redis-cli ping">Copy ping</button>
           <button class="ghost" id="mark-start">I got PONG from tadka-redis</button>
-          <span class="hint">Name in use? <code>docker rm -f tadka-redis</code> then compose up again. Windows: no local redis-cli — docker exec is the client.</span>
+          <span class="hint">Name already in use and healthy? Skip compose — Redis is already running. <code>docker exec tadka-redis redis-cli ping</code>. Only <code>docker rm -f tadka-redis</code> if you want this folder’s compose to own it. Windows: no local redis-cli.</span>
         </div>
       </section>
       <section class="detail" id="detail"></section>
@@ -197,58 +202,120 @@ const LOCK_KEY = `lock:${MENU_KEY}`;
 const MENU_JSON = '{"name":"Chicken Biryani","price":299,"currency":"INR"}';
 const STORE_KEY = "tadka-redis-cli-playground-v2";
 
+const CMD = {
+  PING:     { syn: "PING", does: "Asks Redis if the process is accepting commands. Use this before anything else.", reply: "PONG" },
+  SET:      { syn: "SET key value [EX seconds] [NX|XX]", does: "Write a string. Overwrites the old value. EX = die in N seconds. NX = set only if the key is missing (the stampede lock). XX = set only if it already exists.", reply: "OK, or (nil) if NX/XX refused" },
+  GET:      { syn: "GET key", does: "Read a string. Only works on strings — GET of a hash/list/set is WRONGTYPE.", reply: "the value, or (nil) on a miss" },
+  TYPE:     { syn: "TYPE key", does: "What kind of value is this key? string, hash, list, set, zset, or none.", reply: "string | hash | list | set | zset | none" },
+  TTL:      { syn: "TTL key", does: "Seconds left until the key expires. The menu cache safety net is this number (~60).", reply: "N seconds, -1 = no expiry, -2 = key gone" },
+  EXPIRE:   { syn: "EXPIRE key seconds", does: "Put a TTL on a key that already exists (SET … EX does this in one step).", reply: "1 if the TTL was set, 0 if the key was missing" },
+  PERSIST:  { syn: "PERSIST key", does: "Remove the TTL. The key stays until you DEL it.", reply: "1 if a TTL was removed, 0 otherwise" },
+  EXISTS:   { syn: "EXISTS key", does: "Is this key there? Used to prove a cache miss (0) vs a hit (1).", reply: "1 or 0" },
+  DEL:      { syn: "DEL key [key …]", does: "Delete. Works on every type. Tadka delete-on-write is this: menu PATCH → DEL the cache key.", reply: "how many keys were removed" },
+  INCR:     { syn: "INCR key", does: "Atomically add 1 to a string that holds an integer. Creates the key at 0 if missing.", reply: "the new integer" },
+  HSET:     { syn: "HSET key field value [field value …]", does: "Write one or more fields on a hash. Update city without rewriting name. Tadka Day 6 does not use this for the menu (it uses one JSON string).", reply: "number of fields that were new" },
+  HGET:     { syn: "HGET key field", does: "Read one field from a hash.", reply: "the field, or (nil)" },
+  HGETALL:  { syn: "HGETALL key", does: "Read every field. Reply is field, value, field, value, …", reply: "flat list of fields and values" },
+  HINCRBY:  { syn: "HINCRBY key field integer", does: "Atomically add to a numeric hash field. Two clients cannot both read 0 and write 1.", reply: "the new integer" },
+  HDEL:     { syn: "HDEL key field [field …]", does: "Remove fields from a hash. The key stays if other fields remain.", reply: "how many fields were removed" },
+  HEXISTS:  { syn: "HEXISTS key field", does: "Does this hash have this field?", reply: "1 or 0" },
+  HKEYS:    { syn: "HKEYS key", does: "Field names only.", reply: "list of fields" },
+  HVALS:    { syn: "HVALS key", does: "Field values only.", reply: "list of values" },
+  HLEN:     { syn: "HLEN key", does: "How many fields?", reply: "integer" },
+  RPUSH:    { syn: "RPUSH key value [value …]", does: "Append to the tail of a list. A timeline: Created, then Confirmed, then Preparing. Duplicates allowed.", reply: "new list length" },
+  LPUSH:    { syn: "LPUSH key value [value …]", does: "Prepend to the head. Newest-first queues use this.", reply: "new list length" },
+  LRANGE:   { syn: "LRANGE key start stop", does: "Slice the list. 0 is the head, -1 is the tail. LRANGE key 0 -1 is the whole list.", reply: "the elements" },
+  LLEN:     { syn: "LLEN key", does: "How many elements in the list?", reply: "integer" },
+  LINDEX:   { syn: "LINDEX key index", does: "Element at this index. 0 = head, -1 = tail.", reply: "the element, or (nil)" },
+  LPOP:     { syn: "LPOP key", does: "Remove and return the head.", reply: "the element, or (nil) if empty" },
+  RPOP:     { syn: "RPOP key", does: "Remove and return the tail.", reply: "the element, or (nil) if empty" },
+  SADD:     { syn: "SADD key member [member …]", does: "Add to a set. Unique membership — adding biryani twice still counts as one. No order.", reply: "how many members were new" },
+  SISMEMBER:{ syn: "SISMEMBER key member", does: "Is this member in the set? O(1) yes/no.", reply: "1 or 0" },
+  SMEMBERS: { syn: "SMEMBERS key", does: "Every member. Fine on a small set; do not dump a million-member set in production.", reply: "the members" },
+  SINTER:   { syn: "SINTER key [key …]", does: "Members in every set you name. Cheap AND: cuisines ∩ veg = dosa.", reply: "the intersection" },
+  SCARD:    { syn: "SCARD key", does: "How many unique members?", reply: "integer" },
+  SREM:     { syn: "SREM key member [member …]", does: "Remove members from a set.", reply: "how many were removed" },
+  ZADD:     { syn: "ZADD key score member [score member …]", does: "Add to a sorted set. Members are unique; the score is the sort key (rating, time, geohash).", reply: "how many members were new" },
+  ZRANGE:   { syn: "ZRANGE key start stop [WITHSCORES]", does: "Slice low → high score. 0 -1 is everyone. WITHSCORES prints the number next to each member.", reply: "members (and scores)" },
+  ZREVRANGE:{ syn: "ZREVRANGE key start stop [WITHSCORES]", does: "Slice high → low. Top of a leaderboard is ZREVRANGE key 0 0 WITHSCORES.", reply: "members (and scores)" },
+  ZSCORE:   { syn: "ZSCORE key member", does: "This member's score.", reply: "the number, or (nil)" },
+  ZRANK:    { syn: "ZRANK key member", does: "0-based rank from the bottom (lowest score = 0).", reply: "integer, or (nil)" },
+  ZREM:     { syn: "ZREM key member [member …]", does: "Remove members from a sorted set.", reply: "how many were removed" },
+  ZCARD:    { syn: "ZCARD key", does: "How many members in the sorted set?", reply: "integer" },
+  KEYS:     { syn: "KEYS pattern", does: "List matching keys in one shot. Fine on this laptop. It BLOCKS Redis while it walks every key — never ship KEYS * at dinner rush.", reply: "the keys, plus a teaching warning here" },
+  SCAN:     { syn: "SCAN cursor MATCH pattern COUNT n", does: "List keys in small cursor steps so Redis stays responsive. Start at cursor 0; Redis returns the next cursor (0 = done).", reply: "next cursor + a batch of keys" },
+  SUBSCRIBE:{ syn: "SUBSCRIBE channel", does: "Sit on a channel and print messages. Real redis-cli needs docker exec -it and a second terminal. The pane below fakes this.", reply: "subscribe confirmation" },
+  PUBLISH:  { syn: "PUBLISH channel message", does: "Fire a message at everyone currently subscribed. If nobody is listening, the message is gone. That is the SSE backplane. Not for payments.", reply: "how many subscribers received it" },
+  FLUSHDB:  { syn: "FLUSHDB", does: "Wipe this playground store. Does not touch tadka-redis.", reply: "OK" },
+  HELP:     { syn: "HELP [command]", does: "This glossary. HELP SET explains SET.", reply: "text" },
+  CLEAR:    { syn: "CLEAR", does: "Clear the terminal history on this page (not a Redis command).", reply: "(screen clears)" }
+};
+
 const LABS = [
   { id: "start", n: 0, title: "Start Redis", why: "Same compose service as the Day 6 runbook. No second container.",
-    try: "docker exec tadka-redis redis-cli ping", expect: "PONG",
+    try: "PING", expect: "PONG",
     real: "docker exec tadka-redis redis-cli ping",
-    body: "From the tadka repo root. Then click “I got PONG”. The simulator PING always works so Hour 1 never blocks on Docker." },
+    cmds: ["PING"],
+    body: "From the tadka repo root: docker compose up -d redis. If the name is already in use, Redis is already running — just PING it (docker rm -f tadka-redis only if you want this folder’s compose to own it). The simulator PING always works so Hour 1 never blocks on Docker." },
   { id: "strings", n: 1, title: "String — SET / GET", why: "The cache primitive. Tadka Day 6 stores the menu as one JSON string.",
     try: "SET greeting namaste\nGET greeting\nTYPE greeting", expect: "OK then namaste then string",
     real: "docker exec tadka-redis redis-cli SET greeting namaste\ndocker exec tadka-redis redis-cli GET greeting\ndocker exec tadka-redis redis-cli TYPE greeting",
-    body: "SET writes. GET reads. Missing key → (nil). Re-SET replaces the old value. TYPE greeting → string." },
+    cmds: ["SET", "GET", "TYPE"],
+    body: "A string is one blob under one key. Re-SET replaces the old value. Missing key → (nil)." },
   { id: "ttl", n: 2, title: "Expiry — EX / TTL / EXPIRE", why: "TTL is the cache safety net if a delete-on-write is missed.",
     try: "SET key value EX 60\nTTL key\nEXPIRE key 10\nPERSIST key", expect: "TTL is a positive number; -1 after PERSIST; -2 if the key is gone",
     real: "docker exec tadka-redis redis-cli SET key value EX 60\ndocker exec tadka-redis redis-cli TTL key",
-    body: "EX on SET is how the menu gets a 60s TTL. TTL -1 = no expiry. TTL -2 = key does not exist." },
+    cmds: ["SET", "TTL", "EXPIRE", "PERSIST"],
+    body: "EX on SET is how the menu gets a 60s TTL. After PERSIST the key no longer dies on its own." },
   { id: "del", n: 3, title: "EXISTS / DEL", why: "Delete-on-write: restaurant updates the menu → delete the key → next GET is a miss.",
     try: "SET demo:hello biryani\nEXISTS demo:hello\nDEL demo:hello\nGET demo:hello", expect: "EXISTS 1, DEL 1, GET (nil)",
     real: "docker exec tadka-redis redis-cli SET demo:hello biryani\ndocker exec tadka-redis redis-cli EXISTS demo:hello\ndocker exec tadka-redis redis-cli DEL demo:hello",
+    cmds: ["SET", "EXISTS", "DEL", "GET"],
     body: "DEL returns how many keys were removed. Works on every type, not just strings." },
   { id: "hash", n: 4, title: "Hash — HSET / HGET / HGETALL", why: "Field-level updates without rewriting a whole JSON blob. Tadka still uses a string so GET is readable.",
     try: "HSET restaurant:meghana name Meghana city Bangalore orders 0\nHGET restaurant:meghana city\nHINCRBY restaurant:meghana orders 1\nHGETALL restaurant:meghana\nTYPE restaurant:meghana", expect: "city = Bangalore; orders = 1; TYPE hash",
     real: "docker exec tadka-redis redis-cli HSET restaurant:meghana name Meghana city Bangalore orders 0\ndocker exec tadka-redis redis-cli HGET restaurant:meghana city\ndocker exec tadka-redis redis-cli HINCRBY restaurant:meghana orders 1\ndocker exec tadka-redis redis-cli HGETALL restaurant:meghana\ndocker exec tadka-redis redis-cli TYPE restaurant:meghana",
-    body: "HGET one field. HGETALL every field. HINCRBY is atomic. GET restaurant:meghana → WRONGTYPE (it is not a string)." },
+    cmds: ["HSET", "HGET", "HINCRBY", "HGETALL", "TYPE"],
+    body: "GET restaurant:meghana → WRONGTYPE because it is a hash, not a string. That is the point of TYPE." },
   { id: "list", n: 5, title: "List — RPUSH / LRANGE / LPOP", why: "Ordered, allows duplicates. The SSE replay buffer on the branch (order:{id}:recent) is a list.",
     try: "RPUSH order:demo:recent Created\nRPUSH order:demo:recent Confirmed\nRPUSH order:demo:recent Preparing\nLRANGE order:demo:recent 0 -1\nLLEN order:demo:recent\nLINDEX order:demo:recent -1", expect: "Created, Confirmed, Preparing — last index is Preparing",
     real: "docker exec tadka-redis redis-cli RPUSH order:demo:recent Created Confirmed Preparing\ndocker exec tadka-redis redis-cli LRANGE order:demo:recent 0 -1\ndocker exec tadka-redis redis-cli LLEN order:demo:recent\ndocker exec tadka-redis redis-cli LINDEX order:demo:recent -1",
-    body: "RPUSH appends the tail (timeline). LPUSH prepends the head. LRANGE 0 -1 is the whole list. LPOP / RPOP remove from a end." },
+    cmds: ["RPUSH", "LPUSH", "LRANGE", "LLEN", "LINDEX", "LPOP", "RPOP"],
+    body: "Think of a queue or a timeline. RPUSH appends the tail. LRANGE 0 -1 is everything." },
   { id: "set", n: 6, title: "Set — SADD / SISMEMBER / SINTER", why: "Unique membership. No duplicates, no order. Intersection is a cheap “and” query.",
     try: "SADD cuisines:bangalore biryani dosa burger\nSADD veg:bangalore dosa idli\nSISMEMBER cuisines:bangalore biryani\nSMEMBERS cuisines:bangalore\nSINTER cuisines:bangalore veg:bangalore\nSCARD cuisines:bangalore", expect: "SISMEMBER 1; SINTER is dosa; SCARD 3",
     real: "docker exec tadka-redis redis-cli SADD cuisines:bangalore biryani dosa burger\ndocker exec tadka-redis redis-cli SADD veg:bangalore dosa idli\ndocker exec tadka-redis redis-cli SISMEMBER cuisines:bangalore biryani\ndocker exec tadka-redis redis-cli SMEMBERS cuisines:bangalore\ndocker exec tadka-redis redis-cli SINTER cuisines:bangalore veg:bangalore",
-    body: "SADD twice with the same member counts as one. SINTER = cuisines that are also veg." },
+    cmds: ["SADD", "SISMEMBER", "SMEMBERS", "SINTER", "SCARD", "SREM"],
+    body: "SADD twice with the same member still counts as one. SINTER = members in both sets." },
   { id: "zset", n: 7, title: "Sorted set — ZADD / ZRANGE / ZSCORE", why: "Members unique like a set, ordered by score. Leaderboards. Day 11 GEO is this under the hood.",
     try: "ZADD restaurants:rating 4.6 meghana 4.2 truffles 4.8 vidyarthi\nZRANGE restaurants:rating 0 -1 WITHSCORES\nZREVRANGE restaurants:rating 0 0 WITHSCORES\nZSCORE restaurants:rating meghana\nZRANK restaurants:rating truffles", expect: "lowest rating first; ZREVRANGE top is vidyarthi; ZRANK truffles = 0",
     real: "docker exec tadka-redis redis-cli ZADD restaurants:rating 4.6 meghana 4.2 truffles 4.8 vidyarthi\ndocker exec tadka-redis redis-cli ZRANGE restaurants:rating 0 -1 WITHSCORES\ndocker exec tadka-redis redis-cli ZREVRANGE restaurants:rating 0 0 WITHSCORES\ndocker exec tadka-redis redis-cli ZSCORE restaurants:rating meghana",
-    body: "ZRANGE is low→high. ZREVRANGE is high→low. ZRANK is 0-based from the bottom. GEOADD (Day 11) is a sorted set of geohashes." },
+    cmds: ["ZADD", "ZRANGE", "ZREVRANGE", "ZSCORE", "ZRANK", "ZCARD"],
+    body: "The score is the sort key, not the member. GEOADD (Day 11) stores a geohash as that score." },
   { id: "scan", n: 8, title: "KEYS vs SCAN", why: "KEYS blocks Redis. Fine on this laptop. Suicide at dinner rush. SCAN walks in cursor steps.",
     try: "SET restaurant:a:menu 1\nSET restaurant:b:menu 2\nKEYS restaurant:*\nSCAN 0 MATCH restaurant:* COUNT 10", expect: "both list the keys; KEYS prints a production warning",
     real: "docker exec tadka-redis redis-cli KEYS restaurant:*\ndocker exec tadka-redis redis-cli SCAN 0 MATCH restaurant:*",
+    cmds: ["SET", "KEYS", "SCAN"],
     body: "Class demos may use KEYS. Never ship KEYS *." },
   { id: "menu", n: 9, title: "Tadka menu key (string)", why: "Exact key shape from the runbook. JSON string so redis-cli GET is readable (not a hash, not MessagePack).",
     try: `SET ${MENU_KEY} '${MENU_JSON}' EX 60\nGET ${MENU_KEY}\nTTL ${MENU_KEY}\nTYPE ${MENU_KEY}`, expect: "JSON back, TTL ~60, TYPE string",
     real: `docker exec tadka-redis redis-cli SET ${MENU_KEY} "${MENU_JSON.replace(/"/g, '\\"')}" EX 60\ndocker exec tadka-redis redis-cli GET ${MENU_KEY}\ndocker exec tadka-redis redis-cli TTL ${MENU_KEY}`,
+    cmds: ["SET", "GET", "TTL", "TYPE"],
     body: "Meghana = " + RID + ". After the live menu GET in class this key appears for real. Compare with the hash lab: one blob vs fields." },
   { id: "lock", n: 10, title: "SET NX EX — stampede lock", why: "ADR-019. NX = set only if missing (one winner). EX = crashed holder cannot deadlock.",
     try: `SET ${LOCK_KEY} token-A NX EX 10\nSET ${LOCK_KEY} token-B NX EX 10\nGET ${LOCK_KEY}`, expect: "first OK, second (nil), GET token-A",
     real: `docker exec tadka-redis redis-cli SET ${LOCK_KEY} token-A NX EX 10\ndocker exec tadka-redis redis-cli SET ${LOCK_KEY} token-B NX EX 10\ndocker exec tadka-redis redis-cli GET ${LOCK_KEY}`,
-    body: "If lock TTL < refresh time, two refreshers can race — tolerable, not a herd. Token + owns-it check on DEL so you never delete someone else’s lock." },
+    cmds: ["SET", "GET"],
+    body: "First SET NX wins (OK). Second SET NX loses ((nil)) because the key exists. EX 10 means a crashed winner cannot hold the lock forever. If lock TTL < refresh time, two refreshers can race — tolerable, not a herd." },
   { id: "pubsub", n: 11, title: "PUBLISH — SSE backplane peek", why: "ADR-020. Status change publishes; the SSE endpoint subscribes. Fire-and-forget — if nobody is listening, the message is gone.",
     try: "SUBSCRIBE order:demo\nPUBLISH order:demo Confirmed", expect: "subscriber pane shows Confirmed",
     real: "Terminal A: docker exec -it tadka-redis redis-cli SUBSCRIBE order:demo\nTerminal B: docker exec tadka-redis redis-cli PUBLISH order:demo Confirmed",
-    body: "Real SUBSCRIBE needs -it and a second terminal. The pane below fakes the subscriber. Not fine for payments. Pub/sub is not a data structure you GET later." },
+    cmds: ["SUBSCRIBE", "PUBLISH"],
+    body: "Real SUBSCRIBE needs -it and a second terminal. The pane below fakes the subscriber. Pub/sub is not a data structure — you cannot GET the message later." },
   { id: "trap", n: 12, title: "Trap — do not cache order status", why: "Read:write is low and staleness causes duplicate orders. Menu = AP. Order/payment = not cached.",
     try: "(decision, not a command)", expect: "Refuse to cache it",
     real: "(there is nothing to run — this is the eligibility matrix)",
+    cmds: [],
     body: "Customer places an order, cache says Created, restaurant confirms, customer refreshes, cache still says Created, they order again.",
     trap: true }
 ];
@@ -716,20 +783,14 @@ function cmdZrange(a, rev) {
 }
 
 function helpText(c) {
-  const all = `Supported:
-  string  SET GET INCR TTL EXPIRE PERSIST
-  hash    HSET HGET HGETALL HDEL HEXISTS HKEYS HVALS HLEN HINCRBY
-  list    LPUSH RPUSH LPOP RPOP LRANGE LLEN LINDEX
-  set     SADD SREM SISMEMBER SMEMBERS SCARD SINTER
-  zset    ZADD ZRANGE ZREVRANGE ZSCORE ZRANK ZREM ZCARD
-  keys    DEL EXISTS TYPE KEYS SCAN
-  pubsub  SUBSCRIBE PUBLISH
-  misc    PING FLUSHDB CLEAR HELP
-SET key value [EX seconds] [NX|XX]
-KEYS pattern     (dev only — blocks Redis)
-GEOADD is Day 11 — not here.`;
-  if (!c) return all;
-  return all;
+  if (c) {
+    const k = c.toUpperCase();
+    const d = CMD[k];
+    if (!d) return `(no entry for ${k}. Type HELP for the list.)`;
+    return `${d.syn}\n  does:  ${d.does}\n  reply: ${d.reply}`;
+  }
+  return `Type HELP <command> for a full explanation (HELP SET, HELP ZADD, …).\n\n` +
+    Object.keys(CMD).map(k => `  ${CMD[k].syn.padEnd(42)} ${CMD[k].does}`).join("\n");
 }
 
 function renderFeed(line) {
@@ -756,6 +817,9 @@ function execLine(line) {
   if (res && res.silent) return;
   const text = String(res);
   print(text, text.startsWith("(error)") ? "err" : (text.startsWith("(teaching)") ? "meta" : ""));
+  const cmd = tokenize(line.trim())[0];
+  const d = cmd && CMD[cmd.toUpperCase()];
+  if (d && cmd.toUpperCase() !== "HELP") print("# " + d.does, "meta");
   maybeComplete();
 }
 
@@ -791,12 +855,23 @@ function paintLabs() {
   document.getElementById("progress").textContent = `${done.length} / ${LABS.length} labs`;
 }
 
+function cmdTable(names) {
+  if (!names || !names.length) return "";
+  const rows = names.map(n => {
+    const d = CMD[n];
+    if (!d) return "";
+    return `<tr><td><code>${d.syn}</code></td><td>${d.does}</td><td class="reply">${d.reply}</td></tr>`;
+  }).join("");
+  return `<table class="cmds"><thead><tr><th>Command</th><th>What it does</th><th>Reply</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 function paintDetail() {
   const lab = LABS[active];
   const el = document.getElementById("detail");
   el.innerHTML = `<strong>${lab.n}. ${lab.title}</strong>
     <p class="hint">${lab.body}</p>
     <p class="hint"><em>Why:</em> ${lab.why}</p>
+    ${cmdTable(lab.cmds)}
     <pre>${lab.try}</pre>
     <div class="row">
       <button class="copy" data-copy="${encodeURIComponent(lab.try)}">Try in simulator</button>
@@ -853,7 +928,7 @@ document.querySelectorAll("button.copy[data-copy]").forEach(b => {
 });
 document.getElementById("mark-start").onclick = () => { mark("start"); paintLabs(); };
 
-print("Tadka Day 6 Redis playground. Type PING or help. This is not Redis 7.", "meta");
+print("Tadka Day 6 Redis playground. Type PING, or HELP SET / HELP HGET / HELP ZADD for what a command does.", "meta");
 paintLabs();
 paintDetail();
 document.getElementById("cli").focus();

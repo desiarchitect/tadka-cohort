@@ -20,8 +20,8 @@ Windows does not need `redis-cli` installed — `docker exec` is the client.
 
 ## How to use it
 
-1. Open `index.html` (Docker can be down). Complete the labs in the simulator.
-2. Start `tadka-redis`. Each lab has a **copy** button for the same command against the real container.
+1. Open `index.html` (Docker can be down). Each lab has a **Command / What it does / Reply** table. In the prompt, `HELP SET` (or `HELP HGET`, `HELP ZADD`, …) prints the same glossary.
+2. Start `tadka-redis` if it is not already running. Name already in use and healthy? Skip compose — `docker exec tadka-redis redis-cli ping`. Each lab has a **copy** button for the real container.
 3. Last lab is the trap: do **not** cache order status.
 
 ## What this is
