@@ -35,6 +35,8 @@ tadka/toydemo/
         └── RUN-AND-TEST.md
 ```
 
+Day 6 also has `day-06-cache-realtime/redis-cli-playground/index.html` — a browser Redis CLI gym (PING / SET NX / KEYS vs SCAN) against the same `tadka-redis` container as class.
+
 Each toy is organized by the **curriculum day** when the concept is introduced.
 
 ## How any toy works (failure-first)

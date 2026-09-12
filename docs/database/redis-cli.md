@@ -1,5 +1,7 @@
 # Redis CLI — student walkthrough (Day 6)
 
+**Interactive gym (type commands in a browser, then the same ones on `tadka-redis`):** [`toydemo/day-06-cache-realtime/redis-cli-playground/index.html`](../../toydemo/day-06-cache-realtime/redis-cli-playground/index.html).
+
 Redis is an in-memory store. Tadka talks to it with **StackExchange.Redis** (the app). You talk to it with **`redis-cli`** (this file). The **commands** are the same either way.
 
 Run every command from the repo root, with `tadka-redis` up (`docker compose up -d` on branch `day-06`). You do **not** need `redis-cli` installed on Windows.
@@ -36,6 +38,10 @@ Inside `redis-cli`, type commands without the `docker exec …` prefix. This fil
 | `TYPE k` | `string` / `list` / `none` | menu is a string; replay buffer is a list |
 | `SUBSCRIBE ch` | Block and print messages | SSE backplane (app side) |
 | `PUBLISH ch msg` | Send to all subscribers of `ch` | status change → `order:{id}` |
+| `HSET` / `HGET` / `HGETALL` | Hash: field/value map | not Day-6 cache (menu is a string); practice in the gym |
+| `RPUSH` / `LRANGE` | List: ordered, duplicates ok | `order:{id}:recent` replay buffer |
+| `SADD` / `SISMEMBER` / `SINTER` | Set: unique membership | practice in the gym |
+| `ZADD` / `ZRANGE` | Sorted set: unique + score order | ranking; GEO on Day 11 |
 
 Tadka keys you will see in class:
 
@@ -154,12 +160,70 @@ After a menu GET: `EXISTS` 1, `TTL` around 60, `TYPE` `string`, `GET` a JSON arr
 
 `KEYS lock:*` after a miss is **usually empty** — the lock lasts ~5 s and is deleted when the refresh finishes. Do not treat empty as “the lock is missing from the code.”
 
+## 7. The other four types (practice on `tadka-redis`)
+
+Tadka Day 6 caches the menu as a **string**. These commands are still Redis you will meet in interviews. Same container. Same `redis-cli`. Interactive version: the playground labs 4–7.
+
+### Hash — fields you can update one at a time
+
+```powershell
+docker exec tadka-redis redis-cli HSET restaurant:meghana name Meghana city Bangalore orders 0
+docker exec tadka-redis redis-cli HGET restaurant:meghana city
+docker exec tadka-redis redis-cli HINCRBY restaurant:meghana orders 1
+docker exec tadka-redis redis-cli HGETALL restaurant:meghana
+docker exec tadka-redis redis-cli TYPE restaurant:meghana
+docker exec tadka-redis redis-cli GET restaurant:meghana
+```
+
+**Expect:** `HGET` → `Bangalore`. `HINCRBY` → `1`. `TYPE` → `hash`. `GET` → `WRONGTYPE` (it is not a string). Day 6 still uses a JSON **string** so `GET` of the menu is readable.
+
+### List — ordered, duplicates allowed
+
+```powershell
+docker exec tadka-redis redis-cli RPUSH order:demo:recent Created Confirmed Preparing
+docker exec tadka-redis redis-cli LRANGE order:demo:recent 0 -1
+docker exec tadka-redis redis-cli LLEN order:demo:recent
+docker exec tadka-redis redis-cli LINDEX order:demo:recent -1
+```
+
+**Expect:** `Created`, `Confirmed`, `Preparing`. `LINDEX -1` → `Preparing`. The SSE replay buffer (`order:{id}:recent`) on this branch is this type.
+
+### Set — unique membership
+
+```powershell
+docker exec tadka-redis redis-cli SADD cuisines:bangalore biryani dosa burger
+docker exec tadka-redis redis-cli SADD veg:bangalore dosa idli
+docker exec tadka-redis redis-cli SISMEMBER cuisines:bangalore biryani
+docker exec tadka-redis redis-cli SMEMBERS cuisines:bangalore
+docker exec tadka-redis redis-cli SINTER cuisines:bangalore veg:bangalore
+```
+
+**Expect:** `SISMEMBER` `1`. `SINTER` → `dosa` (in both sets). Adding `biryani` a second time does not grow the set.
+
+### Sorted set — unique members, ordered by score
+
+```powershell
+docker exec tadka-redis redis-cli ZADD restaurants:rating 4.6 meghana 4.2 truffles 4.8 vidyarthi
+docker exec tadka-redis redis-cli ZRANGE restaurants:rating 0 -1 WITHSCORES
+docker exec tadka-redis redis-cli ZREVRANGE restaurants:rating 0 0 WITHSCORES
+docker exec tadka-redis redis-cli ZSCORE restaurants:rating meghana
+```
+
+**Expect:** `ZRANGE` low→high (truffles first). `ZREVRANGE` top-1 → `vidyarthi` `4.8`. Day 11 `GEOADD` is a sorted set of geohashes — same commands, different score.
+
+Clean up when you are done:
+
+```powershell
+docker exec tadka-redis redis-cli DEL restaurant:meghana order:demo:recent cuisines:bangalore veg:bangalore restaurants:rating
+```
+
 ## Gotchas
 
 | What you saw | Why |
 |---|---|
 | `PING` fails | Redis container not running, or you exec’d `tadka-postgres` |
 | `GET` `(nil)` after you just cached | Wrong key (typo / different restaurant GUID) |
+| `WRONGTYPE` | You `GET` a hash/list/set. Use `TYPE key` first |
 | `TTL` `-1` | You `SET` without `EX` |
 | `TTL` `-2` | Key already expired or never existed |
 | `SUBSCRIBE` prints nothing | You used `docker exec` **without** `-it`, or published a **different** channel name |

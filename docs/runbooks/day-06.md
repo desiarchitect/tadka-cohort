@@ -4,7 +4,7 @@
 
 **Three containers:** Postgres primary `5432`, replica `5433`, **Redis `6379`**. HTTP **5224**. Tests **28/28**.
 
-> **Windows PowerShell:** use **`curl.exe`**. Quote `@file`. `$RID` is a PowerShell variable you set once — leave it **unquoted** so it expands. Redis CLI walkthrough (PING, SET NX, pub/sub): [`docs/database/redis-cli.md`](../database/redis-cli.md).
+> **Windows PowerShell:** use **`curl.exe`**. Quote `@file`. `$RID` is a PowerShell variable you set once — leave it **unquoted** so it expands. Redis CLI walkthrough (PING, SET NX, pub/sub): [`docs/database/redis-cli.md`](../database/redis-cli.md). Interactive gym: [`toydemo/day-06-cache-realtime/redis-cli-playground/index.html`](../../toydemo/day-06-cache-realtime/redis-cli-playground/index.html).
 
 | Thing | Value |
 |-------|--------|
