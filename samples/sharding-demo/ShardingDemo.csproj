@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    STANDALONE teaching sample. Deliberately NOT part of Tadka.slnx, references
+    nothing in src/, and is never touched by the test suite. Run it on its own
+    with: dotnet run (project samples/sharding-demo). It simulates shard-key
+    routing so you can SEE why naive hashing is a resharding disaster and what
+    consistent hashing plus virtual nodes buy. See README.md.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Tadka.Samples.ShardingDemo</RootNamespace>
+    <!-- Keep this sample out of any solution-wide analysis/packaging. -->
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+</Project>
