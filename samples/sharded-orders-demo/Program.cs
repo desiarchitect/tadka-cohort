@@ -36,6 +36,8 @@ try
         case "get": await GetCommand.RunAsync(cmdArgs, state); break;
         case "report": await ReportCommand.RunAsync(cmdArgs, state); break;
         case "add-shard": await AddShardCommand.RunAsync(cmdArgs, state); break;
+        case "watch": await WatchCommand.RunAsync(cmdArgs, state); break;
+        case "stream": await StreamCommand.RunAsync(cmdArgs, state); break;
         case "reshard":
             if (args.Length < 2) { Console.WriteLine("Usage: reshard plan|apply --to consistent-vnodes [--vnodes N] [--resume]"); break; }
             var reshardArgs = new Args(args[2..]);
@@ -77,6 +79,14 @@ static void PrintUsage()
           reshard apply --to consistent-vnodes [--vnodes 150] [--resume]
           reset                                               truncate all shards, clear cluster state
 
-        See README.md for the full two-act "add a shard, watch it break, then fix it" walkthrough.
+          watch --shard N [--interval-ms 500]               live-tail ONE shard - run one per terminal
+          topology --watch [--interval-ms 1000]             live dashboard of ALL shards in one terminal
+          stream [--shard-key K] [--interval-ms 1000] [--count N]
+                                                              continuously insert new orders (0 = forever);
+                                                              run alongside `watch`/`topology --watch` to see
+                                                              live routing across terminals
+
+        See README.md for the full two-act "add a shard, watch it break, then fix it" walkthrough,
+        and the "Live, multi-terminal demo" section for the watch/stream setup.
         """);
 }
