@@ -12,6 +12,11 @@ the data to fix it" sequence.
 > See [Framing and honest limits](#framing-and-honest-limits-read-this) below before you
 > teach this as more than it is.
 
+> **Want a guided, step-by-step walkthrough instead of a command reference?** Open
+> [`RUNBOOK.html`](RUNBOOK.html) in a browser — it tells you exactly which terminal to
+> open and what to type, in order, for the full multi-terminal demo. This README stays
+> the command reference for everything it can do.
+
 ## Why this exists
 
 `ADR-017` (partitioning/sharding deferred) is the right call at Tadka's scale — but the

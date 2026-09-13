@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sharded Orders Demo — Runbook</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --panel: #16213a;
+    --panel-2: #1c2947;
+    --ink: #e6ecf5;
+    --muted: #93a1bf;
+    --accent: #ff8a3d;
+    --green: #34d399;
+    --red: #f87171;
+    --border: #2a3a5c;
+    --t1: #64748b;
+    --t2: #3b82f6;
+    --t3: #10b981;
+    --t4: #f59e0b;
+    --t5: #a855f7;
+    --t6: #ec4899;
+    --t7: #06b6d4;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.5;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 32px 20px 100px; }
+  header { margin-bottom: 28px; }
+  h1 { font-size: 1.7rem; margin: 0 0 6px; }
+  .subtitle { color: var(--muted); font-size: 0.98rem; }
+  .intro {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    margin: 20px 0;
+  }
+  .intro p { margin: 0 0 10px; }
+  .intro p:last-child { margin-bottom: 0; }
+  .intro a { color: var(--accent); }
+
+  /* Terminal legend */
+  .legend {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin: 18px 0 28px;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    font-size: 0.88rem;
+  }
+  .legend-item .role { color: var(--muted); }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 6px;
+    font-weight: 700;
+    font-size: 0.78rem;
+    color: #05070f;
+    flex-shrink: 0;
+  }
+  .badge.t1 { background: var(--t1); }
+  .badge.t2 { background: var(--t2); }
+  .badge.t3 { background: var(--t3); }
+  .badge.t4 { background: var(--t4); }
+  .badge.t5 { background: var(--t5); }
+  .badge.t6 { background: var(--t6); }
+  .badge.t7 { background: var(--t7); }
+
+  section.step {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--accent);
+    border-radius: 10px;
+    padding: 20px 22px;
+    margin: 18px 0;
+  }
+  section.step.section-header {
+    border-left-color: var(--green);
+    background: var(--panel-2);
+  }
+  .step-num {
+    display: inline-block;
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 0.8rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .step h2 { margin: 0 0 4px; font-size: 1.2rem; }
+  .step h3 { margin: 18px 0 8px; font-size: 1.0rem; color: var(--ink); }
+  .step p.desc { color: var(--muted); margin: 4px 0 14px; }
+
+  .cmd-block {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 10px 0;
+  }
+  .cmd-code {
+    flex: 1;
+    background: #0a0f1e;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    font-family: "Cascadia Code", Consolas, "SFMono-Regular", Menlo, monospace;
+    font-size: 0.86rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .copy-btn {
+    flex-shrink: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--ink);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 0.78rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .copy-btn:hover { background: #24345a; }
+  .copy-btn.copied { background: var(--green); color: #05070f; border-color: var(--green); }
+
+  .expect {
+    margin-top: 10px;
+    padding: 10px 14px;
+    background: rgba(52, 211, 153, 0.08);
+    border: 1px solid rgba(52, 211, 153, 0.35);
+    border-radius: 8px;
+    font-size: 0.86rem;
+  }
+  .expect .label { color: var(--green); font-weight: 700; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 4px; }
+  .expect pre { margin: 0; white-space: pre-wrap; font-family: "Cascadia Code", Consolas, monospace; font-size: 0.82rem; color: var(--ink); }
+
+  .note {
+    margin-top: 10px;
+    padding: 10px 14px;
+    background: rgba(255, 138, 61, 0.08);
+    border: 1px solid rgba(255, 138, 61, 0.35);
+    border-radius: 8px;
+    font-size: 0.86rem;
+  }
+  .note .label { color: var(--accent); font-weight: 700; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em; display: block; margin-bottom: 4px; }
+
+  details {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px 22px 18px;
+    margin: 18px 0;
+  }
+  details summary {
+    cursor: pointer;
+    padding: 14px 0;
+    font-weight: 700;
+    color: var(--ink);
+    list-style: none;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: "▶ "; color: var(--accent); }
+  details[open] summary::before { content: "▼ "; }
+  details summary .sub { display: block; font-weight: 400; color: var(--muted); font-size: 0.85rem; margin-top: 3px; }
+
+  .progress-bar {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: rgba(15, 23, 42, 0.92);
+    backdrop-filter: blur(6px);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    align-items: center;
+    font-size: 0.78rem;
+  }
+  .progress-bar a { color: var(--muted); text-decoration: none; padding: 4px 8px; border-radius: 5px; }
+  .progress-bar a:hover, .progress-bar a.active { color: var(--ink); background: var(--panel-2); }
+
+  footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--muted); font-size: 0.85rem; }
+  footer a { color: var(--accent); }
+  code.inline { background: #0a0f1e; padding: 1px 6px; border-radius: 4px; font-family: Consolas, monospace; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<div class="progress-bar" id="progressBar">
+  <a href="#setup">0. Setup</a>
+  <a href="#watchers">1. Watchers</a>
+  <a href="#trickle">2. Live trickle</a>
+  <a href="#keys">3. Shard keys</a>
+  <a href="#act1">4. Act 1: break</a>
+  <a href="#act2">5. Act 2: fix</a>
+  <a href="#cleanup">6. Cleanup</a>
+</div>
+
+<div class="wrap">
+  <header>
+    <h1>Sharded Orders Demo — Runbook</h1>
+    <div class="subtitle">A strict, one-step-at-a-time walkthrough. Every block tells you exactly which terminal window to type it into.</div>
+  </header>
+
+  <div class="intro">
+    <p><strong>What this is.</strong> A guided path through <code class="inline">samples/sharded-orders-demo</code> — real Postgres shards, real routing, a real "add a shard, watch it break, then fix it" sequence. If you want the full command reference instead of a guided path, see <a href="README.md">README.md</a>.</p>
+    <p><strong>Before you start:</strong> Docker Desktop running, this repo cloned, .NET 10 SDK installed. Every command below assumes your terminal's working directory is the repo root (the folder containing <code class="inline">samples/</code>).</p>
+    <p><strong>Windows 11 users:</strong> if <code class="inline">dotnet run</code> throws <code class="inline">FileLoadException ... blocked by an Application Control policy</code>, see the <a href="#troubleshooting">Troubleshooting</a> section at the bottom before continuing.</p>
+  </div>
+
+  <h3 style="margin-top:28px;">Terminal legend</h3>
+  <div class="legend">
+    <div class="legend-item"><span class="badge t1">T1</span><span>Control terminal <span class="role">— every one-off command</span></span></div>
+    <div class="legend-item"><span class="badge t2">T2</span><span>Watch shard 1</span></div>
+    <div class="legend-item"><span class="badge t3">T3</span><span>Watch shard 2</span></div>
+    <div class="legend-item"><span class="badge t4">T4</span><span>Watch shard 3</span></div>
+    <div class="legend-item"><span class="badge t5">T5</span><span>Watch shard 4</span></div>
+    <div class="legend-item"><span class="badge t6">T6</span><span>Stream <span class="role">— feeds live data</span></span></div>
+    <div class="legend-item"><span class="badge t7">T7</span><span>Watch shard 5 <span class="role">— opened later</span></span></div>
+  </div>
+  <p style="color:var(--muted); font-size:0.85rem;">Open T2–T5 once and leave them running for the whole session — you'll watch them fill up across every later step. T1 is where you type everything else.</p>
+
+  <!-- ============ STEP 0: SETUP ============ -->
+  <section class="step section-header" id="setup">
+    <span class="step-num">Step 0 of 6</span>
+    <h2>Setup</h2>
+    <p class="desc">Bring up 4 real Postgres containers and create the schema on each.</p>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>docker compose -f samples/sharded-orders-demo/docker-compose.yml up -d</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see</span><pre> Container tadka-shard1-db Started
+ Container tadka-shard2-db Started
+ Container tadka-shard3-db Started
+ Container tadka-shard4-db Started</pre></div>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- init</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see</span><pre>shard 1 (localhost:5501/tadka_shard1): schema ready.
+shard 2 (localhost:5502/tadka_shard2): schema ready.
+shard 3 (localhost:5503/tadka_shard3): schema ready.
+shard 4 (localhost:5504/tadka_shard4): schema ready.</pre></div>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- seed --count 20000 --shard-key order_id</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see (real captured numbers — near-even, this is the good shard key)</span><pre>  shard 1:   4,919   24.6%
+  shard 2:   4,997   25.0%
+  shard 3:   5,062   25.3%
+  shard 4:   5,022   25.1%</pre></div>
+    <div class="note"><span class="label">Why seed before opening the watchers?</span>A bulk seed of 20,000 rows floods a live watcher with thousands of lines in a couple seconds — noisy, not illustrative. Seed quietly first; the watchers you open next will show the real starting counts as their baseline, then only the slow, readable trickle from <code class="inline">stream</code> after that.</div>
+  </section>
+
+  <!-- ============ STEP 1: WATCHERS ============ -->
+  <section class="step section-header" id="watchers">
+    <span class="step-num">Step 1 of 6</span>
+    <h2>Open the four watchers</h2>
+    <p class="desc">Open four new terminal windows. In each, run the matching command — they'll all print a baseline, then sit there waiting.</p>
+
+    <div class="cmd-block">
+      <span class="badge t2">T2</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 1</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="cmd-block">
+      <span class="badge t3">T3</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 2</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="cmd-block">
+      <span class="badge t4">T4</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 3</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="cmd-block">
+      <span class="badge t5">T5</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 4</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+
+    <div class="expect"><span class="label">You should see, e.g. in T2 (real captured output)</span><pre>=== Watching shard 1 (localhost:5501/tadka_shard1) ===
+Ctrl+C to stop.
+
+[baseline] 4,919 existing rows on shard 1. Watching for new arrivals...</pre></div>
+    <p class="desc" style="margin-top:10px;">Each terminal's baseline count should roughly match Step 0's seed table. Leave all four running — do not close them until Step 6.</p>
+  </section>
+
+  <!-- ============ STEP 2: LIVE TRICKLE ============ -->
+  <section class="step section-header" id="trickle">
+    <span class="step-num">Step 2 of 6</span>
+    <h2>Watch new data land, live</h2>
+    <p class="desc">Open a 6th terminal. This one continuously inserts a new order every half second — watch T2–T5 print each arrival the instant it happens.</p>
+
+    <div class="cmd-block">
+      <span class="badge t6">T6</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- stream --interval-ms 500</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">T6 — you should see</span><pre>Streaming new orders every 500ms, shard key = order_id, routing = naive hash % N   (N = 4).
+Run `watch --shard N` in other terminals to see them land live. Ctrl+C to stop.
+
+  -> order-live-130316-0004  order_id=order-live-130316-0004 -> shard 1
+  -> order-live-130317-0005  order_id=order-live-130317-0005 -> shard 3
+  -> order-live-130317-0006  order_id=order-live-130317-0006 -> shard 1</pre></div>
+    <div class="expect"><span class="label">T2 (shard 1) — you should see the SAME order appear here, live</span><pre>  + order-live-130316-0004   customer=cust-01983 restaurant=rest-074  city=Bangalore  amount=  748.14   (shard 1 now 4,920 rows)
+  + order-live-130317-0006   customer=cust-00963 restaurant=rest-019  city=Bangalore  amount=  445.09   (shard 1 now 4,921 rows)</pre></div>
+    <p class="desc">Watch for maybe 15–20 seconds — you'll see each new order light up exactly one of T2–T5, never more than one. That's the routing formula deciding, live, in front of you.</p>
+
+    <div class="cmd-block">
+      <span class="badge t6">T6</span>
+      <div class="cmd-code" data-cmd>Ctrl+C</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <p class="desc">Stop the stream once you've seen a few arrivals land. T2–T5 stay running.</p>
+  </section>
+
+  <!-- ============ STEP 3: SHARD KEYS (optional) ============ -->
+  <details id="keys">
+    <summary>Step 3 of 6 — Shard-key comparison <span class="sub">Optional. Skip straight to Step 4 if you just want the break/fix story.</span></summary>
+
+    <p class="desc">Same data, routed by a different field each time. Watch T2–T5's counts end up very differently balanced.</p>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- reset
+dotnet run --project samples/sharded-orders-demo -c Release -- seed --count 20000 --shard-key city</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see (real captured — severe skew)</span><pre>  shard 1:       0    0.0%
+  shard 2:   1,209    6.0%
+  shard 3:  16,033   80.2%   &lt;-- hot shard
+  shard 4:   2,758   13.8%
+
+WARNING: shard key 'city' is low-cardinality/skewed — one shard holds 80.2% of rows.</pre></div>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- reset
+dotnet run --project samples/sharded-orders-demo -c Release -- seed --count 20000 --shard-key restaurant_id</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see (real captured — moderate hot spot, the interesting middle case)</span><pre>  shard 1:   6,012   30.1%
+  shard 2:   6,630   33.1%
+  shard 3:   3,740   18.7%
+  shard 4:   3,618   18.1%
+
+NOTE: shard key 'restaurant_id' has a moderate hot spot — one shard holds 33.1% of rows.</pre></div>
+    <p class="desc"><code class="inline">order_id</code>/<code class="inline">customer_id</code> (Step 0) land near 25% each — high-cardinality, evenly distributed, the right choice. Reset and reseed with <code class="inline">--shard-key order_id</code> before moving on to Step 4.</p>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- reset
+dotnet run --project samples/sharded-orders-demo -c Release -- seed --count 20000 --shard-key order_id</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+  </details>
+
+  <!-- ============ STEP 4: ACT 1 ============ -->
+  <section class="step section-header" id="act1">
+    <span class="step-num">Step 4 of 6</span>
+    <h2>Act 1 — the break (naive <code class="inline">hash % N</code>)</h2>
+    <p class="desc">If you skipped Step 3, T1–T5 already have 20,000 <code class="inline">order_id</code>-sharded rows from Step 0/2. If you did Step 3, you just reseeded the same thing — either way, continue here.</p>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- get --order-id order-0012345</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see — note which shard it's on</span><pre>hash/route(order-0012345) via naive hash % N   (N = 4) -> shard 1
+SELECT ... FROM shard 1 -> HIT (1 row)</pre></div>
+
+    <p class="desc">Now bring up a 5th shard, live, and open one more watcher for it:</p>
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>docker compose -f samples/sharded-orders-demo/docker-compose.yml --profile shard5 up -d shard-db-5</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="cmd-block">
+      <span class="badge t7">T7</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 5</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">T7 — you should see</span><pre>[baseline] 0 existing rows on shard 5. Watching for new arrivals...</pre></div>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- add-shard --id 5</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see (real captured — measured live, not assumed)</span><pre>Shard 5 reachable. Schema created. Cluster is now 5 shards.
+Measured impact of hash % 4 -> hash % 5 across all 20,000 seeded keys
+(recomputed live, not assumed): 15,987 keys now hash to a DIFFERENT shard than
+the one they're actually stored on = 79.9% reshuffled by just changing the modulus.
+WARNING: none of the existing rows were physically moved.</pre></div>
+    <div class="note"><span class="label">T7 stays empty</span>Nothing was physically moved — shard 5's watcher shows nothing new. That's expected and is the point: the formula changed, the data didn't.</div>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- get --order-id order-0012345 --verify</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see — a real, genuine miss</span><pre>hash/route(order-0012345) via naive hash % N   (N = 5) -> shard 4
+SELECT ... FROM shard 4 -> MISS (0 rows)
+
+Scanning all 5 shards for order-0012345...
+  shard 1: FOUND (1 row)
+  shard 2: not found   shard 3: not found   shard 4: not found   shard 5: not found
+
+This is a REAL wrong-shard miss, not a bug in the demo: the row genuinely lives
+elsewhere; the current routing formula genuinely points somewhere else.</pre></div>
+  </section>
+
+  <!-- ============ STEP 5: ACT 2 ============ -->
+  <section class="step section-header" id="act2">
+    <span class="step-num">Step 5 of 6</span>
+    <h2>Act 2 — the fix (consistent hashing, grown correctly)</h2>
+    <p class="desc"><strong>Important:</strong> you cannot cheaply convert the naive-hash data from Act 1 onto a consistent-hash ring — that costs almost as much as a full rehash (it's changing two things at once). The cheap-resize property only applies when you're already running consistent hashing. So: reset, and seed fresh, directly under consistent-hash mode.</p>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- reset
+dotnet run --project samples/sharded-orders-demo -c Release -- seed --count 20000 --shard-key order_id --mode consistent-vnodes --vnodes 150</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see (real captured)</span><pre>Routing with: consistent-hash + 150 vnodes/shard (4 shards)
+  shard 1:   5,114   25.6%
+  shard 2:   4,663   23.3%
+  shard 3:   5,160   25.8%
+  shard 4:   5,063   25.3%</pre></div>
+    <p class="desc">T2–T5 will show the reset (truncated) then refill with this new baseline on their next poll.</p>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- add-shard --id 5</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see</span><pre>Shard 5 reachable. Schema created. Cluster is now 5 shards.
+Routing mode is consistent-hash+vnodes - existing rows are NOT yet reassigned.
+Run `reshard plan` / `reshard apply` to migrate this shard's fair share in.</pre></div>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- reshard plan --to consistent-vnodes --vnodes 150</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see (real captured — 17.3%, not the ~80% from Act 1)</span><pre>Rows to migrate: 3,453 of 20,000 (17.3% — roughly one shard's share of the
+keyspace, not a universal constant; measured live rather than assumed).
+Nothing has moved yet — this is a dry run.</pre></div>
+
+    <p class="desc"><strong>Now watch T7 (shard 5's watcher) while you run this next command</strong> — you'll see the rows physically arrive, live, as the migration runs:</p>
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- reshard apply --to consistent-vnodes --vnodes 150</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">T1 — you should see (real captured)</span><pre>Migrating 3,453 rows...
+  shard 1 -> shard 5: 1,148 rows migrated
+  shard 2 -> shard 5: 736 rows migrated
+  shard 3 -> shard 5: 685 rows migrated
+  shard 4 -> shard 5: 884 rows migrated
+Migration complete: 3,453 rows moved.
+Total:  20,000 -> 20,000   (no rows lost, no duplicates)</pre></div>
+    <div class="expect"><span class="label">T7 (shard 5) — you should see it fill up live, real captured output</span><pre>  + order-0019680   customer=cust-00608 restaurant=rest-057  city=Bangalore  amount=  889.21   (shard 5 now 3,453 rows)
+  + order-0019684   customer=cust-02641 restaurant=rest-000  city=Bangalore  amount=  500.60   (shard 5 now 3,453 rows)
+  + order-0019772   customer=cust-01626 restaurant=rest-003  city=Bangalore  amount=  333.45   (shard 5 now 3,453 rows)
+  ... (3,453 lines total, arriving over a few seconds)</pre></div>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- get --order-id order-0000001</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <div class="expect"><span class="label">You should see — routing works again, wherever the ring says the row lives</span><pre>Ring route: shard 3 -> HIT (1 row).</pre></div>
+  </section>
+
+  <!-- ============ STEP 6: CLEANUP ============ -->
+  <section class="step section-header" id="cleanup">
+    <span class="step-num">Step 6 of 6</span>
+    <h2>Cleanup</h2>
+
+    <div class="cmd-block">
+      <span class="badge t2">T2–T5, T7</span>
+      <div class="cmd-code" data-cmd>Ctrl+C</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <p class="desc">Stop all the watch terminals.</p>
+
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>dotnet run --project samples/sharded-orders-demo -c Release -- reset
+docker compose -f samples/sharded-orders-demo/docker-compose.yml --profile shard5 down -v</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <p class="desc"><code class="inline">reset</code> truncates all data and clears local state; <code class="inline">docker compose down -v</code> stops and removes every container plus its data volumes — a fully clean slate for next time.</p>
+  </section>
+
+  <!-- ============ TROUBLESHOOTING ============ -->
+  <details id="troubleshooting">
+    <summary>Troubleshooting <span class="sub">Common issues and their fixes</span></summary>
+
+    <h3>Windows 11: "An Application Control policy has blocked this file"</h3>
+    <p class="desc">This is <strong>Smart App Control</strong> (Windows 11), not a bug in the demo. It blocks freshly-compiled, unsigned binaries that have no reputation yet — and a locally-built teaching sample will never have one. Confirmed by checking <code class="inline">HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy</code> → <code class="inline">VerifiedAndReputablePolicyState</code>.</p>
+    <p class="desc"><strong>Fix:</strong> Windows Security → App &amp; browser control → Smart App Control → turn it <strong>Off</strong>. One real caveat: once off, it can only be re-enabled by resetting/reinstalling Windows — it isn't a per-app exception, it's all-or-nothing. That's Microsoft's design.</p>
+    <div class="cmd-block">
+      <span class="badge t1">T1</span>
+      <div class="cmd-code" data-cmd>rm -rf samples/sharded-orders-demo/bin samples/sharded-orders-demo/obj
+dotnet run --project samples/sharded-orders-demo -c Release -- topology</div>
+      <button class="copy-btn" onclick="copyCmd(this)">Copy</button>
+    </div>
+    <p class="desc">After turning Smart App Control off, delete the stale build output and rerun any command to confirm it works.</p>
+
+    <h3>"Database error" / "Is docker compose up?"</h3>
+    <p class="desc">The shard containers aren't running or aren't healthy yet. Run <code class="inline">docker ps</code> and confirm <code class="inline">tadka-shard1-db</code> through <code class="inline">tadka-shard4-db</code> (and <code class="inline">tadka-shard5-db</code> if you're past Step 4) all say <code class="inline">healthy</code>. If not, re-run Step 0's <code class="inline">docker compose up -d</code> and wait ~10 seconds.</p>
+
+    <h3>A watch terminal shows "no schema yet"</h3>
+    <p class="desc">You opened a watcher before running <code class="inline">init</code> (Step 0), or you're watching a shard id that hasn't been through <code class="inline">add-shard</code> yet. Run <code class="inline">init</code> (or <code class="inline">add-shard --id N</code> for a shard beyond the first four) and the watcher will pick it up on its next poll.</p>
+
+    <h3>Topology shows fewer than 20,000 total rows after seeding</h3>
+    <p class="desc">Seeding is deterministic and idempotent — if you ran <code class="inline">seed</code> more than once without a <code class="inline">reset</code> in between, later runs just insert 0 new rows (you'll see "N already present" in the output), they don't top anything up. If the total looks wrong, run <code class="inline">reset</code> and reseed fresh.</p>
+  </details>
+
+  <footer>
+    Full command reference: <a href="README.md">README.md</a> (same demo, described as a reference table instead of a guided walkthrough).
+    Every number on this page was captured from a real, live run of this exact demo — nothing here is simulated or invented.
+  </footer>
+</div>
+
+<script>
+function copyCmd(btn) {
+  var block = btn.previousElementSibling;
+  var text = block.getAttribute('data-cmd') || block.textContent;
+  navigator.clipboard.writeText(text).then(function () {
+    var original = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(function () {
+      btn.textContent = original;
+      btn.classList.remove('copied');
+    }, 1400);
+  }).catch(function () {
+    btn.textContent = 'Select & copy manually';
+  });
+}
+
+// Highlight the active section in the sticky progress bar as you scroll.
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('#progressBar a'));
+  var sections = links.map(function (a) {
+    return document.getElementById(a.getAttribute('href').slice(1));
+  });
+  function onScroll() {
+    var pos = window.scrollY + 100;
+    var activeIndex = 0;
+    for (var i = 0; i < sections.length; i++) {
+      if (sections[i] && sections[i].offsetTop <= pos) activeIndex = i;
+    }
+    links.forEach(function (a, i) {
+      a.classList.toggle('active', i === activeIndex);
+    });
+  }
+  window.addEventListener('scroll', onScroll, { passive: true });
+  onScroll();
+})();
+</script>
+</body>
+</html>
