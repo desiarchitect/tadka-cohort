@@ -107,6 +107,25 @@ static class ShardStore
         return (reader.GetInt64(0), reader.GetDecimal(1));
     }
 
+    /// <summary>Most recently created rows on this shard, newest first — what
+    /// `watch` polls to show new arrivals live.</summary>
+    public static async Task<List<Order>> RecentAsync(int shardId, int n)
+    {
+        await using var conn = new NpgsqlConnection(ShardCatalog.ConnectionString(shardId));
+        await conn.OpenAsync();
+        await using var cmd = new NpgsqlCommand(
+            "SELECT order_id, customer_id, restaurant_id, city, amount, status, created_at FROM orders ORDER BY created_at DESC LIMIT @n",
+            conn);
+        cmd.Parameters.AddWithValue("n", n);
+        var result = new List<Order>();
+        await using var reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+            result.Add(new Order(
+                reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                reader.GetDecimal(4), reader.GetString(5), reader.GetFieldValue<DateTimeOffset>(6)));
+        return result;
+    }
+
     public static async Task<List<Order>> TopByAmountAsync(int shardId, int n)
     {
         await using var conn = new NpgsqlConnection(ShardCatalog.ConnectionString(shardId));
