@@ -43,9 +43,44 @@ dotnet run --project samples/sharded-orders-demo -c Release -- topology
 | `reshard plan --to consistent-vnodes [--vnodes 150]` | Dry run: per-row ring-owner vs. actual shard, prints a move/stay table, writes nothing | read-only, safe anytime |
 | `reshard apply --to consistent-vnodes [--vnodes 150] [--resume]` | Executes the plan for real, then switches routing mode | resumable, self-healing |
 | `reset` | Truncates `orders` on every shard, clears local state back to defaults | yes |
+| `watch --shard N [--interval-ms 500]` | Live-tails ONE shard — prints each new row the moment it lands, in arrival order | read-only, Ctrl+C anytime |
+| `topology --watch [--interval-ms 1000]` | Single-terminal live dashboard — all shards' row counts ticking up together, redrawn in place | read-only, Ctrl+C anytime |
+| `stream [--shard-key K] [--interval-ms 1000] [--count N]` | Continuously inserts new orders (0 = forever) so `watch`/`topology --watch` have something to show | new rows each call, by design |
 
 `docker compose -f samples/sharded-orders-demo/docker-compose.yml --profile shard5 up -d shard-db-5`
 brings up the 5th shard — it's down by default so "adding a shard" is a real, live event.
+
+## Live, multi-terminal demo (watch data actually land on different shards)
+
+The most convincing version of this demo runs across several terminals side by side —
+students watch rows land on the *correct* shard the instant they're inserted, not after
+the fact.
+
+```bash
+# Terminal 1 (feeds new data):
+dotnet run --project samples/sharded-orders-demo -c Release -- stream --interval-ms 500
+
+# Terminals 2-5 (one per shard, watching it fill up live):
+dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 1
+dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 2
+dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 3
+dotnet run --project samples/sharded-orders-demo -c Release -- watch --shard 4
+```
+
+Each `watch` terminal prints a `[baseline]` line for whatever's already there, then only
+NEW arrivals from that point on — `  + order-live-... customer=... restaurant=... city=... amount=... (shard N now M rows)`.
+Only one terminal lights up per insert; which one depends purely on the routing formula
+you're currently in (naive `hash % N` vs. the consistent-hash ring) — a live, physical
+demonstration that routing, not luck, decides where a row goes.
+
+Don't have room for 5 terminals? `topology --watch` gives the same live feel in **one**
+terminal — every shard's row count updates in place while `stream` runs elsewhere.
+
+Verified live: `stream` inserting every 300ms while `watch --shard 1` ran in the
+background picked up exactly the rows that hashed to shard 1, in the right order, and
+none of the ones that landed elsewhere.
+
+## Shard-key selection, four ways (captured, real row counts)
 
 ## Shard-key selection, four ways (captured, real row counts)
 
