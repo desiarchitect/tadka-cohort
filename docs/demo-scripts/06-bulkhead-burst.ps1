@@ -10,6 +10,7 @@
 #   $env:Payment__Gateway__Behavior = "Slow"          # 8s hold - keeps the 10 slots occupied
 #   $env:Payment__TimeoutSeconds = "30"               # MUST outlive the 8s delay or the 10 FAIL
 #   $env:Payment__MaxConcurrentCharges = "10"
+#   $env:RateLimit__PerMinute = "1000"                # leftover Day-6 limiter; 120/min will 429 a 100-burst
 #
 # Do NOT use TimeoutSeconds=2 here (those 10 would TimeoutRejected, zero Completed).
 # Do NOT use Gateway=Fast (slots free in 200ms; you get more than 10 Completed).
@@ -33,6 +34,26 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $bodyFile = Join-Path $repoRoot "docs\runbooks\place-order.json"
 if (-not (Test-Path $bodyFile)) { throw "Missing $bodyFile - run from the tadka repo (day-07)." }
 
+$curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
+if (-not $curl) { throw "curl.exe not found on PATH." }
+
+$health = & $curl -sS -o NUL -w "%{http_code}" --connect-timeout 3 --max-time 5 "$BaseUrl/health" 2>$null
+if ($health -ne "200") {
+    throw @"
+API is not reachable at $BaseUrl/health (curl http_code=$health).
+Start it first, in THIS config (env is not reread by a running process):
+
+  `$env:Payment__Mode = "Synchronous"
+  `$env:Payment__Gateway__Behavior = "Slow"
+  `$env:Payment__TimeoutSeconds = "30"
+  `$env:Payment__MaxConcurrentCharges = "10"
+  `$env:RateLimit__PerMinute = "1000"
+  dotnet run --project src/Tadka.Api --launch-profile http
+
+Then wait until curl.exe $BaseUrl/health returns 200.
+"@
+}
+
 $url = "$BaseUrl/api/v1/orders"
 Write-Host "=============================================" -ForegroundColor Cyan
 Write-Host " Bulkhead burst - $Count parallel POST /orders" -ForegroundColor Cyan
@@ -46,10 +67,9 @@ $runspacePool.Open()
 $jobs = @()
 1..$Count | ForEach-Object {
     $ps = [powershell]::Create().AddScript({
-        param($Url, $BodyFile)
-        $out = curl.exe -s -o NUL -w "%{http_code} %{time_total}" -X POST $Url -H "Content-Type: application/json" --data-binary "@$BodyFile"
-        $out
-    }).AddArgument($url).AddArgument($bodyFile)
+        param($Curl, $Url, $BodyFile)
+        & $Curl -sS -o NUL -w "%{http_code} %{time_total}" --connect-timeout 5 --max-time 40 -X POST $Url -H "Content-Type: application/json" --data-binary "@$BodyFile" 2>$null
+    }).AddArgument($curl).AddArgument($url).AddArgument($bodyFile)
     $ps.RunspacePool = $runspacePool
     $jobs += [PSCustomObject]@{ Run = $ps; Handle = $ps.BeginInvoke() }
 }
@@ -61,14 +81,18 @@ $lines = foreach ($j in $jobs) {
 }
 $runspacePool.Close()
 
-$parsed = foreach ($line in $lines) {
-    $parts = ($line | Out-String).Trim() -split "\s+"
+$parsed = @()
+foreach ($line in $lines) {
+    $parts = (($line | Out-String).Trim() -split "\s+") | Where-Object { $_ -ne "" }
     if ($parts.Count -ge 2) {
-        [PSCustomObject]@{ Code = $parts[0]; Seconds = [double]$parts[1] }
+        $parsed += [PSCustomObject]@{ Code = $parts[0]; Seconds = [double]$parts[1] }
+    } elseif ($parts.Count -eq 1) {
+        $parsed += [PSCustomObject]@{ Code = $parts[0]; Seconds = 0 }
     }
 }
 
 $n = $parsed.Count
+$zeros = @($parsed | Where-Object { $_.Code -eq "000" }).Count
 $fast = @($parsed | Where-Object { $_.Seconds -lt 1 }).Count
 $slow = @($parsed | Where-Object { $_.Seconds -ge 5 }).Count
 $codes = $parsed | Group-Object Code | ForEach-Object { "$($_.Name)x$($_.Count)" }
@@ -80,8 +104,13 @@ Write-Host "finished in < 1s (bulkhead reject): $fast"
 Write-Host "finished in >= 5s (held a Slow slot): $slow"
 Write-Host ""
 
+if ($zeros -gt 0) {
+    throw "curl http_code 000 on $zeros/$n requests - nothing reached the API. Is dotnet run listening on $BaseUrl ?"
+}
+
 Write-Host "--- payments in the last 45s ---" -ForegroundColor Cyan
-$sql = @"
+# Pipe SQL on stdin. docker exec -c strips the quotes around "Status" on Windows.
+$sql = @'
 SELECT "Status",
        CASE
          WHEN "FailureReason" IS NULL THEN '(none)'
@@ -94,8 +123,9 @@ FROM payment.payments
 WHERE "CreatedAt" > now() - interval '45 seconds'
 GROUP BY 1, 2
 ORDER BY n DESC;
-"@
-docker exec tadka-postgres psql -U tadka -d tadka -c $sql
+'@
+$sql | docker exec -i tadka-postgres psql -U tadka -d tadka
+if ($LASTEXITCODE -ne 0) { throw "psql failed (exit $LASTEXITCODE)." }
 
 Write-Host ""
 if ($Count -eq 10) {

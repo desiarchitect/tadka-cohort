@@ -183,7 +183,8 @@ $env:Payment__Mode = "Synchronous"
 $env:Payment__Gateway__Behavior = "Slow"
 $env:Payment__TimeoutSeconds = "30"
 $env:Payment__MaxConcurrentCharges = "10"
-dotnet run --project src/Tadka.Api
+$env:RateLimit__PerMinute = "1000"   # leftover weekday limiter; default 120/min 429s a 100-burst
+dotnet run --project src/Tadka.Api --launch-profile http
 ```
 
 ```powershell
