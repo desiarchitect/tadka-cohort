@@ -1,20 +1,20 @@
 # docs/demo-scripts/06-bulkhead-burst.ps1
-# Day 7 — prove the bulkhead (ADR-021), not the timeout.
+# Day 7 - prove the bulkhead (ADR-021), not the timeout.
 #
 # The Fix-1 single curl (~2s) proves TIMEOUT. This script proves FAN-OUT:
-#   10 parallel POSTs  → 10 payments Completed (~8s; they all fit in 10 slots)
-#  100 parallel POSTs  → ~10 Completed, ~90 RateLimiterRejectedException (ms)
+#   10 parallel POSTs  -> 10 payments Completed (~8s; they all fit in 10 slots)
+#  100 parallel POSTs  -> ~10 Completed, ~90 RateLimiterRejectedException (ms)
 #
 # The API must ALREADY be running with these env vars (Ctrl+C + restart; env is not reread):
 #   $env:Payment__Mode = "Synchronous"
-#   $env:Payment__Gateway__Behavior = "Slow"          # 8s hold — keeps the 10 slots occupied
+#   $env:Payment__Gateway__Behavior = "Slow"          # 8s hold - keeps the 10 slots occupied
 #   $env:Payment__TimeoutSeconds = "30"               # MUST outlive the 8s delay or the 10 FAIL
 #   $env:Payment__MaxConcurrentCharges = "10"
 #
 # Do NOT use TimeoutSeconds=2 here (those 10 would TimeoutRejected, zero Completed).
 # Do NOT use Gateway=Fast (slots free in 200ms; you get more than 10 Completed).
 #
-# HTTP is still 201 for every POST — the order is created first. "Succeed" = payment Completed.
+# HTTP is still 201 for every POST - the order is created first. "Succeed" = payment Completed.
 #
 # Usage (from tadka repo root, PowerShell 5.1 or 7):
 #   .\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 10
@@ -31,11 +31,11 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $bodyFile = Join-Path $repoRoot "docs\runbooks\place-order.json"
-if (-not (Test-Path $bodyFile)) { throw "Missing $bodyFile — run from the tadka repo (day-07)." }
+if (-not (Test-Path $bodyFile)) { throw "Missing $bodyFile - run from the tadka repo (day-07)." }
 
 $url = "$BaseUrl/api/v1/orders"
 Write-Host "=============================================" -ForegroundColor Cyan
-Write-Host " Bulkhead burst — $Count parallel POST /orders" -ForegroundColor Cyan
+Write-Host " Bulkhead burst - $Count parallel POST /orders" -ForegroundColor Cyan
 Write-Host "============================================="
 Write-Host "Need: Synchronous + Slow + TimeoutSeconds=30 + MaxConcurrentCharges=10"
 Write-Host "POST $url"
@@ -71,7 +71,7 @@ $parsed = foreach ($line in $lines) {
 $n = $parsed.Count
 $fast = @($parsed | Where-Object { $_.Seconds -lt 1 }).Count
 $slow = @($parsed | Where-Object { $_.Seconds -ge 5 }).Count
-$codes = $parsed | Group-Object Code | ForEach-Object { "$($_.Name)×$($_.Count)" }
+$codes = $parsed | Group-Object Code | ForEach-Object { "$($_.Name)x$($_.Count)" }
 
 Write-Host ""
 Write-Host "--- HTTP (all should be 201; the order is created either way) ---" -ForegroundColor Cyan
@@ -102,5 +102,5 @@ if ($Count -eq 10) {
     Write-Host "Expect: ~10 Completed, 0 rejects. All ~8s." -ForegroundColor Green
 } else {
     Write-Host "Expect: ~10 Completed (the Slow slots) + ~90 RateLimiterRejectedException (ms)." -ForegroundColor Green
-    Write-Host "Shape, not a perfect 10 — launch stagger on a laptop." -ForegroundColor Yellow
+    Write-Host "Shape, not a perfect 10 - launch stagger on a laptop." -ForegroundColor Yellow
 }
