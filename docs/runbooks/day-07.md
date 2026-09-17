@@ -31,6 +31,7 @@ Shipped file is **Async + Fast + 2s + 10**. Ctrl+C the API, set `$env:…`, `dot
 | Two histories | `pg_tables` schema `payment` | `payments` **and** `__EFMigrationsHistory` | `Program.cs` 106, 126 |
 | Brownout | Sync + Slow + timeout 30 | POST **~8.8 s**, still 201 | gateway sleeps 8 s on the request path |
 | Fix 1 | Sync + Slow + timeout 2 | POST **~2.9 s**; order `Cancelled`; `TimeoutRejectedException` | `PaymentResiliencePipeline.cs` 28–33 |
+| Bulkhead burst | Sync + Slow + timeout **30** + cap 10 | 10 parallel → 10 `Completed`; 100 parallel → ~10 `Completed` + ~90 `RateLimiterRejected` | same pipeline, `queueLimit: 0` |
 | Fix 2 | Async + Slow | POST **~20 ms**, status `Created`; later `Cancelled` | `PaymentWorkChannel` + processor |
 | Grep | Select-String on Orders | **no matches** | ADR-022 seam |
 
@@ -169,6 +170,36 @@ Payment row: `"Status"=Failed`, same exception in `"FailureReason"`.
 
 ---
 
+## 3b. FIX 1b — bulkhead burst: 10 succeed, 100 → ~10 (ADR-021)
+
+The curl above proved **timeout** (one call, 2 s). It did **not** prove the bulkhead. That needs a **parallel** burst, and a timeout that **outlives** the Slow 8 s delay — otherwise the ten slot-holders fail with `TimeoutRejectedException` and you get **zero** Completed.
+
+HTTP is still **201** for every POST (the order is created first). “Succeed” means `payment.Status = Completed`.
+
+Ctrl+C. **Timeout 30**, keep cap 10, keep Slow:
+
+```powershell
+$env:Payment__Mode = "Synchronous"
+$env:Payment__Gateway__Behavior = "Slow"
+$env:Payment__TimeoutSeconds = "30"
+$env:Payment__MaxConcurrentCharges = "10"
+dotnet run --project src/Tadka.Api
+```
+
+```powershell
+.\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 10
+# expect: 10 Completed, all ~8 s
+
+.\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 100
+# expect: ~10 Completed (~8 s) + ~90 RateLimiterRejectedException (milliseconds)
+```
+
+`Fast` is a trap: slots free in ~200 ms and more than 10 get through. Laptop stagger means **about 10**, not a perfect 10. Do not mix this with the 2 s timeout demo without a restart.
+
+Could (not Sunday): same 100 in **Async** mode — every POST returns in ms; the bulkhead is on the worker.
+
+---
+
 ## 4. FIX 2 — async: intake never waits (ADR-023)
 
 The real fix: **do not put the bank on `POST /orders`.** Queue + background processor. Even a slow gateway returns in milliseconds. Order may later `Cancel` — **checkout still flows**.
@@ -218,6 +249,7 @@ MediatR replaced the Day-4 hand-rolled dispatcher (`Program.cs` 46). `BoundaryTe
 - [ ] Shipped: POST `Created` in tens of ms; GET `Confirmed`; payment `Completed`
 - [ ] Brownout: POST **~8–10 s**
 - [ ] Polly: POST **~3 s**; order `Cancelled`; `TimeoutRejectedException`
+- [ ] Bulkhead burst: timeout **30** + cap 10; `-Count 10` → 10 Completed; `-Count 100` → ~10 Completed + ~90 `RateLimiterRejectedException`
 - [ ] Async+Slow: POST **~20 ms** `Created` (later may Cancel)
 - [ ] Grep over Ordering is empty
 - [ ] `dotnet test` → **32/32**
