@@ -2,11 +2,16 @@
 
 Not Tadka. Tadka stays one container `tadka-redis` on 6379. This compose is how **replica**, **Cluster**, and **Sentinel HA** are actually set up.
 
+If you already ran failover / killed a node, **do not reuse that stack** — Sentinel may have a new master, Cluster may be CLUSTERDOWN. Tear down, then up:
+
 ```powershell
+docker compose -f toydemo/day-07-redis-ha/docker-compose.yml down -v
 docker compose -f toydemo/day-07-redis-ha/docker-compose.yml up -d
 # wait ~10s for cluster-init (one-shot). If CLUSTER NODES is empty:
 docker start tadka-redis-c-init
 ```
+
+`down -v` does **not** stop Tadka’s `tadka-redis` (main compose).
 
 | Container | Host port | Role |
 |---|---|---|

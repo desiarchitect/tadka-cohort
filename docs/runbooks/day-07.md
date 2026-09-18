@@ -109,13 +109,20 @@ Student one-pager: [`docs/learn/redis-in-production.md`](../learn/redis-in-produ
 
 Tadka stays **standalone** `tadka-redis` :6379. We do **not** point the API at Cluster or Sentinel today.
 
-Pre-class (so S0 does not wait on image pulls):
+**If you already tested the toy** (failover left a promoted replica, a dead master, or a CLUSTERDOWN node), **tear it down first**. A dirty toy is why the live demo “does not work as expected.” This does **not** stop Tadka’s `tadka-redis` / Postgres.
+
+```powershell
+docker compose -f toydemo/day-07-redis-ha/docker-compose.yml down -v
+```
+
+Then a clean start (so S0 does not wait on image pulls, and Sentinel/Cluster are not leftover state):
 
 ```powershell
 docker compose -f toydemo/day-07-redis-ha/docker-compose.yml up -d
+# wait ~10s. If CLUSTER NODES is empty: docker start tadka-redis-c-init
 ```
 
-API for beat 1 must already be running (`--launch-profile http`, health **200**). `$RID` = `a1b2c3d4-0001-4000-8000-000000000001` (Meghana).
+API for beat 1 must already be running (`--launch-profile http`, health **200**). `$RID` = `a1b2c3d4-0001-4000-8000-000000000001` (Meghana). After class (or if ports 6380/7001 clash): the same `down -v` again.
 
 ### Beat 1 — kill Tadka Redis (classification)
 
