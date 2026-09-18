@@ -1,6 +1,6 @@
 # Day 11 — Runbook: Extract Delivery (3rd service) + the API Gateway
 
-**Branch:** `day-11`  ·  **What's new:** the 3rd service — **`Tadka.Delivery.Api`** (own DB `delivery-db` 5435; **Redis-geo** live location; Kafka-driven assignment, ADR-033/034) — and a **YARP API gateway** (`Tadka.Gateway`, :8080, single entry + edge rate-limit, ADR-035). The order→payment→**delivery** flow is now a **3-participant Saga**. **3 services + gateway** (monolith :5224, payment :5240, delivery :5250, YARP :8080). Restaurant is still in the monolith — the 4th service is Day 12. Also: **PgBouncer** (`:6432`, ADR-015 landed) — the Day-5 pool-exhaustion promise, paid off now that 2+ app instances actually exist.
+**Branch:** `day-11`  ·  **What changed since Day 10:** [`docs/changelog.md`](../changelog.md). **What's new:** the 3rd service — **`Tadka.Delivery.Api`** (own DB `delivery-db` 5435; **Redis-geo** live location; Kafka-driven assignment, ADR-033/034) — and a **YARP API gateway** (`Tadka.Gateway`, :8080, single entry + edge rate-limit, ADR-035). The order→payment→**delivery** flow is now a **3-participant Saga**. **3 services + gateway** (monolith :5224, payment :5240, delivery :5250, YARP :8080). Restaurant is still in the monolith — the 4th service is Day 12. Also: **PgBouncer** (`:6432`, ADR-015 landed) — the Day-5 pool-exhaustion promise, paid off now that 2+ app instances actually exist.
 
 > New here? Read [`README.md`](README.md). Windows PowerShell → `curl.exe`. Demo password `Password123!`. Deep Saga treatment: `cohort-prep/day-11/saga-deep-dive.md`.
 
