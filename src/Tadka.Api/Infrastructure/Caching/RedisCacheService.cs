@@ -16,6 +16,16 @@ public sealed class RedisCacheService(IConnectionMultiplexer redis, ILogger<Redi
     private static readonly TimeSpan LockTtl = TimeSpan.FromSeconds(5);
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    // Compare-and-delete in one round trip. GET-then-DEL has a gap: the lock can expire
+    // and be re-acquired between GET and DEL, and an unconditional DEL would drop the new owner's lock.
+    private const string ReleaseIfOwnerScript = """
+        if redis.call('GET', KEYS[1]) == ARGV[1] then
+            return redis.call('DEL', KEYS[1])
+        else
+            return 0
+        end
+        """;
+
     public async Task<T?> GetOrSetAsync<T>(string key, Func<Task<T?>> factory, TimeSpan ttl, CancellationToken ct = default)
     {
         try
@@ -43,9 +53,8 @@ public sealed class RedisCacheService(IConnectionMultiplexer redis, ILogger<Redi
                 }
                 finally
                 {
-                    // Release the lock only if we still own it (don't delete someone else's).
-                    if ((string?)await db.StringGetAsync(lockKey) == token)
-                        await db.KeyDeleteAsync(lockKey);
+                    // Release only if we still own it — Lua, not GET-then-DEL (ADR-019).
+                    await db.ScriptEvaluateAsync(ReleaseIfOwnerScript, [lockKey], [token]);
                 }
             }
 

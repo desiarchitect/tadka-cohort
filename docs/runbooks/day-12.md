@@ -1,5 +1,7 @@
 # Runbook — Day 12: Extract Restaurant (4th service) + zero-downtime migration
 
+**What changed since Day 11:** [`docs/changelog.md`](../changelog.md).
+
 Tadka reaches the canonical **4 services + a gateway**. Restaurant is the *last* and *hardest* extraction because order pricing reads its menu on the critical path — so it earns a **local read model** (event-carried state transfer, ADR-037) and a **zero-downtime data backfill** (ADR-038). Deploy is a black-box (`deploy/README.md`, ADR-039).
 
 ## Start the stack
