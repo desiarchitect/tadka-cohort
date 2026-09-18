@@ -25,9 +25,13 @@ public class RateLimitingMiddleware(RequestDelegate next, IRateLimiter limiter, 
         RateLimitResult result;
         try
         {
-            result = await _limiter.CheckAsync(ip, context.RequestAborted);
+            // docker stop redis: ScriptEvaluate hangs ~5s (SE.Redis SyncTimeout). curl --max-time 5
+            // then prints http_code 000 before SSE can return 503. Fail open in 1s.
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(1));
+            result = await _limiter.CheckAsync(ip, timeoutCts.Token).WaitAsync(timeoutCts.Token);
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is RedisException or OperationCanceledException)
         {
             _logger.LogWarning(ex, "Rate limiter Redis unavailable; failing open.");
             await _next(context);
