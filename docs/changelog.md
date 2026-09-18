@@ -7,7 +7,7 @@
 - An unbounded call to something you do not own is a **brownout**, not a crash.
 - **Timeout** bounds one call. **Bulkhead** (`queueLimit: 0`, cap 10) bounds how many run at once. 10 parallel Slow charges complete; 100 → ~10 complete, ~90 `RateLimiterRejectedException` in ms. HTTP is still **201** — the order is created first.
 - **Async payment** (CQRS-lite): `POST /orders` returns 201 immediately; a Channel + BackgroundService charges later. SSE notifies; `payment.payments` is the truth.
-- **Modular monolith:** Payment owns `PaymentDbContext` / `payment` schema / own migration history. Ordering has zero Payment types (grep).
+- **Modular monolith:** Payment owns `PaymentDbContext` / `payment` schema / own migration history. Ordering has zero Payment types (grep). Textbook MM + CQRS trees vs Tadka: `docs/learn/modular-monolith.md` (no refactor).
 - **Redis in production (opener):** cache vs SSE vs session classification; replica is a copy not failover; Cluster is 16384 slots (`MOVED`) not HA; Sentinel (or ElastiCache) is how failover is set up. Same seat / two countries → one inventory writer, not two Redis.
 
 ## Architecture

@@ -414,6 +414,8 @@ In-memory channel is enough **inside one process**. Crash-loses-the-queue is **D
 
 ## 5. The seam — grep (ADR-022)
 
+**What a modular monolith and CQRS look like** (textbook vs this repo — no refactor): [`docs/learn/modular-monolith.md`](../learn/modular-monolith.md).
+
 Day 8 is a **move**, not a rewrite, because Ordering does not reference Payment.
 
 ```powershell
