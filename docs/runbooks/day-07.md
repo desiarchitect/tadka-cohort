@@ -119,84 +119,140 @@ API for beat 1 must already be running (`--launch-profile http`, health **200**)
 
 ### Beat 1 — kill Tadka Redis (classification)
 
-**Demoing:** cache is a **performance** dep (menu still 200). SSE is a **correctness** dep for the stream (503). Orders do not need Redis (201).
+**Story:** Redis is **down**. Menu must still work. SSE must fail honest. Orders do not use Redis. `docker compose start redis` at the end is a **reset**, not HA.
 
-**Not the lesson:** `000` = API down. Menu **500** = wrong commit (no fallback).
+**Not the lesson:** `000` = API down. Menu **500** = no fallback (wrong commit).
 
 ```powershell
+# DOING: stop Tadka's Redis only (not the HA toy).
+# PROVES: the API process stays up.
 docker compose stop redis
 
+# DOING: GET menu with cache gone (miss -> SQL).
+# PROVES: cache is a PERFORMANCE dep. Expect HTTP 200.
+# NOT: 000 (API down) or 500 (no fallback). First hit can be 5-12s — do not Ctrl+C.
 curl.exe -s -o NUL -w "menu %{http_code} %{time_total}s`n" http://localhost:5224/api/v1/restaurants/$RID/menu
-# 200. First hit after the stop can be 5-12s (client timeout, then SQL). Do not Ctrl+C.
 
+# DOING: open the live-tracking SSE stream.
+# PROVES: SSE is a CORRECTNESS dep for the stream. Expect HTTP 503 + "Live tracking requires Redis".
 curl.exe -s -o NUL -w "sse  %{http_code}`n" --max-time 5 http://localhost:5224/api/v1/orders/00000000-0000-0000-0000-000000000001/events
-# 503  body: Live tracking requires Redis
 
+# DOING: place an order (Postgres, not Redis).
+# PROVES: money path does not need Redis. Expect HTTP 201.
 curl.exe -s -o NUL -w "order %{http_code}`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
-# 201
 
+# DOING: bring Tadka Redis back. RESET for the rest of class. NOT "we added HA".
 docker compose start redis
 docker exec tadka-redis redis-cli PING
-# PONG
+# expect: PONG
 ```
 
 ### Beat 2 — replica (`REPLICAOF`) is a copy, not HA
 
-**How it is set up:** `redis-server --replicaof 172.28.0.10 6379` (toy replica on host **6381**; static IP so Docker DNS is not in the path).
+**Story:** a replica is a **copy**. Killing the master does **not** fail over. Data on the replica survives; an app still aimed at the master is **dead**. `docker start` is **reset**, not the fix (that is Beat 4 Sentinel).
+
+**How it is set up:** `redis-server --replicaof 172.28.0.10 6379` (toy replica on host **6381**).
 
 ```powershell
+# DOING: write on the ONLY writer (master).
 docker exec tadka-ha-master redis-cli SET demo:ha namaste
-docker exec tadka-ha-replica redis-cli GET demo:ha
-# namaste
-docker exec tadka-ha-replica redis-cli INFO replication
-# role:slave
 
-docker stop tadka-ha-master
+# DOING: read the same key from the replica.
+# PROVES: replication works. Expect: namaste. NOT: failover / HA.
 docker exec tadka-ha-replica redis-cli GET demo:ha
-# namaste  — copy survived. An app still aimed at the master is down.
+
+# DOING: ask the replica who it is.
+# PROVES: it is a follower. Expect: role:slave
+docker exec tadka-ha-replica redis-cli INFO replication
+
+# DOING: FAIL THE WRITER. This is the failure we are studying.
+docker stop tadka-ha-master
+
+# DOING: read the replica after the master is dead.
+# PROVES: the COPY survived. Expect: namaste.
+# THE FAIL: any app still pointing at the master (host 6380) is down. Copy != failover.
+docker exec tadka-ha-replica redis-cli GET demo:ha
+
+# DOING: bring the writer back. RESET the lab. NOT Sentinel. NOT the product fix.
 docker start tadka-ha-master
 ```
 
 **Demo fail:** GET nil → replica not ready, wait 2s. **Setup fail:** container missing → toy compose not up.
 
+**Line:** “Data lived. The app that still points at the master is dead.”
+
 ### Beat 3 — Cluster is 16384 slots (`MOVED`), not HA
 
-**How it is set up:** each node `cluster-enabled yes` + `cluster-announce-ip` as a **literal IP** (Redis 7.4 rejects a Docker hostname). Then `redis-cli --cluster create 172.28.0.21:6379 … --cluster-replicas 0`. Zero replicas is the point.
+**Story:** keys are **sharded**. `MOVED` is Cluster working, not a bug. Killing a node **without replicas** loses those slots. `docker start c2` is reset, not HA (`--cluster-replicas 1` would be HA).
+
+**How it is set up:** `cluster-enabled yes` + `cluster-announce-ip` as a **literal IP**. Then `--cluster create … --cluster-replicas 0`.
 
 ```powershell
+# DOING: list the three masters and their slot ranges.
+# PROVES: cluster formed. Expect: three master lines, IPs 172.28.0.21-23.
 docker exec tadka-redis-c1 redis-cli CLUSTER NODES
+
+# DOING: write WITHOUT following redirects.
+# PROVES: this key lives on another node. Expect: (error) MOVED <slot> 172.28.0.2x:6379
+# NOT: a bug. THAT is Cluster (sharding).
 docker exec tadka-redis-c1 redis-cli SET user:1 a
-# (error) MOVED <slot> …   <- that IS Cluster
+
+# DOING: same write with -c (client follows MOVED). Then read.
+# PROVES: a cluster-aware client can write/read. Expect: OK then a.
+# Use docker exec (MOVED is a Docker IP — host redis-cli cannot follow).
 docker exec tadka-redis-c1 redis-cli -c SET user:1 a
 docker exec tadka-redis-c1 redis-cli -c GET user:1
-# a
 
+# DOING: FAIL ONE SHARD (not the replica from Beat 2).
 docker stop tadka-redis-c2
+
+# DOING: read after that shard is dead.
+# PROVES: those slots had 0 replicas. Expect: CLUSTERDOWN or error. THAT is the fail.
+# NOT: the replica beat (copy survived). Here the KEYSPACE is gone.
 docker exec tadka-redis-c1 redis-cli -c GET user:1
-# CLUSTERDOWN / error for slots on the dead node — no replica
+
+# DOING: bring the shard back. RESET. NOT --cluster-replicas 1.
 docker start tadka-redis-c2
 ```
 
-**Setup fail:** `CLUSTERDOWN` / empty NODES → `docker start tadka-redis-c-init`.
+**Setup fail:** empty NODES before you killed a node → `docker start tadka-redis-c-init`.
 
-**Line:** sharding ≠ HA. HA would be `--cluster-replicas 1` (or Sentinel, or managed).
+**Line:** sharding ≠ HA.
 
-### Beat 4 — Sentinel is how failover is set up
+### Beat 4 — Sentinel is how failover is set up (the actual fix)
 
-**How it is set up:** `sentinel monitor mymaster 172.28.0.10 6379 1` (static IP — hostname + `docker stop` NXDOMAIN puts Sentinel in TILT). The **client** uses Sentinel (`localhost:26379`). ElastiCache primary endpoint **is** this.
+**Story:** same `docker stop` as Beat 2, but now a voter **changes the writer**. That is HA. Tadka would still not follow (hardcoded `:6379`). `docker start` at the end is reset.
+
+**How it is set up:** `sentinel monitor mymaster 172.28.0.10 6379 1` (static IP). Client talks to Sentinel (`:26379`), not a hardcoded master. ElastiCache primary endpoint **is** this.
 
 ```powershell
+# DOING: ask Sentinel who the writer is, before the fail.
+# PROVES: Sentinel is watching. Expect: 172.28.0.10 6379 (the master).
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
-# 172.28.0.10 6379
 
+# DOING: the SAME fail as Beat 2 (kill the writer).
 docker stop tadka-ha-master
 Start-Sleep -Seconds 8
+
+# DOING: ask Sentinel again.
+# PROVES: THE FIX — writer address CHANGED. Expect: 172.28.0.11 6379 (the old replica).
+# NOT: "GET still namaste" (that was Beat 2, the copy). Here the *role* moved.
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
-# 172.28.0.11 6379 — WRITER CHANGED
+
+# DOING: confirm on the replica process.
+# PROVES: it was promoted. Expect: role:master
 docker exec tadka-ha-replica redis-cli INFO replication
-# role:master
+
+# DOING: RESET. Old master may come back as a replica. NOT required for the proof.
 docker start tadka-ha-master
 ```
+
+| After `stop` master | Beat 2 replica | Beat 4 Sentinel |
+|---|---|---|
+| Data | Copy still `GET`s | Copy still `GET`s |
+| Writer | Still the dead host | **Address changes** to the replica |
+| App with hardcoded host | **Dead** | Still dead unless it talks to **Sentinel** |
+| `docker start` | Reset | Reset |
 
 If failover does not happen in 10s: show `sentinel.conf`, say the line, move on. Do not steal the brownout.
 

@@ -21,92 +21,96 @@ Tadka kill-Redis (classification) uses the **main** compose: `docker compose sto
 
 ---
 
-## 1. Replica - how it is set up, and why it is not HA
+## 1. Replica - a copy, not HA
 
-Compose command: `redis-server --replicaof redis-master 6379`
+**Story:** write on master, read on replica, **kill the writer**. Data on the replica survives. An app aimed at the master is **dead**. `docker start` is **reset**, not the fix (Sentinel is §3).
+
+Compose: `redis-server --replicaof 172.28.0.10 6379`
 
 ```powershell
+# DOING: write on the only writer.
 docker exec tadka-ha-master redis-cli SET demo:ha namaste
-docker exec tadka-ha-replica redis-cli GET demo:ha
-# namaste
 
+# DOING: read the copy. PROVES: replication. Expect: namaste. NOT: HA.
+docker exec tadka-ha-replica redis-cli GET demo:ha
+
+# DOING: ask who this process is. Expect: role:slave
 docker exec tadka-ha-replica redis-cli INFO replication
-# role:slave   master_host:redis-master
 
+# DOING: FAIL THE WRITER.
 docker stop tadka-ha-master
+
+# DOING: read after master death. PROVES: copy survived. Expect: namaste.
+# THE FAIL: app still pointing at master (host 6380) is down. Copy != failover.
 docker exec tadka-ha-replica redis-cli GET demo:ha
-# namaste  - the COPY survived
+
+# DOING: RESET. NOT Sentinel. NOT the product fix.
+docker start tadka-ha-master
 ```
-
-An app still pointing at the master (Tadka points at `localhost:6379`) is down. **Replication is a copy. Failover is a new writer.**
-
-Start the master again before Sentinel: `docker start tadka-ha-master` (wait a few seconds; replica resyncs).
 
 ---
 
-## 2. Cluster - how it is set up (sharding, not HA)
+## 2. Cluster - sharding, not HA
 
-Each node: `cluster-enabled yes`, `cluster-config-file`, `cluster-announce-ip`. Then:
-
-```
-redis-cli --cluster create redis-c1:6379 redis-c2:6379 redis-c3:6379 --cluster-replicas 0 --cluster-yes
-```
-
-`--cluster-replicas 0` is the point: no extra copy per slot. Announce IPs are literals (`172.28.0.21` …) — Redis 7.4 rejects a hostname for `cluster-announce-ip`.
+**Story:** `MOVED` is Cluster working. Kill one node with **0 replicas** → those slots are **gone**. `docker start c2` is reset, not HA.
 
 ```powershell
+# DOING: list masters + slot ranges. Expect: three masters, 172.28.0.21-23.
 docker exec tadka-redis-c1 redis-cli CLUSTER NODES
-# three masters, slot ranges, IPs 172.28.0.21-23 (not hostnames — Redis 7 rejects hostname for cluster-announce-ip)
 
+# DOING: write without following redirects.
+# PROVES: sharding. Expect: MOVED. NOT a bug.
 docker exec tadka-redis-c1 redis-cli SET user:1 a
-# (error) MOVED <slot> 172.28.0.2x:6379     <- THAT is Cluster
+
+# DOING: cluster-aware client (-c). Expect: OK then a. docker exec only (MOVED is a Docker IP).
 docker exec tadka-redis-c1 redis-cli -c SET user:1 a
 docker exec tadka-redis-c1 redis-cli -c GET user:1
-# a     (-c follows MOVED; must docker exec, not host redis-cli — MOVED is a Docker IP)
 
+# DOING: FAIL ONE SHARD.
 docker stop tadka-redis-c2
-docker exec tadka-redis-c1 redis-cli CLUSTER NODES
-# one node fail
+
+# DOING: read after shard death. PROVES: 0 replicas. Expect: CLUSTERDOWN / error. THAT is the fail.
 docker exec tadka-redis-c1 redis-cli -c GET user:1
-# may be CLUSTERDOWN / error - those slots had no replica
+
+# DOING: RESET. NOT --cluster-replicas 1.
 docker start tadka-redis-c2
 ```
 
-**Cluster split the keyspace. We did not give each slot a replica, so a dead node is dead keys. Sharding is not HA.**
-
 ---
 
-## 3. Sentinel - how HA is actually set up
+## 3. Sentinel - the actual failover (the fix)
 
-`sentinel.conf` (this folder):
+**Story:** same `docker stop` as §1, but Sentinel **changes the writer**. That is HA. `docker start` is reset. Tadka would still not follow (hardcoded host).
 
-```
-sentinel monitor mymaster redis-master 6379 1
-sentinel down-after-milliseconds mymaster 3000
-```
-
-`1` is **quorum** (with one sentinel, one vote is enough for class). Production uses 3 sentinels and quorum 2.
-
-The **client** talks to Sentinel (`localhost:26379`), not a hardcoded master host. ElastiCache "primary endpoint" is this, managed.
+`sentinel.conf`: `sentinel monitor mymaster 172.28.0.10 6379 1` (static IP). Quorum `1` is class-only; production uses 3 sentinels / quorum 2.
 
 ```powershell
+# If you just finished §1, master is already up. If not:
 docker start tadka-ha-master
-# wait until replica is slave again
-docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL masters
-docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
-# 172.28.0.10 6379     (static IP — hostname + Docker DNS NXDOMAIN puts Sentinel in TILT)
 
+# DOING: ask who the writer is. Expect: 172.28.0.10 6379
+docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
+
+# DOING: the SAME fail as §1.
 docker stop tadka-ha-master
 Start-Sleep -Seconds 8
+
+# DOING: ask again. PROVES: THE FIX — writer CHANGED. Expect: 172.28.0.11 6379
+# NOT: "GET still namaste" (that was §1). Here the *role* moved.
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
-# 172.28.0.11 6379     - WRITER CHANGED (the replica)
+
+# DOING: confirm promotion. Expect: role:master
 docker exec tadka-ha-replica redis-cli INFO replication
-# role:master
+
+# DOING: RESET.
+docker start tadka-ha-master
 ```
 
-**Sentinel changed the writer.** Tadka still has `localhost:6379` in config, so Tadka would **not** follow this. That is the last line: HA is Sentinel/Cluster-replicas/**managed**, plus a client that uses that endpoint.
-
-If failover does not happen in 10s: teach the conf on the slide and move on. Do not burn the brownout.
+| After `stop` master | §1 replica | §3 Sentinel |
+|---|---|---|
+| Data | Copy still `GET`s | Copy still `GET`s |
+| Writer | Dead host | **Address changes** |
+| Hardcoded app | **Dead** | Dead unless it talks to Sentinel |
 
 ---
 
