@@ -22,7 +22,8 @@ src/Tadka.Api/
     Restaurants/ ...   # not carved — no failure earned this
     Delivery/ ...
     Identity/ ...
-  Domain/Common/Events/   # OrderPlaced, PaymentCompleted — BOTH look here
+  Domain/Orders/Events/          # OrderPlaced — Ordering owns it; Payment handles it
+  Domain/Common/Events/          # PaymentCompleted / Failed — Payment owns them; Ordering handles them
 ```
 
 Java: `com.tadka.ordering` / `com.tadka.payments`. Node: `src/modules/ordering`. Go: `internal/ordering`. Same tree.
@@ -39,7 +40,8 @@ src/Tadka.Api/
   Data/Configurations/PaymentConfiguration.cs
   Domain/Orders/             # NOT a module folder
   Controllers/OrdersController.cs
-  Domain/Common/Events/      # shared contract
+  Domain/Orders/Events/OrderPlacedEvent.cs
+  Domain/Common/Events/PaymentEvents.cs   # PaymentCompleted / Failed — not one shared folder
 ```
 
 | Rule | Day 7 |
