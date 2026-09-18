@@ -40,14 +40,18 @@ public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository ord
 
         // Subscribe FIRST, so any event published between "read the replay buffer" and "start
         // draining the live queue" is captured (in the queue) rather than silently missed.
+        // Cap wait at 2s: docker stop redis leaves the multiplexer retrying; without this,
+        // curl --max-time 5 returns http_code 000 (no status line) instead of 503.
         var queue = Channel.CreateUnbounded<SequencedTrackingEvent>();
         IAsyncDisposable subscription;
+        using var subscribeCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        subscribeCts.CancelAfter(TimeSpan.FromSeconds(2));
         try
         {
             subscription = await _bus.SubscribeAsync(
-                id, e => { queue.Writer.TryWrite(e); return Task.CompletedTask; }, ct);
+                id, e => { queue.Writer.TryWrite(e); return Task.CompletedTask; }, subscribeCts.Token);
         }
-        catch (StackExchange.Redis.RedisException)
+        catch (Exception ex) when (ex is StackExchange.Redis.RedisException or OperationCanceledException)
         {
             Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             await Response.WriteAsync("Live tracking requires Redis (ADR-020).", ct);

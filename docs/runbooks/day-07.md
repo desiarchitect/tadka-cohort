@@ -135,6 +135,7 @@ curl.exe -s -o NUL -w "menu %{http_code} %{time_total}s`n" http://localhost:5224
 
 # DOING: open the live-tracking SSE stream.
 # PROVES: SSE is a CORRECTNESS dep for the stream. Expect HTTP 503 + "Live tracking requires Redis".
+# NOT: sse 000 — that is curl --max-time with NO status (app hung reconnecting). Restart API after pull (2s subscribe cap).
 curl.exe -s -o NUL -w "sse  %{http_code}`n" --max-time 5 http://localhost:5224/api/v1/orders/00000000-0000-0000-0000-000000000001/events
 
 # DOING: place an order (Postgres, not Redis).

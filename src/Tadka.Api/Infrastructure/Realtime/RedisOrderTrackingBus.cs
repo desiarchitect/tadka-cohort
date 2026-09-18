@@ -50,12 +50,14 @@ public sealed class RedisOrderTrackingBus(IConnectionMultiplexer redis) : IOrder
         var subscriber = _redis.GetSubscriber();
         var channel = Channel(orderId);
 
+        // Honour ct: after docker stop redis, SE.Redis otherwise retries past curl --max-time
+        // and the client sees http_code 000 (no status) instead of the taught 503.
         await subscriber.SubscribeAsync(channel, async (_, message) =>
         {
             if (!message.HasValue) return;
             var sequenced = JsonSerializer.Deserialize<SequencedTrackingEvent>((string)message!, Json);
             if (sequenced is not null) await onEvent(sequenced);
-        });
+        }).WaitAsync(ct);
 
         return new Subscription(subscriber, channel);
     }
