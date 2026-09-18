@@ -1,6 +1,6 @@
 # Day 10 — Runbook: Authentication, Authorization & PII
 
-**Branch:** `day-10`  ·  **What's new:** the system was wide open; now it's secured. **JWT login** (ADR-030), **RBAC + resource-ownership** validated **per-service** (ADR-031, defense in depth — the Payment service verifies the same token), and **PII protection** (ADR-032 — log masking + GDPR right-to-be-forgotten). Same infra as Day 9.
+**Branch:** `day-10`  ·  **What changed since Day 9:** [`docs/changelog.md`](../changelog.md). **What's new:** the system was wide open; now it's secured. **JWT login** (ADR-030), **RBAC + resource-ownership** validated **per-service** (ADR-031, defense in depth — the Payment service verifies the same token), and **PII protection** (ADR-032 — log masking + GDPR right-to-be-forgotten). Same infra as Day 9.
 
 > New here? Read [`README.md`](README.md). Windows PowerShell → `curl.exe`. Demo password for every seeded account: **`Password123!`**.
 
