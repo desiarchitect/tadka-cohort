@@ -256,7 +256,27 @@ Tadka: cache the **menu**. Never cache **order status**.
 
 ## 1. Shipped path — async + fast
 
-**What you are proving:** “order placed” does not wait for the bank.
+**What you are proving:** “order placed” does not wait for the bank. POST returns **`Created` in tens of milliseconds**. `Confirmed` comes on a **later GET**, not on this POST.
+
+**Before this POST** the API must be shipped config: **no** `$env:Payment__*` in that terminal.
+
+If you just ran Redis labs (`docker compose stop redis`) or already set `Payment__Mode=Synchronous` / `Slow`:
+
+```powershell
+docker compose start redis
+docker exec tadka-redis redis-cli PING
+# PONG
+
+# Ctrl+C the running API
+# Open a NEW PowerShell (old $env:Payment__* is still in the old window)
+
+git checkout day-07
+dotnet run --project src/Tadka.Api --launch-profile http
+```
+
+Wait until `curl.exe http://localhost:5224/health` is **200**. Then POST.
+
+If your POST is **~9 s** and `"status":"Confirmed"` **in the same response**, you are still on **Synchronous + Slow** (the brownout). That is §2, not this step. Restart as above.
 
 ```powershell
 curl.exe -s -w "`nHTTP %{http_code} time=%{time_total}s`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
