@@ -1,304 +1,276 @@
-# Day 7 — Runbook: payment brownout → timeout + bulkhead → async
+# Day 7 — Runbook (you run this)
 
-**Branch:** `day-07`. **What changed since Day 6:** [`docs/changelog.md`](../changelog.md). **What's new (taught):** payment is wired, and it **fails first**. Polly timeout + bulkhead (ADR-021), MediatR Payment module with its own `PaymentDbContext` / `payment` schema / migration history (ADR-022), async payment off the request path (ADR-023). Infra is Day 6: Postgres `5432`, replica `5433`, Redis `6379`. **No Kafka. No Payment HTTP service** (that is Day 8).
+You are on branch `day-07`. What changed since Day 6: [`docs/changelog.md`](../changelog.md).
 
-**The number on the board:** Naive → Fix 1 → Fix 2. Fill it as you go. Captured here: **~8.8 s → ~2.9 s → ~20 ms**.
+Today you **wire payment** and watch it fail first, then you fix it in two steps. You also see what Redis does in production (down, replica, Cluster, Sentinel).
 
-> **Windows PowerShell:** `curl.exe` (not `curl` — that alias is `Invoke-WebRequest`). Quote `@file`. Env vars use **double underscore** (`Payment__Mode`). Wrong `_` = silent no-op (worse than an error). Each `$env:` lives only in **that** shell — open a fresh one to reset to shipped `appsettings.Development.json`. `dotnet run` already running **does not** reread env. Prefer `--launch-profile http` so you get port **5224** and `ASPNETCORE_ENVIRONMENT=Development` (connection string). Without a profile the ConnectionString can be empty.
+| | Naive (broken) | Fix 1 | Fix 2 (shipped) |
+|---|---|---|---|
+| What you change | Charge **inside** `POST /orders`, Slow gateway, no real timeout | Same, but Polly **timeout 2 s** + **bulkhead 10** | Charge **off** the request path (`Async`) |
+| What you should see | POST takes **~8–10 s**, still 201 | POST **~3 s**, order **Cancelled** | POST **~20 ms**, status `Created` |
 
-**How to read a POST curl in this file**
+Fill those times yourself as you go. Captured on one laptop: **~8.8 s → ~2.9 s → ~20 ms**.
+
+There is **no** Kafka and **no** Payment HTTP service today. That is Day 8.
+
+---
+
+## Before you type anything
+
+**Windows PowerShell**
+
+- Use `curl.exe`, not `curl` (`curl` is `Invoke-WebRequest`).
+- Env vars use **two** underscores: `Payment__Mode`. One `_` does nothing and does not error.
+- `$env:…` lasts only in **this** terminal. A running `dotnet run` does **not** pick up new env — Ctrl+C and start it again.
+- Always `--launch-profile http` so you get port **5224** and the Development connection string.
+
+**How to read a POST in this file**
 
 | Flag | What it does |
 |---|---|
-| `curl.exe` | The real curl binary |
-| `-s` | quiet (no progress bar) |
-| `-o NUL` | throw the body away (timing-only runs) |
-| `-w "…%{http_code} %{time_total}s"` | print status and seconds after the call |
-| `-X POST` | create an order |
-| `-H "Content-Type: application/json"` | JSON body |
-| `--data-binary "@docs/runbooks/place-order.json"` | read the file as-is (`@` = file, not the letters `@docs`) |
-| `--max-time 20` | give up if the brownout hangs longer than 20 s |
+| `-s` | no progress bar |
+| `-o NUL` | hide the JSON body (timing-only) |
+| `-w "…%{http_code} %{time_total}s"` | print status and seconds |
+| `--data-binary "@docs/runbooks/place-order.json"` | `@` means “read this file” |
+| `--max-time 20` | stop if the brownout hangs longer than 20 s |
 
-`000` from curl = **nothing listened** (API down). That is a **setup fail**, not the lesson.
+`curl` **`000`** = nothing is listening (API down). That is **your setup**, not the lesson.
 
-| Thing | Value |
+| | |
 |---|---|
 | API | `http://localhost:5224` |
-| POST body | `@docs/runbooks/place-order.json` (Priya + Meghana biryani) |
-| Payment tables | schema `payment` on the **same** Postgres as orders |
+| Order JSON | `docs/runbooks/place-order.json` |
+| Meghana restaurant id | `$RID = "a1b2c3d4-0001-4000-8000-000000000001"` |
+| Payments | schema `payment` on the **same** Postgres as orders |
 
-### Env levers (read this before any restart)
+**Env you will set** (Ctrl+C the API each time)
 
-| Variable | Naive (break) | Fix 1 (timeout) | Burst §3b (bulkhead) | Fix 2 / shipped |
+| Variable | §2 brownout | §3 timeout | §3b bulkhead | §4 / shipped |
 |---|---|---|---|---|
 | `Payment__Mode` | `Synchronous` | `Synchronous` | `Synchronous` | `Async` |
-| `Payment__Gateway__Behavior` | `Slow` | `Slow` | `Slow` (holds a slot ~8 s) | `Slow` or `Fast` |
-| `Payment__TimeoutSeconds` | `30` (no timeout) | **`2`** (prove timeout) | **`30`** (must outlive 8 s or the 10 fail) | `2` |
-| `Payment__MaxConcurrentCharges` | `1000` (unbounded) | `10` | **`10`** | `10` |
-| `RateLimit__PerMinute` | (default 120) | (default 120) | **`1000`** (else a 100-burst 429s) | (default 120) |
+| `Payment__Gateway__Behavior` | `Slow` | `Slow` | `Slow` | `Slow` then `Fast` |
+| `Payment__TimeoutSeconds` | `30` | **`2`** | **`30`** | `2` |
+| `Payment__MaxConcurrentCharges` | `1000` | `10` | **`10`** | `10` |
+| `RateLimit__PerMinute` | default 120 | default 120 | **`1000`** | default 120 |
 
-Shipped file is **Async + Fast + 2s + 10**. Ctrl+C the API, set `$env:…`, `dotnet run` again. `dotnet run` already running **does not** reread env.
+Shipped `appsettings.Development.json` is **Async + Fast + timeout 2 + cap 10**. A new terminal with **no** `$env:Payment__*` is shipped.
 
-### Demo → code
-
-| When | What you run | Look for | Code |
-|---|---|---|---|
-| Shipped | POST, wait, GET | 201 `Created` in tens of ms; GET `Confirmed`; payment `Completed` | `PaymentProcessor` hosted service |
-| Two histories | `pg_tables` schema `payment` | `payments` **and** `__EFMigrationsHistory` | `Program.cs` 106, 126 |
-| Brownout | Sync + Slow + timeout 30 | POST **~8.8 s**, still 201 | gateway sleeps 8 s on the request path |
-| Fix 1 | Sync + Slow + timeout 2 | POST **~2.9 s**; order `Cancelled`; `TimeoutRejectedException` | `PaymentResiliencePipeline.cs` 28–33 |
-| Bulkhead burst | Sync + Slow + timeout **30** + cap 10 | 10 parallel → 10 `Completed`; 100 parallel → ~10 `Completed` + ~90 `RateLimiterRejected` | same pipeline, `queueLimit: 0` |
-| Fix 2 | Async + Slow | POST **~20 ms**, status `Created`; later `Cancelled` | `PaymentWorkChannel` + processor |
-| Grep | Select-String on Orders | **no matches** | ADR-022 seam |
-
-Spoken cue: **"Ab demo."**
-
----
-
-## How payment is wired (.NET, and the same idea elsewhere)
+What the code is doing:
 
 ```
 POST /orders
-    → SaveChanges (order Created)
-    → MediatR Publish OrderPlaced
-         │
-         ├─ Synchronous mode: charge NOW (Polly around FakePaymentGateway)
-         └─ Async mode: enqueue; PaymentProcessor charges in the background
-    → HTTP returns  (async: milliseconds; sync: waits for the gateway)
+    → save Order (Created)
+    → MediatR OrderPlaced
+         ├─ Synchronous: charge NOW (Polly around the fake gateway)
+         └─ Async: put on a Channel; PaymentProcessor charges in the background
+    → HTTP returns  (async: ms; sync: waits for the gateway)
 ```
-
-| Job | Tadka (.NET) | Java | Node |
-|---|---|---|---|
-| Timeout + bulkhead | **Polly** v8 `AddTimeout` + `AddConcurrencyLimiter` | Resilience4j | Opossum / p-limit |
-| In-process events | **MediatR** `INotification` | Spring `ApplicationEventPublisher` | EventEmitter |
-| Off the request path | `Channel` + `BackgroundService` | `@Async` / queue | worker thread / Bull |
-
-Polly is not the lesson. **Bound how long one call holds a slot, and how many slots exist.**
 
 ---
 
-## 0. Fresh start
+## 0. Start
 
 ```powershell
 git checkout day-07
 docker compose down -v
 docker rm -f tadka-postgres tadka-postgres-replica tadka-redis
 docker compose up -d
-dotnet test Tadka.slnx          # 32 cases on this merge. Needs Docker.
-# No Payment__* in this shell.
+dotnet test Tadka.slnx
+# new terminal — no Payment__* env
 dotnet run --project src/Tadka.Api --launch-profile http
 ```
 
-**What it does:** `down -v` wipes volumes (clean DB). `up -d` starts Postgres `5432`, replica `5433`, Redis `6379`. `dotnet run --launch-profile http` migrates **core** then **Payment** and listens on **5224**. Redis still there from Day 6.
+| Command | What it does |
+|---|---|
+| `down -v` | wipe DB volumes (clean start) |
+| `up -d` | Postgres `5432`, replica `5433`, Redis `6379` |
+| `dotnet run --launch-profile http` | migrate **core** then **payment**, listen **5224** |
 
-**Ready when:** three containers healthy, `curl.exe http://localhost:5224/health` → **200**, tests **32/32**. Do not start §3b until health is 200.
+You are ready when `curl.exe http://localhost:5224/health` prints **200**.
+
+Prove Payment has its own schema and migration history:
 
 ```powershell
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT tablename FROM pg_tables WHERE schemaname='payment' ORDER BY 1;"
 ```
 
-**Look for:** `payments` and `__EFMigrationsHistory`. Core history stays in `public`.
+You should see `payments` **and** `__EFMigrationsHistory`.
 
 ---
 
-## 0b. Redis in production (Day 6 leftover — 18 min)
+## 0b. Redis in production
 
-Day 6 taught **commands**. This beat is **what production does**: Redis down, replica, Cluster, Sentinel HA, and “same seat from another country.”
+Day 6 was commands. Here you see **what happens when Redis dies**, then **replica vs Cluster vs Sentinel**.
 
-Student one-pager: [`docs/learn/redis-in-production.md`](../learn/redis-in-production.md). Toy (not Tadka compose): [`toydemo/day-07-redis-ha/`](../../toydemo/day-07-redis-ha/).
+Tadka still uses **one** Redis: `tadka-redis` on `6379`. The HA boxes are a **toy** (`toydemo/day-07-redis-ha/`). You do **not** point Tadka at Cluster or Sentinel today.
 
-Tadka stays **standalone** `tadka-redis` :6379. We do **not** point the API at Cluster or Sentinel today.
+Background: [`docs/learn/redis-in-production.md`](../learn/redis-in-production.md).
 
-**If you already tested the toy** (failover left a promoted replica, a dead master, or a CLUSTERDOWN node), **tear it down first**. A dirty toy is why the live demo “does not work as expected.” This does **not** stop Tadka’s `tadka-redis` / Postgres.
+### If you already ran the toy (failover / killed a node)
+
+Leftover state makes Sentinel show the **same** IP before and after `stop`. Wipe the toy only (Tadka Redis/Postgres stay up):
 
 ```powershell
 docker compose -f toydemo/day-07-redis-ha/docker-compose.yml down -v
-```
-
-Then a clean start (so S0 does not wait on image pulls, and Sentinel/Cluster are not leftover state):
-
-```powershell
 docker compose -f toydemo/day-07-redis-ha/docker-compose.yml up -d
-# wait ~10s. If CLUSTER NODES is empty: docker start tadka-redis-c-init
 ```
 
-API for beat 1 must already be running (`--launch-profile http`, health **200**). `$RID` = `a1b2c3d4-0001-4000-8000-000000000001` (Meghana). After class (or if ports 6380/7001 clash): the same `down -v` again.
+Wait ~10 s. If `CLUSTER NODES` is empty: `docker start tadka-redis-c-init`.
 
-### Beat 1 — kill Tadka Redis (classification)
-
-**Story:** Redis is **down**. Menu must still work. SSE must fail honest. Orders do not use Redis. `docker compose start redis` at the end is a **reset**, not HA.
-
-**Not the lesson:** `000` = API down. Menu **500** = no fallback (wrong commit).
+Health must be **200**. Then:
 
 ```powershell
-# DOING: stop Tadka's Redis only (not the HA toy).
-# PROVES: the API process stays up.
+$RID = "a1b2c3d4-0001-4000-8000-000000000001"
+```
+
+### 0b.1 Redis down — three different answers
+
+**What you are doing:** stop Tadka’s Redis. Menu should still work (slower). Live tracking should fail honestly. Placing an order should still work. Starting Redis at the end is a **reset**, not HA.
+
+```powershell
+# Stop Tadka Redis only (not the HA toy).
 docker compose stop redis
 
-# DOING: GET menu with cache gone (miss -> SQL).
-# PROVES: cache is a PERFORMANCE dep. Expect HTTP 200.
-# NOT: 000 (API down) or 500 (no fallback). First hit can be 5-12s — do not Ctrl+C.
+# Cache is gone → SQL. You want HTTP 200. First hit can be 5-12 s — wait.
+# 000 = API down. 500 = this branch has no fallback.
 curl.exe -s -o NUL -w "menu %{http_code} %{time_total}s`n" http://localhost:5224/api/v1/restaurants/$RID/menu
 
-# DOING: open the live-tracking SSE stream.
-# PROVES: SSE is a CORRECTNESS dep for the stream. Expect HTTP 503 + "Live tracking requires Redis".
-# NOT: sse 000 — that is curl --max-time with NO status (app hung reconnecting). Restart API after pull (2s subscribe cap).
+# Live tracking needs Redis pub/sub. You want HTTP 503 and body "Live tracking requires Redis".
+# 000 = curl got no status (old API hung). Pull, restart API, Redis still stopped, try again.
 curl.exe -s -o NUL -w "sse  %{http_code}`n" --max-time 5 http://localhost:5224/api/v1/orders/00000000-0000-0000-0000-000000000001/events
 
-# DOING: place an order (Postgres, not Redis).
-# PROVES: money path does not need Redis. Expect HTTP 201.
+# Orders use Postgres. You want HTTP 201.
 curl.exe -s -o NUL -w "order %{http_code}`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 
-# DOING: bring Tadka Redis back. RESET for the rest of class. NOT "we added HA".
+# Reset. This is not HA.
 docker compose start redis
 docker exec tadka-redis redis-cli PING
-# expect: PONG
+# PONG
 ```
 
-### Beat 2 — replica (`REPLICAOF`) is a copy, not HA
+| Result | Meaning |
+|---|---|
+| menu **200** | cache is a **performance** dependency — app stays correct, slower |
+| sse **503** | the stream is a **correctness** dependency — fail honest |
+| order **201** | money is not in Redis |
 
-**Story:** a replica is a **copy**. Killing the master does **not** fail over. Data on the replica survives; an app still aimed at the master is **dead**. `docker start` is **reset**, not the fix (that is Beat 4 Sentinel).
+### 0b.2 Replica — copy, not failover
 
-**How it is set up:** `redis-server --replicaof 172.28.0.10 6379` (toy replica on host **6381**).
+**What you are doing:** write on the master, read on the replica, **kill the writer**. The copy still has the key. Anything still aimed at the master is **down**. `docker start` is a **reset**. The real failover is §0b.4.
 
 ```powershell
-# DOING: write on the ONLY writer (master).
+# Write on the only writer.
 docker exec tadka-ha-master redis-cli SET demo:ha namaste
 
-# DOING: read the same key from the replica.
-# PROVES: replication works. Expect: namaste. NOT: failover / HA.
+# Read the copy. You want: namaste. This only proves replication.
 docker exec tadka-ha-replica redis-cli GET demo:ha
 
-# DOING: ask the replica who it is.
-# PROVES: it is a follower. Expect: role:slave
+# Confirm it is a follower. You want: role:slave
 docker exec tadka-ha-replica redis-cli INFO replication
 
-# DOING: FAIL THE WRITER. This is the failure we are studying.
+# THE FAILURE: kill the writer.
 docker stop tadka-ha-master
 
-# DOING: read the replica after the master is dead.
-# PROVES: the COPY survived. Expect: namaste.
-# THE FAIL: any app still pointing at the master (host 6380) is down. Copy != failover.
+# Copy survived. You want: namaste.
+# THE FAIL that is not fixed yet: an app on host port 6380 (master) is dead. Copy != HA.
 docker exec tadka-ha-replica redis-cli GET demo:ha
 
-# DOING: bring the writer back. RESET the lab. NOT Sentinel. NOT the product fix.
+# Reset. Not the fix.
 docker start tadka-ha-master
 ```
 
-**Demo fail:** GET nil → replica not ready, wait 2s. **Setup fail:** container missing → toy compose not up.
+If GET is empty: wait 2 s and retry (replica not ready). If the container is missing: toy compose is not up.
 
-**Line:** “Data lived. The app that still points at the master is dead.”
+### 0b.3 Cluster — sharding, not HA
 
-### Beat 3 — Cluster is 16384 slots (`MOVED`), not HA
-
-**Story:** keys are **sharded**. `MOVED` is Cluster working, not a bug. Killing a node **without replicas** loses those slots. `docker start c2` is reset, not HA (`--cluster-replicas 1` would be HA).
-
-**How it is set up:** `cluster-enabled yes` + `cluster-announce-ip` as a **literal IP**. Then `--cluster create … --cluster-replicas 0`.
+**What you are doing:** `MOVED` is Cluster working (the key lives on another node). Then you **kill one shard** that has **no replica**. Those slots are **gone**. `docker start c2` is a **reset**. HA would be `--cluster-replicas 1`.
 
 ```powershell
-# DOING: list the three masters and their slot ranges.
-# PROVES: cluster formed. Expect: three master lines, IPs 172.28.0.21-23.
+# You want three masters, IPs 172.28.0.21-23.
 docker exec tadka-redis-c1 redis-cli CLUSTER NODES
 
-# DOING: write WITHOUT following redirects.
-# PROVES: this key lives on another node. Expect: (error) MOVED <slot> 172.28.0.2x:6379
-# NOT: a bug. THAT is Cluster (sharding).
+# Write without following redirects. You want: (error) MOVED … 172.28.0.2x:6379
+# That is not a bug — that is sharding.
 docker exec tadka-redis-c1 redis-cli SET user:1 a
 
-# DOING: same write with -c (client follows MOVED). Then read.
-# PROVES: a cluster-aware client can write/read. Expect: OK then a.
-# Use docker exec (MOVED is a Docker IP — host redis-cli cannot follow).
+# -c follows MOVED. You want: OK then a. Must be docker exec (MOVED is a Docker IP).
 docker exec tadka-redis-c1 redis-cli -c SET user:1 a
 docker exec tadka-redis-c1 redis-cli -c GET user:1
 
-# DOING: FAIL ONE SHARD (not the replica from Beat 2).
+# THE FAILURE: kill one shard.
 docker stop tadka-redis-c2
 
-# DOING: read after that shard is dead.
-# PROVES: those slots had 0 replicas. Expect: CLUSTERDOWN or error. THAT is the fail.
-# NOT: the replica beat (copy survived). Here the KEYSPACE is gone.
+# Those slots had 0 replicas. You want: CLUSTERDOWN or error. The keyspace is gone (unlike the replica copy).
 docker exec tadka-redis-c1 redis-cli -c GET user:1
 
-# DOING: bring the shard back. RESET. NOT --cluster-replicas 1.
+# Reset. This is not --cluster-replicas 1.
 docker start tadka-redis-c2
 ```
 
-**Setup fail:** empty NODES before you killed a node → `docker start tadka-redis-c-init`.
+If `CLUSTER NODES` is empty **before** you killed a node: `docker start tadka-redis-c-init`.
 
-**Line:** sharding ≠ HA.
+### 0b.4 Sentinel — this is the failover (the fix)
 
-### Beat 4 — Sentinel is how failover is set up (the actual fix)
+**What you are doing:** the **same** `docker stop` as replica, but Sentinel **changes the writer**. That is HA.
 
-**Story:** same `docker stop` as Beat 2, but now a voter **changes the writer**. That is HA. Tadka would still not follow (hardcoded `:6379`). `docker start` at the end is reset.
-
-**How it is set up:** `sentinel monitor mymaster 172.28.0.10 6379 1` (static IP). Client talks to Sentinel (`:26379`), not a hardcoded master. ElastiCache primary endpoint **is** this.
+**Before you stop anything:** `get-master-addr` **must** be `172.28.0.10`. If it is already `172.28.0.11`, you already failed over — `down -v` then `up -d`. Stopping `tadka-ha-master` then changes nothing.
 
 ```powershell
-# DOING: ask Sentinel who the writer is, BEFORE the fail.
-# PROVES: clean stack. Expect: 172.28.0.10 6379 (compose master).
-# If you already see 172.28.0.11 — leftover failover. STOP. down -v then up -d (top of §0b).
-# Stopping tadka-ha-master then will change NOTHING (that container is no longer the writer).
+# Who is the writer? You want: 172.28.0.10
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
 
-# DOING: the SAME fail as Beat 2 (kill the writer).
+# Same failure as replica.
 docker stop tadka-ha-master
 Start-Sleep -Seconds 8
 
-# DOING: ask Sentinel again.
-# PROVES: THE FIX — writer address CHANGED. Expect: 172.28.0.11 6379 (the old replica).
-# NOT: "GET still namaste" (that was Beat 2, the copy). Here the *role* moved.
+# THE FIX: writer address changed. You want: 172.28.0.11
+# (Not “GET still namaste” — that was the copy. Here the ROLE moved.)
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
 
-# DOING: confirm on the replica process.
-# PROVES: it was promoted. Expect: role:master
+# Confirm. You want: role:master
 docker exec tadka-ha-replica redis-cli INFO replication
 
-# DOING: RESET. Old master may come back as a replica. NOT required for the proof.
+# Reset. Old master may come back as a replica.
 docker start tadka-ha-master
 ```
 
-| After `stop` master | Beat 2 replica | Beat 4 Sentinel |
+| After you `stop` the master | Replica (§0b.2) | Sentinel (§0b.4) |
 |---|---|---|
 | Data | Copy still `GET`s | Copy still `GET`s |
-| Writer | Still the dead host | **Address changes** to the replica |
-| App with hardcoded host | **Dead** | Still dead unless it talks to **Sentinel** |
-| `docker start` | Reset | Reset |
+| Writer | Still the dead host | **Address becomes `.11`** |
+| App with hardcoded host | Down | Still down unless it talks to **Sentinel** (`:26379`) |
 
-If failover does not happen in 10s: show `sentinel.conf`, say the line, move on. Do not steal the brownout.
+Tadka’s config is still `localhost:6379`, so Tadka would **not** follow this failover. ElastiCache “primary endpoint” is Sentinel (or Cluster+replicas) **managed**.
 
-Tadka still has `localhost:6379` in config — it would **not** follow Sentinel. That is honest.
+If `.10` does not become `.11` in 10 s: see `toydemo/day-07-redis-ha/sentinel.conf`. Do not block the payment labs on this.
 
-### Beat 5 — same seat, two countries (talk, 3 min)
+### 0b.5 Same seat, two countries (no command)
 
-**Not Cluster.** Cluster is one region. Mumbai Redis and London Redis are two caches. Async replica: both `GET seat:12A` free → double booking.
+This is **not** Cluster. Cluster is one region. Mumbai Redis and London Redis are two caches. Both `GET seat:12A` = free → double booking.
 
-**Fix:** one inventory writer (unique `(flight, seat)`, `UPDATE … WHERE free RETURNING`, hold TTL). Regional Redis may cache the **map**. The book click always hits the seat service. US→India RTT is the cost of one seat. Last-writer-wins / CRDT cannot be a seat.
+**Fix:** one inventory writer — unique `(flight, seat)`, `UPDATE … WHERE free RETURNING`, hold with TTL. Regional Redis may cache the **map**. The book click always hits the seat service.
 
-Tadka: cache the menu. Never cache order status.
+Tadka: cache the **menu**. Never cache **order status**.
 
 ---
 
-## 1. BASELINE — shipped async + fast (ADR-023)
+## 1. Shipped path — async + fast
 
-**Story:** Swiggy shows “order placed” immediately. The bank is not on that HTTP call.
+**What you are proving:** “order placed” does not wait for the bank.
 
 ```powershell
 curl.exe -s -w "`nHTTP %{http_code} time=%{time_total}s`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 ```
 
-Copy `"id"` and `"status"`. First hit after boot can be ~0.8 s (JIT). **Second** POST is the number:
+Copy `"id"` and `"status"`. First POST after boot can be ~0.8 s (JIT). **Second** POST is the number you want: HTTP **201**, `"Created"`, **~20 ms**.
 
-**Captured:** HTTP **201**, `status":"Created"`, warm **time=0.022s**.
-
-Wait 2 s, then:
+Wait 2 s:
 
 ```powershell
 curl.exe -s http://localhost:5224/api/v1/orders/PASTE_ID
 ```
 
-**Look for:** `"status":"Confirmed"`.
-
-Payment row (quoted `"Status"` — Windows `psql -c` strips quotes, use a here-string):
+You want `"status":"Confirmed"`.
 
 ```powershell
 @'
@@ -306,17 +278,17 @@ SELECT "Status", "FailureReason", "CompletedAt" FROM payment.payments ORDER BY "
 '@ | docker exec -i tadka-postgres psql -U tadka -d tadka
 ```
 
-**Look for:** `Completed`, empty `FailureReason`.
+You want `Completed` and an empty `FailureReason`. (Pipe SQL on stdin. `psql -c "SELECT Status"` loses the quotes.)
 
 Optional: `curl.exe -N http://localhost:5224/api/v1/orders/PASTE_ID/events` **before** POST — you should see `Created` then `Confirmed`.
 
 ---
 
-## 2. BREAK — brownout (sync + slow, no timeout)
+## 2. Break — brownout (sync + slow, no real timeout)
 
-**Story:** Naive design charges **inside** `POST /orders`. Gateway has an incident (8 s). No Polly timeout. Every checkout holds a thread and a DB connection for ~9 s. 50 pool slots ÷ 9 s ≈ **5.5 orders/sec** vs dinner-rush ~11/sec. Half capacity, no bug in your SQL.
+**What is broken:** payment runs **inside** `POST /orders`. The fake gateway sleeps 8 s. Checkout holds a thread and a DB connection for ~9 s.
 
-Ctrl+C the API. **Same window:**
+Ctrl+C the API. **Same** terminal:
 
 ```powershell
 $env:Payment__Mode = "Synchronous"
@@ -324,7 +296,7 @@ $env:Payment__Gateway__Behavior = "Slow"
 $env:Payment__Gateway__SlowDelaySeconds = "8"
 $env:Payment__TimeoutSeconds = "30"
 $env:Payment__MaxConcurrentCharges = "1000"
-dotnet run --project src/Tadka.Api
+dotnet run --project src/Tadka.Api --launch-profile http
 ```
 
 Other terminal:
@@ -333,61 +305,51 @@ Other terminal:
 curl.exe -s -o NUL -w "BROWN HTTP %{http_code} time=%{time_total}s`n" --max-time 20 -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 ```
 
-**Identified if:** HTTP **201**, **time ≈ 8.8 s** (8 s sleep + overhead). Teaching capture was **9.2 s**. Your box will differ; **~8–10 s** is the brownout. **500** = not this commit (sync event snapshot).
+**You want:** HTTP **201**, **time ≈ 8–10 s**. That is the brownout working. **500** = wrong commit.
 
 ---
 
-## 3. FIX 1 — Polly 2 s timeout + bulkhead 10 (ADR-021)
+## 3. Fix 1 — timeout 2 s (one call)
 
-Still synchronous (worst case). Bound **duration** (timeout) and **fan-out** (bulkhead). Fail-fast: order **cancels** instead of the app hanging.
+**What you fix:** still synchronous, but Polly **cuts the call at 2 s**. The order **cancels** instead of hanging ~9 s.
 
-Ctrl+C. Fresh values (overwrite the previous `$env:`):
+**What this is not:** the bulkhead (how many Slow calls at once) — that is §3b.
+
+Ctrl+C. Overwrite env:
 
 ```powershell
 $env:Payment__Mode = "Synchronous"
 $env:Payment__Gateway__Behavior = "Slow"
 $env:Payment__TimeoutSeconds = "2"
 $env:Payment__MaxConcurrentCharges = "10"
-dotnet run --project src/Tadka.Api
+dotnet run --project src/Tadka.Api --launch-profile http
 ```
 
 Same POST curl as §2.
 
-**Captured:** HTTP **201**, **time=2.86 s**, JSON `"status":"Cancelled"`, `TimeoutRejectedException` … `'00:00:02'`.
+**You want:** HTTP **201**, **time ≈ 3 s**, JSON `"status":"Cancelled"`. Payment row: `Failed`, `TimeoutRejectedException` … `'00:00:02'`.
 
-Payment row: `"Status"=Failed`, same exception in `"FailureReason"`.
-
-**Is this better?** Ask the room. The user used to succeed slowly; now they get cancelled quickly. That is a real trade. Timeout ≠ bulkhead: timeout is **one** call; bulkhead is **how many** such calls at once.
-
-**Honesty:** capture was **~2.9 s** not 2.1 s. Warm vs cold; do not fake 2.1.
+The customer used to succeed slowly; now they fail quickly. That is the trade-off. Timeout bounds **one** call.
 
 ---
 
-## 3b. FIX 1b — bulkhead burst: 10 succeed, 100 → ~10 (ADR-021)
+## 3b. Fix 1b — bulkhead: 10 succeed, 100 → ~10
 
-### What we are demoing vs what is a fail
+§3 proved **timeout** (one Slow call). This proves **how many** Slow charges may run at once.
 
-| | This **is** the lesson | This is **not** the lesson (setup fail) |
-|---|---|---|
-| Wanted | 10 parallel → 10 payments **Completed** (~8 s). 100 parallel → **~10** Completed + **~90** rejected in **ms** | |
-| Wanted reject | `RateLimiterRejectedException` on the **payment** row (Polly bulkhead, `queueLimit: 0`) | HTTP `000` (API down), HTTP `429` (leftover `RateLimit:PerMinute=120`), `TimeoutRejectedException` (you left timeout at **2**) |
-| HTTP | Still **201** for (almost) every POST. The **order is created first**. “Succeed” = `payment.Status = Completed`, not a 201 vs 429 split | |
+**Succeed** means `payment.Status = Completed`, **not** HTTP 201 vs 429. Every POST still **creates the order** (201).
 
-§3’s **single** curl proved **timeout** (one Slow call cut at 2 s → order Cancelled). It did **not** prove how many Slow calls may run at once. That is this beat.
-
-### Why we restart (timeout 2 → 30)
-
-Slow gateway sleeps **8 s**. Polly timeout **2** (Fix 1) kills those ten slot-holders → **zero** Completed. Burst needs timeout **30** so the ten that got a slot **finish**. Cap stays **10**. Still Synchronous + Slow.
+**Why restart (timeout 2 → 30):** Slow sleeps **8 s**. Timeout **2** would **fail** the ten slot-holders (`TimeoutRejectedException`, zero Completed). Timeout **30** lets them finish. Cap stays **10**.
 
 | Env | Value | Why |
 |---|---|---|
-| `Payment__Mode` | `Synchronous` | Charge is **on** `POST /orders`, so you feel the 8 s vs the ms reject |
-| `Payment__Gateway__Behavior` | `Slow` | Holds a bulkhead slot ~8 s. **`Fast` is a trap** (~200 ms recycle → more than 10 Completed) |
-| `Payment__TimeoutSeconds` | **`30`** | Must outlive 8 s |
-| `Payment__MaxConcurrentCharges` | **`10`** | The bulkhead. 11th concurrent charge is rejected **now** |
-| `RateLimit__PerMinute` | **`1000`** | Weekday leftover limiter. Default **120** will 429 a 100-burst and look like the bulkhead |
+| `Payment__Mode` | `Synchronous` | you feel 8 s vs ms |
+| `Payment__Gateway__Behavior` | `Slow` | holds a slot ~8 s. **Fast** recycles slots → more than 10 Completed |
+| `Payment__TimeoutSeconds` | **`30`** | must outlive 8 s |
+| `Payment__MaxConcurrentCharges` | **`10`** | 11th concurrent charge is rejected **now** |
+| `RateLimit__PerMinute` | **`1000`** | leftover limiter; default 120 returns HTTP **429** and looks like the bulkhead |
 
-Ctrl+C the API (running process **ignores** new `$env:`).
+Ctrl+C.
 
 ```powershell
 $env:Payment__Mode = "Synchronous"
@@ -398,63 +360,49 @@ $env:RateLimit__PerMinute = "1000"
 dotnet run --project src/Tadka.Api --launch-profile http
 ```
 
-`--launch-profile http` = listen **5224** + Development connection string. Wait until:
+Wait for health **200**:
 
 ```powershell
 curl.exe -sS -o NUL -w "%{http_code}`n" http://localhost:5224/health
-# must print 200. 000 = API not up yet (or wrong port).
 ```
 
-Other terminal, **repo root**, `day-07`:
+From the **repo root**:
 
 ```powershell
 .\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 10
 .\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 100
 ```
 
-The script: preflights `/health` (throws on `000`); fires N parallel `POST /orders` with `place-order.json` (no `Idempotency-Key`, so N real orders); prints HTTP codes + how many finished **&lt; 1 s** vs **≥ 5 s**; pipes SQL to `psql` on **stdin** (Windows `docker exec -c` strips `"Status"` quotes).
+The script checks `/health`, fires N parallel POSTs, prints how many finished **&lt; 1 s** vs **≥ 5 s**, then queries `payment.payments`.
 
-### How to read the script output
-
-**Wave A (`-Count 10`) — demo win**
+**`-Count 10` — you want**
 
 ```
 codes: 201x10
-finished in < 1s (bulkhead reject): 0
-finished in >= 5s (held a Slow slot): 10
-Status Completed, reason (none), n = 10   (or ~10; last-45s window may include a prior wave)
+finished in < 1s: 0
+finished in >= 5s: 10
+Completed | (none) | 10
 ```
 
-**Wave B (`-Count 100`) — demo win** (captured on a laptop: `201x97`, `90` in &lt; 1 s, `10` in ≥ 5 s, `87` `RateLimiterRejectedException`)
+**`-Count 100` — you want** (shape, not a perfect 10)
 
 ```
-finished in < 1s (bulkhead reject): ~90     <- THE bulkhead
-finished in >= 5s (held a Slow slot): ~10
-Failed | RateLimiterRejectedException | ~90
-Completed | (none) | ~10 in this wave
+finished in < 1s: ~90          ← bulkhead (RateLimiterRejectedException)
+finished in >= 5s: ~10         ← the Slow slots, Completed
 ```
 
-Laptop stagger: **about 10**, not a perfect 10. Shape is the lesson.
-
-**Setup fails (stop, fix, re-run — this is not the bulkhead)**
-
-| You see | What it actually is | Fix |
+| You see | What it is | What you do |
 |---|---|---|
-| Script throws: API not reachable / `http_code=000` | Nothing on **5224** | `dotnet run --launch-profile http`, wait for health **200** |
-| `000x10` and times ~2 s | Same, older script without preflight | `git pull` then health 200 |
-| `column "status" does not exist` | `psql -c` ate the quotes | Current script pipes stdin; `git pull` |
-| All 10 `TimeoutRejectedException` | Timeout still **2** | Restart with `TimeoutSeconds=30` |
-| More than ~15 Completed on the 100-burst | Gateway **Fast**, or timeout so short slots recycle | Must be **Slow** + 30 |
-| Many HTTP **429** | `RateLimit:PerMinute` default 120 | Set `RateLimit__PerMinute=1000` and restart |
-| `git pull` aborted (local script dirty) | Uncommitted copy of the `.ps1` | `git restore --worktree -- docs/demo-scripts/06-bulkhead-burst.ps1` then `git pull` |
-
-Could (not Sunday): same 100 in **Async** mode — every POST returns in ms; the bulkhead is on the worker.
+| script: API not reachable / `000` | nothing on 5224 | `--launch-profile http`, health 200 |
+| all 10 `TimeoutRejectedException` | timeout still **2** | restart with `TimeoutSeconds=30` |
+| many HTTP **429** | leftover rate limit | `RateLimit__PerMinute=1000` and restart |
+| `column "status" does not exist` | old `psql -c` quoting | `git pull` (script pipes stdin) |
 
 ---
 
-## 4. FIX 2 — async: intake never waits (ADR-023)
+## 4. Fix 2 — async (the real product fix)
 
-The real fix: **do not put the bank on `POST /orders`.** Queue + background processor. Even a slow gateway returns in milliseconds. Order may later `Cancel` — **checkout still flows**.
+**What you fix:** the bank is **not** on `POST /orders`. Queue + background processor. Checkout returns in milliseconds even if the gateway is Slow. The order may later `Cancel` — intake still flowed.
 
 Ctrl+C.
 
@@ -463,76 +411,66 @@ $env:Payment__Mode = "Async"
 $env:Payment__Gateway__Behavior = "Slow"
 $env:Payment__TimeoutSeconds = "2"
 $env:Payment__MaxConcurrentCharges = "10"
-dotnet run --project src/Tadka.Api
+dotnet run --project src/Tadka.Api --launch-profile http
 ```
 
 ```powershell
 curl.exe -s -w "`nHTTP %{http_code} time=%{time_total}s`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
 ```
 
-**Captured:** HTTP **201**, `"status":"Created"`, warm **time=0.021 s**. Four seconds later GET is `Cancelled` (gateway still slow + 2 s timeout) — **intake did not wait**.
+**You want:** HTTP **201**, `"Created"`, **~20 ms**. A few seconds later GET may be `Cancelled` (Slow + timeout 2) — **the POST did not wait**.
 
-Shipped config is Async + **Fast**: same milliseconds, then GET **Confirmed**.
+Shipped is Async + **Fast**: same milliseconds, then GET **Confirmed**.
 
-In-memory channel is enough **inside one process**. Crash-loses-the-queue is **Day 8’s wound** / Week 5 Kafka. Do not add Kafka today.
+The in-memory Channel is enough **in one process**. If the process crashes, queued charges are lost. That wound is Day 8 / Kafka. Do not add Kafka today.
 
 ---
 
-## 5. The seam — grep (ADR-022)
+## 5. Prove the seam (grep)
 
-**What a modular monolith and CQRS look like** (textbook vs this repo — no refactor): [`docs/learn/modular-monolith.md`](../learn/modular-monolith.md).
+Textbook modular-monolith and CQRS trees vs this repo (no refactor): [`docs/learn/modular-monolith.md`](../learn/modular-monolith.md).
 
-Day 8 is a **move**, not a rewrite, because Ordering does not reference Payment.
+Day 8 can **move** Payment because Ordering does not reference it.
 
 ```powershell
 Get-ChildItem src\Tadka.Api\Domain\Orders,src\Tadka.Api\Controllers\OrdersController.cs -Recurse -Filter *.cs |
   Select-String "Modules.Payments|Domain.Payments|PaymentDbContext"
 ```
 
-**Look for:** no output. If you get hits, you are not on committed `day-07`.
-
-`Domain/Payments/Payment.cs` still exists (the module). Grep **Orders + OrdersController only**.
-
-MediatR replaced the Day-4 hand-rolled dispatcher (`Program.cs` 46). `BoundaryTests.cs` that **fails the build** on a stray import ships on **day-08**, not today.
+**You want:** no output. Hits = you are not on committed `day-07`. Grep **Orders + OrdersController only** (`Domain/Payments/Payment.cs` is allowed — that is the module).
 
 ---
 
 ## Done when
 
 - [ ] Redis down: menu **200**, SSE **503**, order POST **201**
-- [ ] Replica GET still `namaste` after master stop; Cluster shows `MOVED`; Sentinel names a new master (or you taught the conf)
-- [ ] Same seat / two countries: one inventory writer, not two Redis
+- [ ] Replica: `GET namaste` after master stop; Cluster: `MOVED`; Sentinel: `.10` then `.11`
 - [ ] `payment` schema has `payments` + `__EFMigrationsHistory`
-- [ ] Shipped: POST `Created` in tens of ms; GET `Confirmed`; payment `Completed`
+- [ ] Shipped: POST `Created` in tens of ms; GET `Confirmed`
 - [ ] Brownout: POST **~8–10 s**
-- [ ] Polly: POST **~3 s**; order `Cancelled`; `TimeoutRejectedException`
-- [ ] Bulkhead burst: timeout **30** + cap 10; `-Count 10` → 10 Completed; `-Count 100` → ~10 Completed + ~90 `RateLimiterRejectedException`
-- [ ] Async+Slow: POST **~20 ms** `Created` (later may Cancel)
+- [ ] Timeout: POST **~3 s**, order `Cancelled`, `TimeoutRejectedException`
+- [ ] Burst: `-Count 10` → 10 Completed; `-Count 100` → ~10 Completed + ~90 `RateLimiterRejectedException`
+- [ ] Async+Slow: POST **~20 ms** `Created`
 - [ ] Grep over Ordering is empty
 - [ ] `dotnet test` → **32/32**
 
-## Troubleshooting
+## If something looks wrong
 
-| Symptom | Demo fail or setup? | What to do |
+| You see | Lesson or setup? | What you do |
 |---|---|---|
-| Env did nothing | Setup | Single `_`. Must be `Payment__Gateway__Behavior`. Fresh shell; running `dotnet run` does not reread env |
-| `curl` http_code **000** / script “API is not reachable” | Setup | API down or wrong port. `--launch-profile http`, wait for `/health` **200** |
-| ConnectionString not initialized | Setup | You ran without the `http` profile / not Development |
-| POST **500** in Synchronous | Setup | Need the snapshot-before-publish `PublishEventsAsync` on this branch |
-| HTTP **201**, ~9 s | **Demo (brownout)** | Sync + Slow + timeout 30. That is §2 working |
-| HTTP **201**, ~3 s, order `Cancelled`, `TimeoutRejectedException` | **Demo (Fix 1)** | Timeout 2 doing its job |
-| Burst: ~10 × ≥5 s + ~90 × &lt;1 s, `RateLimiterRejectedException` | **Demo (bulkhead)** | Cap 10 doing its job |
-| Burst: 10 × `TimeoutRejectedException`, 0 Completed | Setup | Timeout still 2. Restart at 30 |
-| Burst: many HTTP **429** | Setup | `RateLimit__PerMinute=1000` and restart |
-| Payment row missing | Setup | `sleep 2` in async; logs `Payment COMPLETED` / `FAILED` |
-| `column "status" does not exist` | Setup | EF column is `"Status"`. Pipe SQL on stdin, do not `psql -c "SELECT Status"` |
-| `git pull` would overwrite `06-bulkhead-burst.ps1` | Setup | `git restore --worktree -- docs/demo-scripts/06-bulkhead-burst.ps1` then pull |
-| Redis-down menu **500** | Setup | Fallback missing — not this `day-07` |
-| Replica GET nil | Setup | Wait 2s; toy compose up |
-| CLUSTER empty / CLUSTERDOWN before you killed a node | Setup | `docker start tadka-redis-c-init` |
-| Sentinel still names old master after 10s | Setup / skip | Teach `sentinel.conf`; do not steal the brownout |
-| Reset | — | `docker compose down -v`, `up -d`, fresh shell, `dotnet run --launch-profile http` with **no** Payment env (shipped async/fast) |
+| env did nothing | setup | two underscores; Ctrl+C; new `dotnet run` |
+| curl **000** | setup | API down. `--launch-profile http`, `/health` 200 |
+| ConnectionString not initialized | setup | you omitted `--launch-profile http` |
+| POST **500** in Synchronous | setup | wrong commit |
+| HTTP **201**, ~9 s | **brownout (§2)** | working |
+| HTTP **201**, ~3 s, `Cancelled` | **timeout (§3)** | working |
+| burst ~10 slow + ~90 fast rejects | **bulkhead (§3b)** | working |
+| burst: 10 × `TimeoutRejected` | setup | timeout still 2 → set 30 |
+| burst: HTTP **429** | setup | `RateLimit__PerMinute=1000` |
+| Sentinel `.11` **before** you stop | leftover toy | `down -v` then `up -d` |
+| menu **500** with Redis down | setup | fallback missing |
+| full reset | — | `docker compose down -v`, `up -d`, new shell, `dotnet run --launch-profile http` with **no** Payment env |
 
-**Do not extract Payment because it was slow.** Slow is fixed **today** in one process. Day 8’s reason is fault / PCI / data.
+Slow is fixed **today in one process**. You do **not** extract Payment because it was slow. Day 8’s reason is fault / PCI / data.
 
 Next: Day 8 — `Tadka.Payment.Api` `:5240` + `payment-db` `:5434`.
