@@ -4,7 +4,22 @@
 
 **The number on the board:** Naive → Fix 1 → Fix 2. Fill it as you go. Captured here: **~8.8 s → ~2.9 s → ~20 ms**.
 
-> **Windows PowerShell:** `curl.exe`. Quote `@file`. Env vars use **double underscore** (`Payment__Mode`). Wrong `_` = silent no-op (worse than an error). Each `$env:` lives only in **that** shell — open a fresh one to reset to shipped `appsettings.Development.json`.
+> **Windows PowerShell:** `curl.exe` (not `curl` — that alias is `Invoke-WebRequest`). Quote `@file`. Env vars use **double underscore** (`Payment__Mode`). Wrong `_` = silent no-op (worse than an error). Each `$env:` lives only in **that** shell — open a fresh one to reset to shipped `appsettings.Development.json`. `dotnet run` already running **does not** reread env. Prefer `--launch-profile http` so you get port **5224** and `ASPNETCORE_ENVIRONMENT=Development` (connection string). Without a profile the ConnectionString can be empty.
+
+**How to read a POST curl in this file**
+
+| Flag | What it does |
+|---|---|
+| `curl.exe` | The real curl binary |
+| `-s` | quiet (no progress bar) |
+| `-o NUL` | throw the body away (timing-only runs) |
+| `-w "…%{http_code} %{time_total}s"` | print status and seconds after the call |
+| `-X POST` | create an order |
+| `-H "Content-Type: application/json"` | JSON body |
+| `--data-binary "@docs/runbooks/place-order.json"` | read the file as-is (`@` = file, not the letters `@docs`) |
+| `--max-time 20` | give up if the brownout hangs longer than 20 s |
+
+`000` from curl = **nothing listened** (API down). That is a **setup fail**, not the lesson.
 
 | Thing | Value |
 |---|---|
@@ -14,12 +29,13 @@
 
 ### Env levers (read this before any restart)
 
-| Variable | Naive (break) | Fix 1 | Fix 2 / shipped |
-|---|---|---|---|
-| `Payment__Mode` | `Synchronous` | `Synchronous` | `Async` |
-| `Payment__Gateway__Behavior` | `Slow` | `Slow` | `Slow` or `Fast` |
-| `Payment__TimeoutSeconds` | `30` (no timeout) | `2` | `2` |
-| `Payment__MaxConcurrentCharges` | `1000` (unbounded) | `10` | `10` |
+| Variable | Naive (break) | Fix 1 (timeout) | Burst §3b (bulkhead) | Fix 2 / shipped |
+|---|---|---|---|---|
+| `Payment__Mode` | `Synchronous` | `Synchronous` | `Synchronous` | `Async` |
+| `Payment__Gateway__Behavior` | `Slow` | `Slow` | `Slow` (holds a slot ~8 s) | `Slow` or `Fast` |
+| `Payment__TimeoutSeconds` | `30` (no timeout) | **`2`** (prove timeout) | **`30`** (must outlive 8 s or the 10 fail) | `2` |
+| `Payment__MaxConcurrentCharges` | `1000` (unbounded) | `10` | **`10`** | `10` |
+| `RateLimit__PerMinute` | (default 120) | (default 120) | **`1000`** (else a 100-burst 429s) | (default 120) |
 
 Shipped file is **Async + Fast + 2s + 10**. Ctrl+C the API, set `$env:…`, `dotnet run` again. `dotnet run` already running **does not** reread env.
 
@@ -70,12 +86,12 @@ docker rm -f tadka-postgres tadka-postgres-replica tadka-redis
 docker compose up -d
 dotnet test Tadka.slnx          # 32 cases on this merge. Needs Docker.
 # No Payment__* in this shell.
-dotnet run --project src/Tadka.Api
+dotnet run --project src/Tadka.Api --launch-profile http
 ```
 
-**What it does:** migrates **core** then **Payment** (`PaymentDbContext` history in schema `payment`). Redis still there from Day 6.
+**What it does:** `down -v` wipes volumes (clean DB). `up -d` starts Postgres `5432`, replica `5433`, Redis `6379`. `dotnet run --launch-profile http` migrates **core** then **Payment** and listens on **5224**. Redis still there from Day 6.
 
-**Ready when:** three containers healthy, API **5224**, tests **32/32**.
+**Ready when:** three containers healthy, `curl.exe http://localhost:5224/health` → **200**, tests **32/32**. Do not start §3b until health is 200.
 
 ```powershell
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT tablename FROM pg_tables WHERE schemaname='payment' ORDER BY 1;"
@@ -172,30 +188,88 @@ Payment row: `"Status"=Failed`, same exception in `"FailureReason"`.
 
 ## 3b. FIX 1b — bulkhead burst: 10 succeed, 100 → ~10 (ADR-021)
 
-The curl above proved **timeout** (one call, 2 s). It did **not** prove the bulkhead. That needs a **parallel** burst, and a timeout that **outlives** the Slow 8 s delay — otherwise the ten slot-holders fail with `TimeoutRejectedException` and you get **zero** Completed.
+### What we are demoing vs what is a fail
 
-HTTP is still **201** for every POST (the order is created first). “Succeed” means `payment.Status = Completed`.
+| | This **is** the lesson | This is **not** the lesson (setup fail) |
+|---|---|---|
+| Wanted | 10 parallel → 10 payments **Completed** (~8 s). 100 parallel → **~10** Completed + **~90** rejected in **ms** | |
+| Wanted reject | `RateLimiterRejectedException` on the **payment** row (Polly bulkhead, `queueLimit: 0`) | HTTP `000` (API down), HTTP `429` (leftover `RateLimit:PerMinute=120`), `TimeoutRejectedException` (you left timeout at **2**) |
+| HTTP | Still **201** for (almost) every POST. The **order is created first**. “Succeed” = `payment.Status = Completed`, not a 201 vs 429 split | |
 
-Ctrl+C. **Timeout 30**, keep cap 10, keep Slow:
+§3’s **single** curl proved **timeout** (one Slow call cut at 2 s → order Cancelled). It did **not** prove how many Slow calls may run at once. That is this beat.
+
+### Why we restart (timeout 2 → 30)
+
+Slow gateway sleeps **8 s**. Polly timeout **2** (Fix 1) kills those ten slot-holders → **zero** Completed. Burst needs timeout **30** so the ten that got a slot **finish**. Cap stays **10**. Still Synchronous + Slow.
+
+| Env | Value | Why |
+|---|---|---|
+| `Payment__Mode` | `Synchronous` | Charge is **on** `POST /orders`, so you feel the 8 s vs the ms reject |
+| `Payment__Gateway__Behavior` | `Slow` | Holds a bulkhead slot ~8 s. **`Fast` is a trap** (~200 ms recycle → more than 10 Completed) |
+| `Payment__TimeoutSeconds` | **`30`** | Must outlive 8 s |
+| `Payment__MaxConcurrentCharges` | **`10`** | The bulkhead. 11th concurrent charge is rejected **now** |
+| `RateLimit__PerMinute` | **`1000`** | Weekday leftover limiter. Default **120** will 429 a 100-burst and look like the bulkhead |
+
+Ctrl+C the API (running process **ignores** new `$env:`).
 
 ```powershell
 $env:Payment__Mode = "Synchronous"
 $env:Payment__Gateway__Behavior = "Slow"
 $env:Payment__TimeoutSeconds = "30"
 $env:Payment__MaxConcurrentCharges = "10"
-$env:RateLimit__PerMinute = "1000"   # leftover weekday limiter; default 120/min 429s a 100-burst
+$env:RateLimit__PerMinute = "1000"
 dotnet run --project src/Tadka.Api --launch-profile http
 ```
 
-```powershell
-.\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 10
-# expect: 10 Completed, all ~8 s
+`--launch-profile http` = listen **5224** + Development connection string. Wait until:
 
-.\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 100
-# expect: ~10 Completed (~8 s) + ~90 RateLimiterRejectedException (milliseconds)
+```powershell
+curl.exe -sS -o NUL -w "%{http_code}`n" http://localhost:5224/health
+# must print 200. 000 = API not up yet (or wrong port).
 ```
 
-`Fast` is a trap: slots free in ~200 ms and more than 10 get through. Laptop stagger means **about 10**, not a perfect 10. Do not mix this with the 2 s timeout demo without a restart.
+Other terminal, **repo root**, `day-07`:
+
+```powershell
+.\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 10
+.\docs\demo-scripts\06-bulkhead-burst.ps1 -Count 100
+```
+
+The script: preflights `/health` (throws on `000`); fires N parallel `POST /orders` with `place-order.json` (no `Idempotency-Key`, so N real orders); prints HTTP codes + how many finished **&lt; 1 s** vs **≥ 5 s**; pipes SQL to `psql` on **stdin** (Windows `docker exec -c` strips `"Status"` quotes).
+
+### How to read the script output
+
+**Wave A (`-Count 10`) — demo win**
+
+```
+codes: 201x10
+finished in < 1s (bulkhead reject): 0
+finished in >= 5s (held a Slow slot): 10
+Status Completed, reason (none), n = 10   (or ~10; last-45s window may include a prior wave)
+```
+
+**Wave B (`-Count 100`) — demo win** (captured on a laptop: `201x97`, `90` in &lt; 1 s, `10` in ≥ 5 s, `87` `RateLimiterRejectedException`)
+
+```
+finished in < 1s (bulkhead reject): ~90     <- THE bulkhead
+finished in >= 5s (held a Slow slot): ~10
+Failed | RateLimiterRejectedException | ~90
+Completed | (none) | ~10 in this wave
+```
+
+Laptop stagger: **about 10**, not a perfect 10. Shape is the lesson.
+
+**Setup fails (stop, fix, re-run — this is not the bulkhead)**
+
+| You see | What it actually is | Fix |
+|---|---|---|
+| Script throws: API not reachable / `http_code=000` | Nothing on **5224** | `dotnet run --launch-profile http`, wait for health **200** |
+| `000x10` and times ~2 s | Same, older script without preflight | `git pull` then health 200 |
+| `column "status" does not exist` | `psql -c` ate the quotes | Current script pipes stdin; `git pull` |
+| All 10 `TimeoutRejectedException` | Timeout still **2** | Restart with `TimeoutSeconds=30` |
+| More than ~15 Completed on the 100-burst | Gateway **Fast**, or timeout so short slots recycle | Must be **Slow** + 30 |
+| Many HTTP **429** | `RateLimit:PerMinute` default 120 | Set `RateLimit__PerMinute=1000` and restart |
+| `git pull` aborted (local script dirty) | Uncommitted copy of the `.ps1` | `git restore --worktree -- docs/demo-scripts/06-bulkhead-burst.ps1` then `git pull` |
 
 Could (not Sunday): same 100 in **Async** mode — every POST returns in ms; the bulkhead is on the worker.
 
@@ -257,13 +331,21 @@ MediatR replaced the Day-4 hand-rolled dispatcher (`Program.cs` 46). `BoundaryTe
 
 ## Troubleshooting
 
-| Symptom | What to do |
-|---|---|
-| Env did nothing | Single `_`. Must be `Payment__Gateway__Behavior`. Fresh shell to reset |
-| POST 500 in Synchronous | Need the snapshot-before-publish `PublishEventsAsync` on this branch |
-| Payment row missing | `sleep 2` in async; watch logs `Payment COMPLETED` / `FAILED` |
-| `column "status" does not exist` | EF `"Status"`. Use the here-string, not `psql -c "SELECT Status"` |
-| Reset | `docker compose down -v`, `up -d`, `dotnet run` with **no** Payment env |
+| Symptom | Demo fail or setup? | What to do |
+|---|---|---|
+| Env did nothing | Setup | Single `_`. Must be `Payment__Gateway__Behavior`. Fresh shell; running `dotnet run` does not reread env |
+| `curl` http_code **000** / script “API is not reachable” | Setup | API down or wrong port. `--launch-profile http`, wait for `/health` **200** |
+| ConnectionString not initialized | Setup | You ran without the `http` profile / not Development |
+| POST **500** in Synchronous | Setup | Need the snapshot-before-publish `PublishEventsAsync` on this branch |
+| HTTP **201**, ~9 s | **Demo (brownout)** | Sync + Slow + timeout 30. That is §2 working |
+| HTTP **201**, ~3 s, order `Cancelled`, `TimeoutRejectedException` | **Demo (Fix 1)** | Timeout 2 doing its job |
+| Burst: ~10 × ≥5 s + ~90 × &lt;1 s, `RateLimiterRejectedException` | **Demo (bulkhead)** | Cap 10 doing its job |
+| Burst: 10 × `TimeoutRejectedException`, 0 Completed | Setup | Timeout still 2. Restart at 30 |
+| Burst: many HTTP **429** | Setup | `RateLimit__PerMinute=1000` and restart |
+| Payment row missing | Setup | `sleep 2` in async; logs `Payment COMPLETED` / `FAILED` |
+| `column "status" does not exist` | Setup | EF column is `"Status"`. Pipe SQL on stdin, do not `psql -c "SELECT Status"` |
+| `git pull` would overwrite `06-bulkhead-burst.ps1` | Setup | `git restore --worktree -- docs/demo-scripts/06-bulkhead-burst.ps1` then pull |
+| Reset | — | `docker compose down -v`, `up -d`, fresh shell, `dotnet run --launch-profile http` with **no** Payment env (shipped async/fast) |
 
 **Do not extract Payment because it was slow.** Slow is fixed **today** in one process. Day 8’s reason is fault / PCI / data.
 
