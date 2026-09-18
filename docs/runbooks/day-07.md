@@ -101,6 +101,117 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT tablename FROM pg_t
 
 ---
 
+## 0b. Redis in production (Day 6 leftover — 18 min)
+
+Day 6 taught **commands**. This beat is **what production does**: Redis down, replica, Cluster, Sentinel HA, and “same seat from another country.”
+
+Student one-pager: [`docs/learn/redis-in-production.md`](../learn/redis-in-production.md). Toy (not Tadka compose): [`toydemo/day-07-redis-ha/`](../../toydemo/day-07-redis-ha/).
+
+Tadka stays **standalone** `tadka-redis` :6379. We do **not** point the API at Cluster or Sentinel today.
+
+Pre-class (so S0 does not wait on image pulls):
+
+```powershell
+docker compose -f toydemo/day-07-redis-ha/docker-compose.yml up -d
+```
+
+API for beat 1 must already be running (`--launch-profile http`, health **200**). `$RID` = `a1b2c3d4-0001-4000-8000-000000000001` (Meghana).
+
+### Beat 1 — kill Tadka Redis (classification)
+
+**Demoing:** cache is a **performance** dep (menu still 200). SSE is a **correctness** dep for the stream (503). Orders do not need Redis (201).
+
+**Not the lesson:** `000` = API down. Menu **500** = wrong commit (no fallback).
+
+```powershell
+docker compose stop redis
+
+curl.exe -s -o NUL -w "menu %{http_code} %{time_total}s`n" http://localhost:5224/api/v1/restaurants/$RID/menu
+# 200. First hit after the stop can be 5-12s (client timeout, then SQL). Do not Ctrl+C.
+
+curl.exe -s -o NUL -w "sse  %{http_code}`n" --max-time 5 http://localhost:5224/api/v1/orders/00000000-0000-0000-0000-000000000001/events
+# 503  body: Live tracking requires Redis
+
+curl.exe -s -o NUL -w "order %{http_code}`n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" --data-binary "@docs/runbooks/place-order.json"
+# 201
+
+docker compose start redis
+docker exec tadka-redis redis-cli PING
+# PONG
+```
+
+### Beat 2 — replica (`REPLICAOF`) is a copy, not HA
+
+**How it is set up:** `redis-server --replicaof redis-master 6379` (toy replica on host **6381**).
+
+```powershell
+docker exec tadka-ha-master redis-cli SET demo:ha namaste
+docker exec tadka-ha-replica redis-cli GET demo:ha
+# namaste
+docker exec tadka-ha-replica redis-cli INFO replication
+# role:slave
+
+docker stop tadka-ha-master
+docker exec tadka-ha-replica redis-cli GET demo:ha
+# namaste  — copy survived. An app still aimed at the master is down.
+docker start tadka-ha-master
+```
+
+**Demo fail:** GET nil → replica not ready, wait 2s. **Setup fail:** container missing → toy compose not up.
+
+### Beat 3 — Cluster is 16384 slots (`MOVED`), not HA
+
+**How it is set up:** each node `cluster-enabled yes`, then `redis-cli --cluster create n1 n2 n3 --cluster-replicas 0 --cluster-yes`. Zero replicas is the point.
+
+```powershell
+docker exec tadka-redis-c1 redis-cli CLUSTER NODES
+docker exec tadka-redis-c1 redis-cli SET user:1 a
+# (error) MOVED <slot> …   <- that IS Cluster
+docker exec tadka-redis-c1 redis-cli -c SET user:1 a
+docker exec tadka-redis-c1 redis-cli -c GET user:1
+# a
+
+docker stop tadka-redis-c2
+docker exec tadka-redis-c1 redis-cli -c GET user:1
+# CLUSTERDOWN / error for slots on the dead node — no replica
+docker start tadka-redis-c2
+```
+
+**Setup fail:** `CLUSTERDOWN` / empty NODES → `docker start tadka-redis-c-init`.
+
+**Line:** sharding ≠ HA. HA would be `--cluster-replicas 1` (or Sentinel, or managed).
+
+### Beat 4 — Sentinel is how failover is set up
+
+**How it is set up:** `sentinel monitor mymaster redis-master 6379 1` plus `down-after-milliseconds`. The **client** uses Sentinel (`localhost:26379`), not a hardcoded host. ElastiCache primary endpoint **is** this.
+
+```powershell
+docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
+# redis-master 6379
+
+docker stop tadka-ha-master
+Start-Sleep -Seconds 6
+docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
+# now the replica — WRITER CHANGED
+docker exec tadka-ha-replica redis-cli INFO replication
+# role:master
+docker start tadka-ha-master
+```
+
+If failover does not happen in 10s: show `sentinel.conf`, say the line, move on. Do not steal the brownout.
+
+Tadka still has `localhost:6379` in config — it would **not** follow Sentinel. That is honest.
+
+### Beat 5 — same seat, two countries (talk, 3 min)
+
+**Not Cluster.** Cluster is one region. Mumbai Redis and London Redis are two caches. Async replica: both `GET seat:12A` free → double booking.
+
+**Fix:** one inventory writer (unique `(flight, seat)`, `UPDATE … WHERE free RETURNING`, hold TTL). Regional Redis may cache the **map**. The book click always hits the seat service. US→India RTT is the cost of one seat. Last-writer-wins / CRDT cannot be a seat.
+
+Tadka: cache the menu. Never cache order status.
+
+---
+
 ## 1. BASELINE — shipped async + fast (ADR-023)
 
 **Story:** Swiggy shows “order placed” immediately. The bank is not on that HTTP call.
@@ -320,6 +431,9 @@ MediatR replaced the Day-4 hand-rolled dispatcher (`Program.cs` 46). `BoundaryTe
 
 ## Done when
 
+- [ ] Redis down: menu **200**, SSE **503**, order POST **201**
+- [ ] Replica GET still `namaste` after master stop; Cluster shows `MOVED`; Sentinel names a new master (or you taught the conf)
+- [ ] Same seat / two countries: one inventory writer, not two Redis
 - [ ] `payment` schema has `payments` + `__EFMigrationsHistory`
 - [ ] Shipped: POST `Created` in tens of ms; GET `Confirmed`; payment `Completed`
 - [ ] Brownout: POST **~8–10 s**
@@ -345,6 +459,10 @@ MediatR replaced the Day-4 hand-rolled dispatcher (`Program.cs` 46). `BoundaryTe
 | Payment row missing | Setup | `sleep 2` in async; logs `Payment COMPLETED` / `FAILED` |
 | `column "status" does not exist` | Setup | EF column is `"Status"`. Pipe SQL on stdin, do not `psql -c "SELECT Status"` |
 | `git pull` would overwrite `06-bulkhead-burst.ps1` | Setup | `git restore --worktree -- docs/demo-scripts/06-bulkhead-burst.ps1` then pull |
+| Redis-down menu **500** | Setup | Fallback missing — not this `day-07` |
+| Replica GET nil | Setup | Wait 2s; toy compose up |
+| CLUSTER empty / CLUSTERDOWN before you killed a node | Setup | `docker start tadka-redis-c-init` |
+| Sentinel still names old master after 10s | Setup / skip | Teach `sentinel.conf`; do not steal the brownout |
 | Reset | — | `docker compose down -v`, `up -d`, fresh shell, `dotnet run --launch-profile http` with **no** Payment env (shipped async/fast) |
 
 **Do not extract Payment because it was slow.** Slow is fixed **today** in one process. Day 8’s reason is fault / PCI / data.

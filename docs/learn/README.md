@@ -7,5 +7,6 @@ Self-serve guides. Install is [`SETUP.md`](../../SETUP.md). The Day 1 demo scrip
 | [docker.md](docker.md) | Image vs container vs Compose, and the commands you will type every day |
 | [ai-context-files.md](ai-context-files.md) | `CLAUDE.md`, Copilot instructions, and every file that *can* live under `.github/` and `.claude/` |
 | [http-caching.md](http-caching.md) | Day 6 homework: the caching layers *above* the app — `Cache-Control`, ETag/304, compression, CDN |
+| [redis-in-production.md](redis-in-production.md) | Day 7 opener: Redis down, replica vs Cluster vs Sentinel, same seat / two countries |
 
 Tadka today only *ships* two AI files. The catalog still lists the rest so you know what to add later — we do not pre-create empty folders.

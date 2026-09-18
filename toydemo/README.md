@@ -35,6 +35,8 @@ tadka/toydemo/
         └── RUN-AND-TEST.md
 ```
 
+Day 7 opener: `day-07-redis-ha/` — replica (`REPLICAOF`), 3-node Cluster (`MOVED`), Sentinel failover. Not wired into Tadka.
+
 Each toy is organized by the **curriculum day** when the concept is introduced.
 
 ## How any toy works (failure-first)
