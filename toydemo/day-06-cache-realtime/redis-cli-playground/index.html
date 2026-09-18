@@ -306,7 +306,7 @@ const LABS = [
     try: `SET ${LOCK_KEY} token-A NX EX 10\nSET ${LOCK_KEY} token-B NX EX 10\nGET ${LOCK_KEY}`, expect: "first OK, second (nil), GET token-A",
     real: `docker exec tadka-redis redis-cli SET ${LOCK_KEY} token-A NX EX 10\ndocker exec tadka-redis redis-cli SET ${LOCK_KEY} token-B NX EX 10\ndocker exec tadka-redis redis-cli GET ${LOCK_KEY}`,
     cmds: ["SET", "GET"],
-    body: "First SET NX wins (OK). Second SET NX loses ((nil)) because the key exists. EX 10 means a crashed winner cannot hold the lock forever. If lock TTL < refresh time, two refreshers can race — tolerable, not a herd." },
+    body: "First SET NX wins (OK). Second SET NX loses ((nil)) because the key exists. EX 10 means a crashed winner cannot hold the lock forever. If lock TTL < refresh time, two refreshers can race — tolerable, not a herd. Production release is Lua compare-and-delete (GET token then DEL only if it still matches) in one round trip — not GET-then-DEL, which can drop a new owner's lock. See ADR-019 / RedisCacheService." },
   { id: "pubsub", n: 11, title: "PUBLISH — SSE backplane peek", why: "ADR-020. Status change publishes; the SSE endpoint subscribes. Fire-and-forget — if nobody is listening, the message is gone.",
     try: "SUBSCRIBE order:demo\nPUBLISH order:demo Confirmed", expect: "subscriber pane shows Confirmed",
     real: "Terminal A: docker exec -it tadka-redis redis-cli SUBSCRIBE order:demo\nTerminal B: docker exec tadka-redis redis-cli PUBLISH order:demo Confirmed",

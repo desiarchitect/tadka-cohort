@@ -15,7 +15,7 @@ We need exactly **one** caller to refresh a missed hot key while the others wait
 **Single-flight refresh guarded by a short Redis lock.** Inside `ICacheService.GetOrSetAsync`, on a miss:
 
 1. Try to acquire a lock with `SET lock:{key} {token} NX EX {ttl}` (atomic "set if not exists" + expiry).
-2. **Winner:** query the DB, populate the cache, release the lock (delete it **only if the stored token is still ours** — so we never release someone else's lock).
+2. **Winner:** query the DB, populate the cache, release the lock with a **Lua compare-and-delete** (`GET` the token, `DEL` only if it still matches) in **one round trip**. A two-step GET-then-DEL can expire in the gap; a new refresher takes the lock; our `DEL` would then drop *their* lock.
 3. **Losers:** wait a short interval and re-read the cache (now populated by the winner). If still empty after a bounded retry, fall through to the DB (correctness over purity).
 
 The lock's own TTL is the safety valve: if the winner crashes mid-refresh, the lock auto-expires and the next caller takes over. Probabilistic early expiration (the Netflix approach — refresh slightly before TTL with rising probability under load) is the documented alternative; we choose the lock because it also teaches the **distributed-lock primitive** (a Week-3 curriculum item) and is simpler to reason about.
@@ -30,7 +30,7 @@ The lock's own TTL is the safety valve: if the winner crashes mid-refresh, the l
 ### Negative / Risks
 - Lock losers pay a small added latency (a wait + a re-read). Negligible vs a DB herd.
 - **Lock TTL must exceed the refresh time**, or a slow refresh's lock expires and a second caller starts a parallel refresh (two DB hits, not a thundering herd — tolerable, but sized to avoid). 
-- A naive release (`DEL` without the token check) could delete a *different* caller's lock. **Mitigation:** the owns-it token check on release.
+- A naive release (`DEL` without the token check) could delete a *different* caller's lock. A GET-then-DEL still has a race if the lock expires between the two calls. **Mitigation:** Lua `if GET == token then DEL` in `RedisCacheService` (`ReleaseIfOwnerScript`).
 
 ### Cost (₹ / effort)
 A few lines in the cache service (one `SET NX EX`, a short retry loop, a guarded release). No infra cost. Cheap insurance against a self-inflicted DB spike at every TTL boundary.

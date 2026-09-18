@@ -1,6 +1,6 @@
 # Day 6 — Runbook: Redis cache-aside + SSE live tracking
 
-**Branch:** `day-06`. **What's new (taught):** Redis cache-aside + delete-on-write (ADR-018), single-flight `SET NX EX` lock (ADR-019), SSE `GET /orders/{id}/events` over Redis pub/sub (ADR-020). **Leftover on the branch, not Sunday lecture:** nginx scale-out (047), ETag (048), rate limit (049), edge+signed URLs (050), SSE replay (051).
+**Branch:** `day-06`. **What changed since Day 5:** [`docs/changelog.md`](../changelog.md). **What's new (taught):** Redis cache-aside + delete-on-write (ADR-018), single-flight `SET NX EX` lock (ADR-019), SSE `GET /orders/{id}/events` over Redis pub/sub (ADR-020). **Leftover on the branch, not Sunday lecture:** nginx scale-out (047), ETag (048), rate limit (049), edge+signed URLs (050), SSE replay (051).
 
 **Three containers:** Postgres primary `5432`, replica `5433`, **Redis `6379`**. HTTP **5224**. Tests **28/28**.
 
