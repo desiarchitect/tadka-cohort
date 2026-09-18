@@ -45,7 +45,7 @@ Zero infra (in-process `Channel` + `BackgroundService`, no broker yet). Cost is 
 ## References
 - ADR-021 (timeout + bulkhead around the gateway the processor calls), ADR-022 (the Payment module + `OrderPlaced` event it consumes), ADR-020 (SSE — how the converged status reaches the customer), ADR-011 (idempotency — the no-double-charge principle, here as a unique `order_id`)
 - Implementation: `Modules/Payments/PaymentProcessor.cs` (Channel + BackgroundService), `PayForOrderOnOrderPlaced` handler, `PaymentCompleted/PaymentFailed` events
-- `cohort-prep/day-07/break-kit-day-07.md` (sync brownout → async recovery), Week 5 (Kafka + Outbox — the durable successor)
+- The sync-brownout-to-async-recovery lab lives in the instructor delivery pack, a separate repo not included in this clone — ask your instructor for it rather than following a path here. Week 5 (Kafka + Outbox — the durable successor)
 
 ## Revisit When
 **Week 5:** replace the in-process `Channel` with **Kafka + the Outbox pattern** so the `OrderPlaced` event is committed atomically with the order and survives a crash (at-least-once delivery, consumer idempotency, DLQ for poison payments). At that point the processor becomes a real consumer in (or feeding) the extracted Payment service. Revisit the order state model if product wants explicit "payment failed, retry" UX rather than auto-cancel.

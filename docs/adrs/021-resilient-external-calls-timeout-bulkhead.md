@@ -43,7 +43,7 @@ Zero infra. Polly is a library; the cost is a pipeline definition + tuning two n
 
 ## References
 - ADR-015 (connection-pool sizing — the shared resource the brownout drains), ADR-023 (async payment — what handles a fast failure), ADR-013→022 (event seam the payment processor hangs off)
-- `cohort-prep/day-07/break-kit-day-07.md` (the brownout lab: slow gateway → pool drain → timeout+bulkhead recovery)
+- The brownout lab (slow gateway → pool drain → timeout+bulkhead recovery, with captured numbers) lives in the instructor delivery pack, a separate repo not included in this clone — ask your instructor for it rather than following a path here.
 - Implementation: `Infrastructure/Resilience/*` (Polly pipeline), `Domain/Payments/FakePaymentGateway.cs`
 
 ## Revisit When
