@@ -1,6 +1,6 @@
 # Day 7 — Runbook: payment brownout → timeout + bulkhead → async
 
-**Branch:** `day-07`. **What's new (taught):** payment is wired, and it **fails first**. Polly timeout + bulkhead (ADR-021), MediatR Payment module with its own `PaymentDbContext` / `payment` schema / migration history (ADR-022), async payment off the request path (ADR-023). Infra is Day 6: Postgres `5432`, replica `5433`, Redis `6379`. **No Kafka. No Payment HTTP service** (that is Day 8).
+**Branch:** `day-07`. **What changed since Day 6:** [`docs/changelog.md`](../changelog.md). **What's new (taught):** payment is wired, and it **fails first**. Polly timeout + bulkhead (ADR-021), MediatR Payment module with its own `PaymentDbContext` / `payment` schema / migration history (ADR-022), async payment off the request path (ADR-023). Infra is Day 6: Postgres `5432`, replica `5433`, Redis `6379`. **No Kafka. No Payment HTTP service** (that is Day 8).
 
 **The number on the board:** Naive → Fix 1 → Fix 2. Fill it as you go. Captured here: **~8.8 s → ~2.9 s → ~20 ms**.
 
