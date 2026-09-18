@@ -1,6 +1,6 @@
 # Day 8 — Runbook: extract Payment (fault, not speed)
 
-**Branch:** `day-08`. Day 7 fixed **latency in one process**. Today Payment is `Tadka.Payment.Api` on **`:5240`** with **`payment-db` `:5434`**. Driver: **fault isolation, PCI scope, data ownership** — not “it was slow.” ADRs 024–026.
+**Branch:** `day-08`. **What changed since Day 7:** [`docs/changelog.md`](../changelog.md). Day 7 fixed **latency in one process**. Today Payment is `Tadka.Payment.Api` on **`:5240`** with **`payment-db` `:5434`**. Driver: **fault isolation, PCI scope, data ownership** — not “it was slow.” ADRs 024–026.
 
 **Two apps, four containers.** Wound at the end stays **open** (Week 5 Kafka). Do not “fix” it.
 
