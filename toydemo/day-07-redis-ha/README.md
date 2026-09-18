@@ -93,7 +93,8 @@ docker start tadka-redis-c2
 # If you just finished §1, master is already up. If not:
 docker start tadka-ha-master
 
-# DOING: ask who the writer is. Expect: 172.28.0.10 6379
+# DOING: ask who the writer is BEFORE the fail. Expect: 172.28.0.10 6379
+# If this is already 172.28.0.11, leftover failover — down -v then up -d. Do not stop tadka-ha-master yet.
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
 
 # DOING: the SAME fail as §1.
@@ -126,5 +127,6 @@ docker start tadka-ha-master
 | replica GET nil | replicaof not ready | wait 2s, retry |
 | CLUSTERDOWN / not in cluster | `cluster-init` lost the race, or nodes crashed | `docker ps -a`; if c1/c2/c3 Exited, compose is old (hostname announce-ip). Pull this file. Else `docker start tadka-redis-c-init` |
 | SENTINEL still names 172.28.0.10 after stop, or `s_down` / TILT in logs | hostname monitor + Docker DNS | this compose uses static `172.28.0.10`. Pull. Do not wait longer — it will not recover |
+| Both before and after `stop` show **172.28.0.11** | You already failed over (replica is master). Stopping `tadka-ha-master` is a no-op | `down -v` then `up -d`. First get-master **must** be `.10` |
 | cluster-announce-ip FATAL | Redis 7 requires a literal IP | this compose already uses 172.28.0.21-23 |
 | port already in use | leftover toy | `docker compose -f toydemo/day-07-redis-ha/docker-compose.yml down -v` |

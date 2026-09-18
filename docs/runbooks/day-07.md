@@ -234,8 +234,10 @@ docker start tadka-redis-c2
 **How it is set up:** `sentinel monitor mymaster 172.28.0.10 6379 1` (static IP). Client talks to Sentinel (`:26379`), not a hardcoded master. ElastiCache primary endpoint **is** this.
 
 ```powershell
-# DOING: ask Sentinel who the writer is, before the fail.
-# PROVES: Sentinel is watching. Expect: 172.28.0.10 6379 (the master).
+# DOING: ask Sentinel who the writer is, BEFORE the fail.
+# PROVES: clean stack. Expect: 172.28.0.10 6379 (compose master).
+# If you already see 172.28.0.11 — leftover failover. STOP. down -v then up -d (top of §0b).
+# Stopping tadka-ha-master then will change NOTHING (that container is no longer the writer).
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
 
 # DOING: the SAME fail as Beat 2 (kill the writer).
