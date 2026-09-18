@@ -22,8 +22,8 @@ Orders and payments do **not** use Redis (Postgres). Money never lives here.
 |---|---|---|---|
 | Standalone (Tadka) | one `redis-server` | Dev | Survive a node death |
 | Replica | `--replicaof host 6379` | A **copy** for extra reads | Automatic failover. App still points at the dead master |
-| Cluster | `cluster-enabled yes` then `redis-cli --cluster create n1 n2 n3 --cluster-replicas 0` | 16384 **slots**, `MOVED`, scale memory | HA, unless `--cluster-replicas 1` (or more) |
-| Sentinel | `sentinel monitor mymaster host 6379 <quorum>` | **Promotes** a replica; client follows Sentinel | Freedom from ops. Still one writer |
+| Cluster | `cluster-enabled yes` then `redis-cli --cluster create <ip>:6379 … --cluster-replicas 0`. Redis 7: `cluster-announce-ip` must be a **literal IP**, not a Docker hostname | 16384 **slots**, `MOVED`, scale memory | HA, unless `--cluster-replicas 1` (or more) |
+| Sentinel | `sentinel monitor mymaster <ip> 6379 <quorum>` — use a **static IP**. Hostname + Docker DNS NXDOMAIN on `docker stop` puts Sentinel in TILT | **Promotes** a replica; client follows Sentinel | Freedom from ops. Still one writer |
 | Managed | ElastiCache / Azure Cache / Memorystore **primary endpoint** | They run Sentinel-or-Cluster | Free. You still classify the *feature* |
 
 Java: Redisson / Lettuce. Node: ioredis. Go: go-redis. Same topologies.

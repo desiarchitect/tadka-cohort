@@ -142,7 +142,7 @@ docker exec tadka-redis redis-cli PING
 
 ### Beat 2 — replica (`REPLICAOF`) is a copy, not HA
 
-**How it is set up:** `redis-server --replicaof redis-master 6379` (toy replica on host **6381**).
+**How it is set up:** `redis-server --replicaof 172.28.0.10 6379` (toy replica on host **6381**; static IP so Docker DNS is not in the path).
 
 ```powershell
 docker exec tadka-ha-master redis-cli SET demo:ha namaste
@@ -161,7 +161,7 @@ docker start tadka-ha-master
 
 ### Beat 3 — Cluster is 16384 slots (`MOVED`), not HA
 
-**How it is set up:** each node `cluster-enabled yes`, then `redis-cli --cluster create n1 n2 n3 --cluster-replicas 0 --cluster-yes`. Zero replicas is the point.
+**How it is set up:** each node `cluster-enabled yes` + `cluster-announce-ip` as a **literal IP** (Redis 7.4 rejects a Docker hostname). Then `redis-cli --cluster create 172.28.0.21:6379 … --cluster-replicas 0`. Zero replicas is the point.
 
 ```powershell
 docker exec tadka-redis-c1 redis-cli CLUSTER NODES
@@ -183,16 +183,16 @@ docker start tadka-redis-c2
 
 ### Beat 4 — Sentinel is how failover is set up
 
-**How it is set up:** `sentinel monitor mymaster redis-master 6379 1` plus `down-after-milliseconds`. The **client** uses Sentinel (`localhost:26379`), not a hardcoded host. ElastiCache primary endpoint **is** this.
+**How it is set up:** `sentinel monitor mymaster 172.28.0.10 6379 1` (static IP — hostname + `docker stop` NXDOMAIN puts Sentinel in TILT). The **client** uses Sentinel (`localhost:26379`). ElastiCache primary endpoint **is** this.
 
 ```powershell
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
-# redis-master 6379
+# 172.28.0.10 6379
 
 docker stop tadka-ha-master
-Start-Sleep -Seconds 6
+Start-Sleep -Seconds 8
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
-# now the replica — WRITER CHANGED
+# 172.28.0.11 6379 — WRITER CHANGED
 docker exec tadka-ha-replica redis-cli INFO replication
 # role:master
 docker start tadka-ha-master

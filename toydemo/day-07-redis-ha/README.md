@@ -52,17 +52,17 @@ Each node: `cluster-enabled yes`, `cluster-config-file`, `cluster-announce-ip`. 
 redis-cli --cluster create redis-c1:6379 redis-c2:6379 redis-c3:6379 --cluster-replicas 0 --cluster-yes
 ```
 
-`--cluster-replicas 0` is the point: no extra copy per slot.
+`--cluster-replicas 0` is the point: no extra copy per slot. Announce IPs are literals (`172.28.0.21` …) — Redis 7.4 rejects a hostname for `cluster-announce-ip`.
 
 ```powershell
 docker exec tadka-redis-c1 redis-cli CLUSTER NODES
-# three masters, slot ranges
+# three masters, slot ranges, IPs 172.28.0.21-23 (not hostnames — Redis 7 rejects hostname for cluster-announce-ip)
 
 docker exec tadka-redis-c1 redis-cli SET user:1 a
-# (error) MOVED <slot> redis-cN:6379     <- THAT is Cluster
+# (error) MOVED <slot> 172.28.0.2x:6379     <- THAT is Cluster
 docker exec tadka-redis-c1 redis-cli -c SET user:1 a
 docker exec tadka-redis-c1 redis-cli -c GET user:1
-# a     (-c follows MOVED)
+# a     (-c follows MOVED; must docker exec, not host redis-cli — MOVED is a Docker IP)
 
 docker stop tadka-redis-c2
 docker exec tadka-redis-c1 redis-cli CLUSTER NODES
@@ -94,12 +94,12 @@ docker start tadka-ha-master
 # wait until replica is slave again
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL masters
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
-# redis-master 6379
+# 172.28.0.10 6379     (static IP — hostname + Docker DNS NXDOMAIN puts Sentinel in TILT)
 
 docker stop tadka-ha-master
-Start-Sleep -Seconds 6
+Start-Sleep -Seconds 8
 docker exec tadka-ha-sentinel redis-cli -p 26379 SENTINEL get-master-addr-by-name mymaster
-# redis-replica 6379   (or the replica IP) - WRITER CHANGED
+# 172.28.0.11 6379     - WRITER CHANGED (the replica)
 docker exec tadka-ha-replica redis-cli INFO replication
 # role:master
 ```
@@ -115,6 +115,7 @@ If failover does not happen in 10s: teach the conf on the slide and move on. Do 
 | You see | What it is | Fix |
 |---|---|---|
 | replica GET nil | replicaof not ready | wait 2s, retry |
-| CLUSTERDOWN / not in cluster | `cluster-init` lost the race | `docker start tadka-redis-c-init` |
-| SENTINEL still names redis-master after stop | timeout too short / master restarted | wait 6s; check `SENTINEL masters` |
+| CLUSTERDOWN / not in cluster | `cluster-init` lost the race, or nodes crashed | `docker ps -a`; if c1/c2/c3 Exited, compose is old (hostname announce-ip). Pull this file. Else `docker start tadka-redis-c-init` |
+| SENTINEL still names 172.28.0.10 after stop, or `s_down` / TILT in logs | hostname monitor + Docker DNS | this compose uses static `172.28.0.10`. Pull. Do not wait longer — it will not recover |
+| cluster-announce-ip FATAL | Redis 7 requires a literal IP | this compose already uses 172.28.0.21-23 |
 | port already in use | leftover toy | `docker compose -f toydemo/day-07-redis-ha/docker-compose.yml down -v` |
