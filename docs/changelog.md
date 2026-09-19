@@ -23,4 +23,4 @@
 | Monolith | `IPaymentClient` HTTP; in-process Payment types gone from the order path |
 | Tests | Monolith + Payment suites |
 
-ADR **024, 025, 026**.
+ADRs **024, 025, 026**. Diagrams: `docs/diagrams/day-08-*.md`. Options (Java/Node/Go): `docs/learn/day-08-option-space.md`.
