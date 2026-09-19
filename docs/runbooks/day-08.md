@@ -47,6 +47,9 @@ POST :5224/orders  →  Channel  →  PaymentProcessor
 ```powershell
 git checkout day-08
 docker compose down -v
+# Containers created from another folder (e.g. D:\work\cohort\tadka) keep the same names.
+# down -v only removes THIS project's stack. If up -d says "name already in use":
+docker rm -f tadka-postgres tadka-postgres-replica tadka-redis tadka-payment-db tadka-nginx-lb
 docker compose up -d
 docker compose ps    # four healthy: postgres, replica, redis, payment-db
 ```
