@@ -2,7 +2,7 @@
 
 You are on branch `day-08`. What changed since Day 7: [`docs/changelog.md`](../changelog.md).
 
-**Pictures:** [before/after](../diagrams/day-08-before-after.md) · [HTTP happy path + lost charge](../diagrams/day-08-http-coupling.md) · [strangler fig](../diagrams/day-08-strangler-fig.md). **Not only .NET:** [`docs/learn/day-08-option-space.md`](../learn/day-08-option-space.md) (Java / Node / Go + extract vs HTTP vs own-DB).
+**Pictures:** [before/after](../diagrams/day-08-before-after.md) · [HTTP happy path + lost charge](../diagrams/day-08-http-coupling.md) · [strangler fig](../diagrams/day-08-strangler-fig.md). **Not only .NET:** [`docs/learn/day-08-option-space.md`](../learn/day-08-option-space.md). **AI engineering (optional, after the labs):** [`docs/learn/ai-engineering.html`](../learn/ai-engineering.html) — terms from zero, two use cases; no LLM on Payment.
 
 Day 7 fixed **latency in one process** (timeout, bulkhead, async Channel). Today you **extract Payment into its own process**. The reason is **fault isolation, PCI scope, and its own database** — not “it was slow.” Slow is already fixed.
 
