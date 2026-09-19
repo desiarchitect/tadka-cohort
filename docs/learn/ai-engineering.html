@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tadka through Day 8 — AI engineering (awareness)</title>
+  <style>
+    :root { --navy:#1e2a4a; --cream:#f1ece0; --coral:#e86a52; --gold:#c9974a; --ok:#0f766e; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Calibri, "Segoe UI", sans-serif; background: var(--cream); color: var(--navy); line-height: 1.45; }
+    header { background: var(--navy); color:#fff; padding: 20px 24px; }
+    header .ey { color: var(--coral); font-size: 12px; letter-spacing: 2px; font-weight: 700; }
+    h1 { margin: 6px 0 8px; font-family: Verdana, sans-serif; font-size: 22px; }
+    header p { margin:0; color:#c9d0e0; max-width: 720px; }
+    main { max-width: 900px; margin: 0 auto; padding: 20px 24px 48px; }
+    h2 { font-size: 18px; margin: 28px 0 10px; border-bottom: 2px solid var(--gold); padding-bottom: 4px; }
+    h3 { font-size: 15px; margin: 16px 0 8px; }
+    table { width:100%; border-collapse: collapse; font-size: 14px; background:#fff; }
+    th, td { text-align:left; vertical-align:top; padding: 8px 10px; border-bottom: 1px solid #e4ddd0; }
+    th { font-size: 11px; letter-spacing: .6px; color:#6b6458; }
+    code { font: 12.5px/1.4 "Courier New", monospace; background:#efe9dc; padding: 1px 5px; border-radius: 3px; }
+    pre { background:#152038; color:#9ae6b4; padding: 12px; border-radius: 6px; overflow-x:auto; font: 12.5px/1.45 "Courier New", monospace; }
+    .ban { background:#fff7e6; border: 1px solid #ead9b0; padding: 10px 14px; border-radius: 6px; font-size: 14px; }
+    .no { color: var(--coral); font-weight: 700; }
+    .yes { color: var(--ok); font-weight: 700; }
+    .stub { background:#fff; border: 1px solid #ddd6c6; border-radius: 8px; padding: 14px; margin-top: 8px; }
+    .stub input { width: 100%; padding: 8px; font-size: 14px; margin: 8px 0; }
+    button { background: var(--navy); color:#fff; border:0; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+    #out { min-height: 2.4em; font-size: 14px; margin-top: 8px; }
+    #out.hall { color: var(--coral); }
+    ul { padding-left: 1.2em; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="ey">TADKA · THROUGH DAY 8 · AWARENESS</div>
+    <h1>AI engineering — what it is, where it must not sit</h1>
+    <p>No model in Payment. No chatbot in <code>POST /orders</code>. Two use cases you can try. Terms assume you have never heard “LLM.”</p>
+  </header>
+  <main>
+    <p class="ban"><strong>AI engineering</strong> is the product around a model: timeout, fallback, cost, tests (evals), and <strong>where it must never run</strong>. Same idea as Polly and “do not cache order status.” Calling a chatbot from a controller and shipping it is <em>not</em> that.</p>
+
+    <h2>1. Words from zero</h2>
+    <table>
+      <thead><tr><th>Term</th><th>Meaning</th><th>Tadka hook</th></tr></thead>
+      <tbody>
+        <tr><td><strong>AI</strong></td><td>Software that does something that used to need a human guess (language, ranking, images).</td><td>A label. Too broad to design with.</td></tr>
+        <tr><td><strong>ML</strong></td><td>A program <em>fitted on examples</em>, not only <code>if/else</code>.</td><td>Your order state machine is <strong>not</strong> ML. It is explicit rules.</td></tr>
+        <tr><td><strong>Model</strong></td><td>The trained blob you <em>call</em>. This week you almost never train one.</td><td>Like the fake payment gateway: an external dependency.</td></tr>
+        <tr><td><strong>LLM</strong></td><td>Large language model: predicts likely next text. Fluent ≠ true.</td><td>Can describe biryani. Can invent ₹1.</td></tr>
+        <tr><td><strong>Prompt</strong></td><td>Instructions + data you send.</td><td>A function argument, not a spell.</td></tr>
+        <tr><td><strong>Token</strong></td><td>A chunk of text. Billing and length limits use tokens.</td><td>Cost and timeout — like a Slow gateway.</td></tr>
+        <tr><td><strong>Hallucination</strong></td><td>A fluent <strong>wrong</strong> answer with no source.</td><td>“Paneer is ₹50 at Meghana” — check the menu JSON.</td></tr>
+        <tr><td><strong>Embedding</strong></td><td>Numbers that mean “similar text.”</td><td>Search “spicy rice” ≈ biryani.</td></tr>
+        <tr><td><strong>RAG</strong></td><td>Fetch <em>your</em> data, then ask the model (<strong>R</strong>etrieval-<strong>A</strong>ugmented <strong>G</strong>eneration).</td><td><code>GET</code> the menu, put that JSON in the prompt.</td></tr>
+        <tr><td><strong>Tool</strong></td><td>The model asks <em>your</em> code to call an API.</td><td>Allowed: <code>GET /orders/{id}</code>. <span class="no">Never</span> <code>POST /payments</code>.</td></tr>
+        <tr><td><strong>Eval</strong></td><td>A test set: question + expected behaviour.</td><td>If it invents a dish, the eval <strong>fails</strong> even if the sentence is pretty.</td></tr>
+      </tbody>
+    </table>
+
+    <h2>2. Tadka days 1–8 — yes or no</h2>
+    <table>
+      <thead><tr><th>Piece</th><th>LLM?</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td>Order state machine</td><td class="no">No</td><td>Correctness. Rules, not guesses.</td></tr>
+        <tr><td>Server-side pricing</td><td class="no">No</td><td>Money. A hallucinated price is a bug.</td></tr>
+        <tr><td>Payment charge (:5240)</td><td class="no">No</td><td>PCI / money. You already have timeout + bulkhead.</td></tr>
+        <tr><td>Polly / bulkhead</td><td>Same <em>ideas</em></td><td>Timeout and fallback around a flaky dependency.</td></tr>
+        <tr><td>“What’s veg under ₹300?”</td><td class="yes">Yes — RAG</td><td>Read <code>GET …/menu</code>, then answer.</td></tr>
+        <tr><td>“Why is my order still Created?”</td><td class="yes">Explain a GET</td><td>Read <code>GET /orders/{id}</code>. Never charge.</td></tr>
+      </tbody>
+    </table>
+    <p>The model sits <strong>beside</strong> Ordering. It is not inside Payment.</p>
+
+    <h2>3. Use case A — Menu Q&amp;A (RAG)</h2>
+    <ol>
+      <li><code>GET /api/v1/restaurants/{id}/menu</code> (Day 6 cache still applies).</li>
+      <li>Put <strong>that JSON</strong> in the prompt: “Answer only from this menu. If it is not there, say you don’t know.”</li>
+      <li>User: “veg under 300 at Meghana?”</li>
+      <li>If the model names a dish <strong>not</strong> in the JSON, your <strong>eval failed</strong>.</li>
+    </ol>
+    <p><span class="no">Forbidden:</span> changing prices, <code>POST /orders</code>, anything on <code>:5240/payments</code>.</p>
+
+    <h3>Stub on this page (no model, no key)</h3>
+    <div class="stub">
+      <p>This box does <strong>not</strong> call an LLM. It looks up a tiny hardcoded Meghana snippet — that is RAG with a dictionary. Type a question:</p>
+      <input id="q" placeholder="e.g. veg under 300  ·  biryani price  ·  pizza">
+      <button type="button" id="go">Answer from the menu JSON only</button>
+      <div id="out"></div>
+    </div>
+
+    <h2>4. Use case B — Status explainer (read-only)</h2>
+    <ol>
+      <li><code>GET /api/v1/orders/{id}</code> <strong>only</strong>.</li>
+      <li>Prompt: one sentence from that JSON.</li>
+      <li>After you killed Payment (Day 8 runbook §2), status <code>Created</code> → “Order was accepted; the charge did not complete because Payment was down.”</li>
+    </ol>
+    <p><span class="no">Forbidden:</span> <code>POST /payments</code>, <code>POST /orders</code>.</p>
+
+    <h2>5. Try it yourself</h2>
+    <table>
+      <thead><tr><th>Option</th><th>What you do</th><th>When</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Stub</strong></td><td>The box above.</td><td>Class, no key.</td></tr>
+        <tr><td><strong>Local</strong></td><td><a href="https://ollama.com">Ollama</a> on the laptop; POST the menu JSON + question to <code>localhost:11434</code>.</td><td>Offline.</td></tr>
+        <tr><td><strong>Hosted API</strong></td><td>Any OpenAI-compatible HTTP API from <em>your server</em>. Key in env, never in this HTML file.</td><td>You already have a key.</td></tr>
+      </tbody>
+    </table>
+    <p>Always: <strong>2 s timeout</strong>. If the model is down, print <code>I don't know</code>. Same as Polly. Do not log addresses (PII — Day 10).</p>
+<pre>curl.exe -s http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu
+# then send that JSON + your question to your model
+# never: curl.exe -X POST http://localhost:5240/payments</pre>
+
+    <h2>6. What this is not</h2>
+    <ul>
+      <li>An LLM inside <code>OrdersController</code> or Payment.</li>
+      <li>Shipping without evals or a timeout.</li>
+      <li>Trusting fluent text as a price or a charge.</li>
+    </ul>
+    <p>Markdown twin: <a href="ai-engineering.md">ai-engineering.md</a>. Runbook: <a href="../runbooks/day-08.md">day-08.md</a>.</p>
+  </main>
+<script>
+const MENU = [
+  { name: "Chicken Biryani", veg: false, price: 299 },
+  { name: "Veg Biryani", veg: true, price: 249 },
+  { name: "Butter Chicken", veg: false, price: 349 },
+  { name: "Dal Tadka", veg: true, price: 179 },
+  { name: "Raita", veg: true, price: 49 }
+];
+document.getElementById("go").onclick = function () {
+  const q = (document.getElementById("q").value || "").toLowerCase();
+  const out = document.getElementById("out");
+  out.className = "";
+  if (!q.trim()) { out.textContent = "Type a question."; return; }
+  if (/pizza|sushi|burger|pasta/.test(q)) {
+    out.className = "hall";
+    out.textContent = "I don't know — that dish is not in this menu JSON. (If a real LLM invented it, that would be a hallucination. Your eval should fail.)";
+    return;
+  }
+  let rows = MENU.slice();
+  if (/veg|vegetarian/.test(q)) rows = rows.filter(x => x.veg);
+  const m = q.match(/under\s*₹?\s*(\d+)/) || q.match(/below\s*(\d+)/);
+  if (m) rows = rows.filter(x => x.price < Number(m[1]));
+  if (/price|cost|how much|₹/.test(q) && /biryani/.test(q)) {
+    out.textContent = "From the menu JSON: Chicken Biryani ₹299, Veg Biryani ₹249. (Grounded — these names exist in the snippet.)";
+    return;
+  }
+  if (!rows.length) {
+    out.textContent = "I don't know — nothing in this menu JSON matches. That is the correct RAG answer.";
+    return;
+  }
+  out.textContent = "From the menu JSON only: " + rows.map(x => x.name + " ₹" + x.price).join("; ") + ".";
+};
+</script>
+</body>
+</html>
