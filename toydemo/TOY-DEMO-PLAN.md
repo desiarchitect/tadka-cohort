@@ -105,6 +105,7 @@ f. **STOP** ΓÇö do not commit. Ask the user: "Please test the <toy-name> demo
 **Progress Checkpoints**
 - [x] Notification fan-out toy + deep doc — 2026-06-17 — [RUN-AND-TEST.md](day-09-kafka-async/notification-fanout-toy/RUN-AND-TEST.md) — committed on day-09
 - [x] Stream processing toy + deep doc — 2026-06-17 — [RUN-AND-TEST.md](day-09-kafka-async/stream-processing-toy/RUN-AND-TEST.md) — committed on day-09
+- [ ] Share-groups-vs-consumer-groups toy + deep doc — 2026-09-20 — [RUN-AND-TEST.md](day-09-kafka-async/share-groups-vs-consumer-groups-toy/RUN-AND-TEST.md) — **awaiting user test + confirmation, not committed.** Java (not the cohort's usual Node/.NET), because KIP-932 Share Consumer API is Java-client-only today (confirmed: `librdkafka`, which `Confluent.Kafka` wraps, has no share-group support yet). Real Kafka 4.3.1 broker, not a simulation — added to prove/disprove whether the newest Kafka feature actually delivers its claimed benefit, since it can't be shown inside Tadka itself (.NET has no client support). Core claim (share groups let more consumers than partitions do real work) reproduced consistently across many runs; exact throughput numbers vary run-to-run on this single-node toy broker, documented honestly in the RUN-AND-TEST.md rather than hidden.
 - Phase 3 confirmed.
 
 ## Phase 4 ΓÇö Day 15 Breadth / Teardown Toys (the 5 Domain Primers + Fan-Out)

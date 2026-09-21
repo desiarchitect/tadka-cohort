@@ -2,7 +2,7 @@
 # Phase 0: PostgreSQL only
 # Day 5: + PostgreSQL streaming read replica (ADR-016)
 # Day 6: + Redis (cache-aside + stampede lock + live-tracking pub/sub backplane — ADR-018/019/020)
-# Day 8: Add Kafka + Zookeeper (first service extraction)
+# Day 9: Add Kafka, KRaft mode (no Zookeeper) — the async event backbone (ADR-027)
 # Day 13: Add Prometheus + Grafana
 
 services:
