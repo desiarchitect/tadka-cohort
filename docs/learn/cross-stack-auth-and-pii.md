@@ -13,9 +13,10 @@ that needs to *verify* a token get access to it without also being able to *mint
 the real architectural question — the library is secondary.
 
 **Java (Spring Security):** `oauth2ResourceServer().jwt()` handles validation, but you have to
-decide *how* it gets the key — either a static symmetric key (HS256, matching what Tadka does
-today) or a JWK Set URI if you're fetching public keys from an identity provider (the RS256
-migration path ADR-030 names). One genuine gotcha: Spring Security's filter chain order matters.
+decide *how* it gets the key — either a static symmetric key (HS256), or `jwkSetUri(...)` to fetch
+public keys from a discovery endpoint, which is what Tadka itself does as of the ADR-049 hardening
+pass — `NimbusJwtDecoder.withJwkSetUri(...)` is the closest one-line Spring equivalent of
+`Tadka.Payment.Api`'s hand-rolled `JwksClient`. One genuine gotcha: Spring Security's filter chain order matters.
 If your JWT filter isn't registered before your controller's security rules evaluate, you'll get
 confusing 403s instead of the 401 you expect for a missing token — worth knowing before you spend
 an hour debugging the wrong status code.
@@ -89,9 +90,40 @@ outlives the key, never log it in plaintext before it's encrypted). That discipl
 to do with .NET, Java, or Node — it's a key-management design, and getting it wrong is equally
 possible in every language.
 
+## 4. Production hardening: rate limiting, refresh rotation, RS256 + JWKS
+
+> Beyond the 120-minute class script (real code, real tests, ADR-047/048/049) — the same category
+> as ADR-045/046. Worth reading even if you didn't build it live.
+
+**The question, in any language:** three separate gaps, three separate mechanisms — don't conflate
+them. "Is this request coming too fast" (rate limiting) is not "has this account had too many wrong
+passwords" (lockout) is not "can this session outlive a 15-minute access token without re-prompting
+for a password" (refresh rotation) is not "who can forge a token" (symmetric vs. asymmetric
+signing). Naming which gap you're closing keeps the design honest in any stack.
+
+**Java (Spring):** Bucket4j or Resilience4j's `RateLimiter` for the request-rate half; lockout is
+usually a plain counter column plus a `AuthenticationFailureBadCredentialsEvent` listener — Spring
+Security has no built-in "lock after N failures" the way some frameworks do. Refresh rotation:
+Spring Authorization Server ships `reuseRefreshTokens(false)` as a one-line opt-in if you're on
+that stack; plain Spring Security needs the same hand-rolled `RefreshToken` table Tadka uses. RS256
++ JWKS is `NimbusJwtDecoder.withJwkSetUri(...)` on the verifying side, same as section 1 above.
+
+**Node:** `express-rate-limit` (in-memory) or `rate-limiter-flexible` (Redis-backed, worth it past
+one instance) for rate limiting; lockout is a manual counter, same shape as Tadka's
+`FailedLoginAttempts`/`LockedUntil`. Refresh rotation and RS256/JWKS have no framework-level
+shortcut in Node either — `jwks-rsa` gives you the JWKS-fetch-and-cache client, but the rotation
+table and the reuse-detection logic are hand-rolled everywhere, this codebase included.
+
+**What doesn't change:** the *shape* of each decision is identical across stacks — a rate limiter
+is always "a counter partitioned by some key, checked before the handler runs"; refresh rotation is
+always "hash the token for lookup, never store it raw, chain tokens by family so reuse can kill the
+whole chain"; JWKS is always "the signer publishes public keys by `kid`, verifiers cache them with a
+TTL and never hold a secret." None of that is .NET-specific — only which library hands you how much
+of the mechanism for free differs.
+
 ---
 
-**One thing to notice across all three sections:** the *reasoning* — where the key lives, where
+**One thing to notice across all four sections:** the *reasoning* — where the key lives, where
 the ownership check goes, where the PII gets intercepted — is identical no matter what you build
 this in. The libraries differ in how much of the mechanism they hand you for free versus how much
 you hand-roll. That's the actual skill this day is teaching: name the architectural question

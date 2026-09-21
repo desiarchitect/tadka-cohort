@@ -1,8 +1,16 @@
 # ADR-030: Authentication — JWT (chosen from the full mechanism menu)
 
 **Date:** 2026-06-05
-**Status:** Accepted
+**Status:** Accepted — **partially superseded, see note below**
 **Deciders:** Tadka Engineering Team
+
+> **2026-09-21 update:** the two gaps this ADR explicitly named as future work are now closed.
+> Refresh-token rotation ("documented, not wired") is wired in **ADR-048**. Signing switches from
+> HS256 to **RS256 + JWKS discovery** in **ADR-049** (the "migration path to RS256" this ADR
+> flagged). The mechanism CHOICE below (JWT over sessions/OAuth2/etc.) and the claims shape
+> (`sub`/`role`/`restaurantId`) are unchanged and still authoritative — only the signing algorithm
+> and the refresh story have moved; read ADR-048/049 for those. Login is also now rate-limited and
+> account-lockout-protected (**ADR-047**).
 
 ## Context
 

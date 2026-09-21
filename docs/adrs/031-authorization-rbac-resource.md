@@ -39,6 +39,7 @@ ASP.NET roles (`[Authorize(Roles=...)]`) + an inline ownership check ≈ **Sprin
 
 ## References
 - ADR-030 (the JWT claims this reads), ADR-032 (PII access is itself an authz concern), ADR-024 (the Payment service that must validate too)
+- **2026-09-21:** ADR-049 changes HOW the Payment service verifies (JWKS-fetched public key instead of a shared symmetric secret) — the per-service, defense-in-depth DECISION on this page is unchanged, only the verification mechanism it relies on moved.
 - `cohort-prep/day-10/option-space.md`, `break-kit-day-10.md` (403 cross-owner; forged-token rejected per-service)
 - Implementation: monolith `[Authorize(Roles=...)]` + inline `OwnsOrAdmin`/ownership checks in each controller; JWT bearer in the Payment service
 

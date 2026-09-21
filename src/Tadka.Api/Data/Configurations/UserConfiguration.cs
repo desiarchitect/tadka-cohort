@@ -38,6 +38,10 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.HasIndex(u => u.Email).IsUnique();
         builder.Property(u => u.OwnedRestaurantId); // RestaurantOwner → their restaurant (ADR-031)
 
+        // Brute-force lockout counters (ADR-047).
+        builder.Property(u => u.FailedLoginAttempts).HasDefaultValue(0);
+        builder.Property(u => u.LockedUntil);
+
         builder.HasMany(u => u.SavedAddresses).WithOne().HasForeignKey(ua => ua.UserId).OnDelete(DeleteBehavior.Cascade);
 
         // The Day-1 seed customer (Priya, GUID matches docs + cohort-prep/day-03 sample payloads) used to

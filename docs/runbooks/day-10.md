@@ -64,7 +64,7 @@ curl -s -o /dev/null -w "payment GET (with token): %{http_code}\n" http://localh
 
 `GET /users/{id}` returns full PII to the owner/Admin, **masked** to anyone else:
 ```bash
-curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $RAHUL"   # Rahul sees p***@tadka.test, +91••••••01
+curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $RAHUL"   # Rahul sees p***@tadka.test, +91••••••••01
 ```
 GDPR right-to-be-forgotten → **anonymise** (not hard-delete — order history must reconcile). **This burns Priya** (`c1b2c3d4-0001…`) for the rest of the day — reset volumes after, or forget a throwaway user.
 ```bash
@@ -111,7 +111,7 @@ dotnet test    # 44/44 — monolith 33 (incl. 4 auth/ownership + 4 FieldCipher) 
 
 ## Troubleshooting
 - **Login returns 401 for a seeded user:** the startup `AuthSeeder` sets real hashes on first boot; if you migrated before Day 10, `docker compose down -v && docker compose up -d` then `dotnet run` to re-seed.
-- **All calls 401 after adding a token:** check the `Jwt:SigningKey` matches in both services' `appsettings.json` (it must be identical for the Payment service to validate the monolith's token).
+- **All calls 401 after adding a token:** as of the ADR-047/048/049 hardening pass there is no shared `Jwt:SigningKey` any more — signing is RS256 (ADR-049). Check that `Tadka.Api` is reachable at the URL `Tadka.Payment.Api`'s `Jwt:JwksBaseUrl` points to (`http://localhost:5224` by default) and that `curl http://localhost:5224/.well-known/jwks.json` returns a non-empty `keys` array; also give `Tadka.Payment.Api`'s JWKS cache (`Jwt:JwksCacheMinutes`, default 5) a moment if a key was *just* rotated.
 - **`FormatException` on startup (`not a valid Base-64 string`):** you switched `Demo:EncryptPiiAtRest` without resetting the volume — the DB has values encoded under the OLD state. `docker compose down -v && docker compose up -d`, then restart the app.
 
 ➡️ Next (Day 11): extract the **Delivery** service (with real-time location tracking / Redis-geo) and front the services with the **API gateway** (YARP).

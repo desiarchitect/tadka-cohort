@@ -76,25 +76,71 @@ if (kafkaOptions?.Enabled == true)
     builder.Services.AddHostedService<Tadka.Api.Infrastructure.Messaging.PaymentResultsConsumer>();
 }
 
-// ── Authentication & Authorization (ADR-030/031) ────────────────────────────────────────────────
+// ── Authentication & Authorization (ADR-030/031, signing switched to RS256+JWKS in ADR-049) ───────
 // Stateless JWT bearer; each service verifies the token itself (defense in depth — the Payment service
-// validates the SAME key). Authorization is RBAC (the `role` claim) + resource-ownership checks done in
-// the controllers (the `sub` / `restaurantId` claims).
+// resolves the SAME public key via JWKS, ADR-049). Authorization is RBAC (the `role` claim) + resource-
+// ownership checks done in the controllers (the `sub` / `restaurantId` claims).
 builder.Services.Configure<Tadka.Api.Auth.JwtOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName));
+builder.Services.Configure<Tadka.Api.Auth.AuthRateLimitOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.AuthRateLimitOptions.SectionName));
+builder.Services.Configure<Tadka.Api.Auth.AccountLockoutOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.AccountLockoutOptions.SectionName));
+
+// Owns the RSA signing key(s) (ADR-049). Created directly (not resolved from the container) so the exact
+// same instance backs both DI (TokenService, AuthController, the JWKS endpoint) and the closure the
+// AddJwtBearer resolver below captures.
+var signingKeys = new Tadka.Api.Auth.SigningKeyStore();
+builder.Services.AddSingleton(signingKeys);
 builder.Services.AddSingleton<Tadka.Api.Auth.TokenService>();
+builder.Services.AddScoped<Tadka.Api.Auth.RefreshTokenService>();
 builder.Services.AddSingleton<Microsoft.AspNetCore.Identity.IPasswordHasher<Tadka.Api.Domain.Users.User>,
     Microsoft.AspNetCore.Identity.PasswordHasher<Tadka.Api.Domain.Users.User>>();
+
+// Fixed-window rate limiting on the auth write endpoints (ADR-047) — keyed by remote IP, 429 on trip.
+var rateLimit = builder.Configuration.GetSection(Tadka.Api.Auth.AuthRateLimitOptions.SectionName)
+    .Get<Tadka.Api.Auth.AuthRateLimitOptions>() ?? new();
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(Tadka.Api.Auth.RateLimitPolicies.AuthWrite, httpContext =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            factory: _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = rateLimit.PermitLimit,
+                Window = TimeSpan.FromSeconds(rateLimit.WindowSeconds),
+                QueueLimit = 0 // reject immediately past the limit — a demoable 429, not a queued delay
+            }));
+    options.OnRejected = async (context, ct) =>
+    {
+        context.HttpContext.Response.ContentType = "application/json";
+        await context.HttpContext.Response.WriteAsJsonAsync(new { error = "Too many requests. Try again shortly." }, ct);
+    };
+});
 
 var jwt = builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName).Get<Tadka.Api.Auth.JwtOptions>() ?? new();
 builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        // Found during live verification of ADR-049's Admin-only rotate-signing-key endpoint (a real
+        // token, not the test suite's synthetic TestAuthHandler identity, is what exposed this): the JWT
+        // bearer handler silently remaps short claim names ("sub"/"role"/"email") to legacy long-form URI
+        // claim types (ClaimTypes.NameIdentifier/Role/Email) UNLESS told not to. That remap made
+        // `RoleClaimType = "role"` below match nothing — every real (non-test) [Authorize(Roles=...)]
+        // check in this app was silently broken, masked only because every integration test authenticates
+        // via TestAuthHandler's synthetic claims, never through this remap. Disabling it makes claim types
+        // literal, matching what TokenService actually puts in the token.
+        options.MapInboundClaims = false;
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateIssuer = true, ValidIssuer = jwt.Issuer,
             ValidateAudience = true, ValidAudience = jwt.Audience,
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(jwt.SigningKey)),
+            // Resolve by the token's `kid` against the SAME key store the JWKS endpoint publishes from
+            // (ADR-049) — this process just doesn't need an HTTP hop to reach its own in-memory store,
+            // it still goes through the identical kid-keyed public-key lookup every other verifier uses.
+            IssuerSigningKeyResolver = (_, _, kid, _) =>
+                signingKeys.Find(kid) is { } key
+                    ? [new Microsoft.IdentityModel.Tokens.RsaSecurityKey(key.Rsa) { KeyId = key.Kid }]
+                    : [],
             ValidateLifetime = true,
             NameClaimType = "sub",
             RoleClaimType = "role"
@@ -129,9 +175,16 @@ if (app.Environment.IsDevelopment())
 
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 app.UseHttpsRedirection();
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+
+// Standard OIDC/JWKS discovery shape (ADR-049) — anonymous, publishes only PUBLIC keys (current +
+// still-in-grace-window retired ones). Payment.Api (and anyone else who needs to verify our tokens)
+// fetches this instead of holding a copy of a signing secret.
+app.MapGet("/.well-known/jwks.json", (Tadka.Api.Auth.SigningKeyStore keys) =>
+    Results.Ok(Tadka.Api.Auth.JwkConverter.ToDocument(keys.AllForVerification))).AllowAnonymous();
 
 app.Run();
 

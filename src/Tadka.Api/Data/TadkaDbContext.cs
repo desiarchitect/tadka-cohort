@@ -35,6 +35,7 @@ public class TadkaDbContext : DbContext
     // Identity domain
     public DbSet<User> Users => Set<User>();
     public DbSet<UserAddress> UserAddresses => Set<UserAddress>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>(); // rotation + reuse detection (ADR-048)
 
     // NOTE: Payment is NOT here. As of Day 7 (ADR-022) it lives in its own module behind
     // PaymentDbContext (the `payment` schema, its own migration history). The core context has zero
