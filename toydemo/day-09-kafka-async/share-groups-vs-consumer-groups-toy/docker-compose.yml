@@ -1,0 +1,42 @@
+# Standalone Kafka 4.3.1 broker for the share-groups toy.
+# Deliberately separate from the main Tadka stack (which pins apache/kafka:3.8.0,
+# predating KIP-932 entirely) so this toy never touches the day-09 demo environment.
+# Ports are offset (host 9095/9096) so both can run side by side.
+services:
+  kafka-share-demo:
+    image: apache/kafka:4.3.1
+    container_name: share-groups-toy-kafka
+    ports:
+      - "9095:9095"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9095,DOCKER://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9095,DOCKER://kafka-share-demo:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,DOCKER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      # share.auto.offset.reset is NOT a client-side consumer property the way
+      # auto.offset.reset is for classic consumers - it's a broker-side (or
+      # per-group, via kafka-configs.sh --entity-type groups) default. Setting a
+      # client Properties key of the same name is silently ignored; found by
+      # actually running ShareBenchmark once and seeing 0/120 processed because a
+      # fresh share group defaulted to "latest" (the tail) with nothing new arriving.
+      KAFKA_SHARE_AUTO_OFFSET_RESET: earliest
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      # KIP-932: share groups are GA in 4.2+ but still ship behind these two broker flags.
+      KAFKA_UNSTABLE_API_VERSIONS_ENABLE: "true"
+      KAFKA_GROUP_COORDINATOR_REBALANCE_PROTOCOLS: "classic,consumer,share"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9095 --list || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
