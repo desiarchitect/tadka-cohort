@@ -1,0 +1,30 @@
+# OTEL Collector config for the live Azure session (ADR-040, ADR-064).
+# Same seam as docker/observability/otel-collector-config.yaml: the apps export OTLP and don't know where
+# it ends up. Locally it fans out to Jaeger + Prometheus; in Azure it goes to Application Insights.
+# That swap is this file only, with no app change. Passed to the collector as --config=env:OTEL_CONFIG.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  azuremonitor:
+    connection_string: ${env:APPLICATIONINSIGHTS_CONNECTION_STRING}
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [azuremonitor]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [azuremonitor]

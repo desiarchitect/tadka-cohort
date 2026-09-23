@@ -1,0 +1,10 @@
+# Terraform working files. State holds generated secrets (DB password, JWT key): never commit it.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+*.auto.tfvars
+*.auto.tfvars.json
+terraform.tfvars
+.terraform.lock.hcl.bak
