@@ -51,15 +51,29 @@ builder.Services.AddResponseCompression(options =>
 builder.Services.Configure<BrotliCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
 builder.Services.Configure<GzipCompressionProviderOptions>(o => o.Level = System.IO.Compression.CompressionLevel.Fastest);
 
+// Transient-fault retry (ADR-064, Day-14 cloud failover). OFF by default, so local dev and the tests
+// behave exactly as before. ON in the cloud `ha` session: a managed Postgres failover drops every open
+// connection for tens of seconds, and EF's retrying strategy replays the failed unit instead of throwing a
+// 500. Explicit transactions must then run inside CreateExecutionStrategy().ExecuteAsync (see OutboxRelay).
+var dbRetry = builder.Configuration.GetValue("Database:EnableRetryOnFailure", false);
+var dbMaxRetries = builder.Configuration.GetValue("Database:MaxRetryCount", 6);
+var dbMaxRetryDelay = TimeSpan.FromSeconds(builder.Configuration.GetValue("Database:MaxRetryDelaySeconds", 30));
+
 builder.Services.AddDbContext<TadkaDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("TadkaDb")));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("TadkaDb"), npgsql =>
+    {
+        if (dbRetry) npgsql.EnableRetryOnFailure(dbMaxRetries, dbMaxRetryDelay, null);
+    }));
 
 // Read-replica context (ADR-016): NoTracking, pointed at the replica. Falls back to the primary
 // connection when no replica is configured, so single-Postgres dev and the test suite still work.
 builder.Services.AddDbContext<TadkaReadDbContext>(options =>
     options.UseNpgsql(
             builder.Configuration.GetConnectionString("TadkaDbReplica")
-            ?? builder.Configuration.GetConnectionString("TadkaDb"))
+            ?? builder.Configuration.GetConnectionString("TadkaDb"), npgsql =>
+            {
+                if (dbRetry) npgsql.EnableRetryOnFailure(dbMaxRetries, dbMaxRetryDelay, null);
+            })
         .UseQueryTrackingBehavior(QueryTrackingBehavior.NoTracking));
 
 // Repositories & Factories
@@ -117,8 +131,15 @@ builder.Services.AddMemoryCache();
 
 if (!string.IsNullOrWhiteSpace(redisConnection))
 {
-    builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(
-        _ => StackExchange.Redis.ConnectionMultiplexer.Connect(redisConnection));
+    // AbortOnConnectFail=false (explicit, ADR-064): if Redis is down or failing over at boot, the
+    // multiplexer keeps reconnecting in the background instead of throwing. The cache already falls
+    // through to the DB on RedisException (ADR-044), so a Redis blip costs latency, not errors.
+    builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ =>
+    {
+        var redisOptions = StackExchange.Redis.ConfigurationOptions.Parse(redisConnection);
+        redisOptions.AbortOnConnectFail = false;
+        return StackExchange.Redis.ConnectionMultiplexer.Connect(redisOptions);
+    });
     builder.Services.AddSingleton<Tadka.Api.Infrastructure.Realtime.IOrderTrackingBus, Tadka.Api.Infrastructure.Realtime.RedisOrderTrackingBus>();
 }
 else

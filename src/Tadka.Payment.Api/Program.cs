@@ -21,8 +21,18 @@ builder.Services.AddOpenApi();
 builder.Services.Configure<PaymentOptions>(builder.Configuration.GetSection(PaymentOptions.SectionName));
 
 // Database-per-service (ADR-026): the Payment service owns its OWN PostgreSQL.
+// Transient-fault retry (ADR-064): OFF by default; ON for the cloud failover demo. Explicit transactions
+// run inside CreateExecutionStrategy().ExecuteAsync so the retrying strategy can replay them.
+var dbRetry = builder.Configuration.GetValue("Database:EnableRetryOnFailure", false);
 builder.Services.AddDbContext<PaymentDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("PaymentDb")));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("PaymentDb"), npgsql =>
+    {
+        if (dbRetry)
+            npgsql.EnableRetryOnFailure(
+                builder.Configuration.GetValue("Database:MaxRetryCount", 6),
+                TimeSpan.FromSeconds(builder.Configuration.GetValue("Database:MaxRetryDelaySeconds", 30)),
+                null);
+    }));
 
 builder.Services.AddSingleton<IPaymentGateway, FakePaymentGateway>();
 builder.Services.AddSingleton<PaymentResiliencePipeline>();

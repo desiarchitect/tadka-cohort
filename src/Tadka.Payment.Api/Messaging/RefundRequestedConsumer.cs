@@ -104,29 +104,35 @@ public sealed class RefundRequestedConsumer(
         }
 
         // Refund row + payment-refunded outbox + inbox in ONE transaction (same DbContext as PaymentService).
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        try
+        // ADR-064: runs inside the execution strategy so a retrying strategy can replay the unit (flag off = once).
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
         {
-            var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-            var outcome = await payments.RefundAsync(msg.OrderId, msg.GatewayReference, ct);
-
-            var refunded = new PaymentRefundedMessage(Guid.NewGuid(), msg.OrderId, outcome.Status.ToString());
-            db.OutboxMessages.Add(new OutboxMessage
+            db.ChangeTracker.Clear(); // a replay must not see the failed attempt's tracked payment/outbox rows
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            try
             {
-                Topic = Topics.PaymentRefunded,
-                Key = msg.OrderId.ToString(),
-                Payload = JsonSerializer.Serialize(refunded),
-                TraceParent = TadkaTrace.CurrentTraceParent()
-            });
+                var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
+                var outcome = await payments.RefundAsync(msg.OrderId, msg.GatewayReference, ct);
 
-            db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
-            await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-        }
-        catch
-        {
-            await tx.RollbackAsync(ct);
-            throw;
-        }
+                var refunded = new PaymentRefundedMessage(Guid.NewGuid(), msg.OrderId, outcome.Status.ToString());
+                db.OutboxMessages.Add(new OutboxMessage
+                {
+                    Topic = Topics.PaymentRefunded,
+                    Key = msg.OrderId.ToString(),
+                    Payload = JsonSerializer.Serialize(refunded),
+                    TraceParent = TadkaTrace.CurrentTraceParent()
+                });
+
+                db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+        });
     }
 }

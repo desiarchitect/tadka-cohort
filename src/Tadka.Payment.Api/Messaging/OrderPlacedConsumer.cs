@@ -118,30 +118,38 @@ public sealed class OrderPlacedConsumer(
 
         // Charge + payment-results outbox + inbox in ONE transaction (ADR-028).
         // ChargeAsync SaveChanges flushes into this transaction until Commit.
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        try
+        // ADR-064: runs inside the execution strategy so a retrying strategy can replay the unit (flag off =
+        // runs once). Trade-off named in ADR-064: the Pending payment row rolls back with the failed attempt,
+        // so a replay calls the gateway AGAIN. Safe with the fake gateway; a real PSP needs an idempotency key.
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
         {
-            var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-            var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct);
-
-            var result = new PaymentResultMessage(
-                Guid.NewGuid(), msg.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason);
-            db.OutboxMessages.Add(new OutboxMessage
+            db.ChangeTracker.Clear(); // a replay starts clean: no Added rows left over from the failed attempt
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            try
             {
-                Topic = Topics.PaymentResults,
-                Key = msg.OrderId.ToString(),
-                Payload = JsonSerializer.Serialize(result),
-                TraceParent = TadkaTrace.CurrentTraceParent()
-            });
+                var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
+                var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct);
 
-            db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
-            await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-        }
-        catch
-        {
-            await tx.RollbackAsync(ct);
-            throw;
-        }
+                var result = new PaymentResultMessage(
+                    Guid.NewGuid(), msg.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason);
+                db.OutboxMessages.Add(new OutboxMessage
+                {
+                    Topic = Topics.PaymentResults,
+                    Key = msg.OrderId.ToString(),
+                    Payload = JsonSerializer.Serialize(result),
+                    TraceParent = TadkaTrace.CurrentTraceParent()
+                });
+
+                db.InboxMessages.Add(new InboxMessage { MessageId = msg.MessageId });
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw;
+            }
+        });
     }
 }

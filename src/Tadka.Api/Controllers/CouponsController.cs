@@ -90,30 +90,38 @@ public class CouponsController(TadkaDbContext db) : ControllerBase
     [HttpPost("{code}/redeem/pessimistic")]
     public async Task<ActionResult<RedeemResponse>> RedeemPessimistic(string code, [FromBody] RedeemRequest request)
     {
-        await using var tx = await _db.Database.BeginTransactionAsync();
-
-        // xmin is a Postgres system column and is NOT included by `SELECT *` - it must be
-        // named explicitly or EF's materializer throws (the entity has it mapped as a shadow
-        // concurrency property, copied from the Orders convention, ADR-012). Column names are
-        // quoted PascalCase (EF's default Npgsql convention, same as every other table here) -
-        // an unquoted `code` resolves to Postgres's lower-cased identifier and does not match.
-        var coupon = await _db.Coupons
-            .FromSqlInterpolated($"SELECT *, xmin FROM ordering.coupons WHERE \"Code\" = {code} FOR UPDATE")
-            .FirstOrDefaultAsync();
-        if (coupon is null) throw new NotFoundException(nameof(Coupon), code);
-
-        if (coupon.IsExhausted)
+        // ADR-064: the lock → check → write → commit unit runs inside the execution strategy. With
+        // Database:EnableRetryOnFailure=true, a user-opened transaction outside it throws; inside it, a
+        // transient fault replays the WHOLE unit (re-lock, re-check), never just the failed statement.
+        var strategy = _db.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync<ActionResult<RedeemResponse>>(async () =>
         {
-            await tx.RollbackAsync();
-            return Problem(detail: $"Coupon '{code}' is exhausted.", statusCode: StatusCodes.Status422UnprocessableEntity, title: "Coupon Exhausted");
-        }
+            _db.ChangeTracker.Clear(); // a replay re-reads the locked row instead of reusing a stale copy
+            await using var tx = await _db.Database.BeginTransactionAsync();
 
-        coupon.Redeemed += 1;
-        _db.CouponRedemptions.Add(new CouponRedemption { Id = Guid.NewGuid(), CouponId = coupon.Id, CustomerId = request.CustomerId, RedeemedAt = DateTime.UtcNow });
-        await _db.SaveChangesAsync();
-        await tx.CommitAsync();
+            // xmin is a Postgres system column and is NOT included by `SELECT *` - it must be
+            // named explicitly or EF's materializer throws (the entity has it mapped as a shadow
+            // concurrency property, copied from the Orders convention, ADR-012). Column names are
+            // quoted PascalCase (EF's default Npgsql convention, same as every other table here) -
+            // an unquoted `code` resolves to Postgres's lower-cased identifier and does not match.
+            var coupon = await _db.Coupons
+                .FromSqlInterpolated($"SELECT *, xmin FROM ordering.coupons WHERE \"Code\" = {code} FOR UPDATE")
+                .FirstOrDefaultAsync();
+            if (coupon is null) throw new NotFoundException(nameof(Coupon), code);
 
-        return Ok(new RedeemResponse(coupon.Code, coupon.Redeemed, coupon.Remaining, "pessimistic"));
+            if (coupon.IsExhausted)
+            {
+                await tx.RollbackAsync();
+                return Problem(detail: $"Coupon '{code}' is exhausted.", statusCode: StatusCodes.Status422UnprocessableEntity, title: "Coupon Exhausted");
+            }
+
+            coupon.Redeemed += 1;
+            _db.CouponRedemptions.Add(new CouponRedemption { Id = Guid.NewGuid(), CouponId = coupon.Id, CustomerId = request.CustomerId, RedeemedAt = DateTime.UtcNow });
+            await _db.SaveChangesAsync();
+            await tx.CommitAsync();
+
+            return Ok(new RedeemResponse(coupon.Code, coupon.Redeemed, coupon.Remaining, "pessimistic"));
+        });
     }
 
     // Demo-only reset so the break kit can be re-run without a fresh database.

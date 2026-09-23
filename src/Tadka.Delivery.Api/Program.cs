@@ -16,15 +16,30 @@ builder.AddTadkaTelemetry("Tadka.Delivery.Api");
 builder.Services.AddOpenApi();
 
 // Database-per-service (ADR-033/026): the Delivery service owns its OWN PostgreSQL.
+// Transient-fault retry (ADR-064): OFF by default; ON for the cloud failover demo.
+var dbRetry = builder.Configuration.GetValue("Database:EnableRetryOnFailure", false);
 builder.Services.AddDbContext<DeliveryDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("DeliveryDb")));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("DeliveryDb"), npgsql =>
+    {
+        if (dbRetry)
+            npgsql.EnableRetryOnFailure(
+                builder.Configuration.GetValue("Database:MaxRetryCount", 6),
+                TimeSpan.FromSeconds(builder.Configuration.GetValue("Database:MaxRetryDelaySeconds", 30)),
+                null);
+    }));
 builder.Services.AddScoped<DeliveryService>();
 
 // Live location → Redis-geo (ADR-034), optional. No Redis configured ⇒ no-op (tests stay Redis-free).
 var redis = builder.Configuration.GetConnectionString("Redis");
 if (!string.IsNullOrWhiteSpace(redis))
 {
-    builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ => StackExchange.Redis.ConnectionMultiplexer.Connect(redis));
+    // AbortOnConnectFail=false (explicit, ADR-064): keep reconnecting through a Redis restart/failover.
+    builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ =>
+    {
+        var redisOptions = StackExchange.Redis.ConfigurationOptions.Parse(redis);
+        redisOptions.AbortOnConnectFail = false;
+        return StackExchange.Redis.ConnectionMultiplexer.Connect(redisOptions);
+    });
     builder.Services.AddSingleton<ILocationStore, RedisLocationStore>();
 }
 else

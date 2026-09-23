@@ -12,5 +12,6 @@
     <Project Path="tests/Tadka.Payment.Api.Tests/Tadka.Payment.Api.Tests.csproj" />
     <Project Path="tests/Tadka.Delivery.Api.Tests/Tadka.Delivery.Api.Tests.csproj" />
     <Project Path="tests/Tadka.Restaurant.Api.Tests/Tadka.Restaurant.Api.Tests.csproj" />
+    <Project Path="tests/Tadka.Gateway.Tests/Tadka.Gateway.Tests.csproj" />
   </Folder>
 </Solution>

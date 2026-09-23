@@ -1,5 +1,6 @@
 using System.Threading.RateLimiting;
 using Tadka.Gateway.Canary;
+using Tadka.Gateway.Security;
 using Tadka.Telemetry;
 using Yarp.ReverseProxy.LoadBalancing;
 
@@ -30,6 +31,10 @@ builder.Services.AddRateLimiter(options =>
 
 var app = builder.Build();
 
+// Origin lockdown (ADR-064): only when Gateway:RequiredFrontDoorId is set (Azure). Off locally. Runs before
+// the rate limiter so a request that skipped the edge never spends a rate-limit permit.
+app.UseFrontDoorOriginLock(app.Configuration);
+
 app.UseRateLimiter();
 
 // Live order tracker demo (ADR-020): samples/live-tracker → wwwroot/demo at build; no npm step.
@@ -44,3 +49,6 @@ app.MapGet("/health/ready", () => Results.Ok(new { status = "Ready", service = "
 app.MapReverseProxy();
 
 app.Run();
+
+// Exposed for WebApplicationFactory in tests/Tadka.Gateway.Tests (same pattern as the four services).
+public partial class Program { }

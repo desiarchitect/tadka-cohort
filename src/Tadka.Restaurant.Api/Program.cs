@@ -20,14 +20,30 @@ builder.Services.AddOpenApi();
 builder.Services.AddValidatorsFromAssemblyContaining<Program>();
 
 // Database-per-service (ADR-036/026): the Restaurant service owns its OWN PostgreSQL.
+// Transient-fault retry (ADR-064): OFF by default; ON for the cloud failover demo. The Outbox relay's
+// explicit transaction runs inside CreateExecutionStrategy().ExecuteAsync so this strategy can replay it.
+var dbRetry = builder.Configuration.GetValue("Database:EnableRetryOnFailure", false);
 builder.Services.AddDbContext<RestaurantDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("RestaurantDb")));
+    options.UseNpgsql(builder.Configuration.GetConnectionString("RestaurantDb"), npgsql =>
+    {
+        if (dbRetry)
+            npgsql.EnableRetryOnFailure(
+                builder.Configuration.GetValue("Database:MaxRetryCount", 6),
+                TimeSpan.FromSeconds(builder.Configuration.GetValue("Database:MaxRetryDelaySeconds", 30)),
+                null);
+    }));
 
 // Redis cache-aside (ADR-018/019) moved WITH the read-heavy service (ADR-036). Optional → no-op without Redis.
 var redis = builder.Configuration.GetConnectionString("Redis");
 if (!string.IsNullOrWhiteSpace(redis))
 {
-    builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ => StackExchange.Redis.ConnectionMultiplexer.Connect(redis));
+    // AbortOnConnectFail=false (explicit, ADR-064): keep reconnecting through a Redis restart/failover.
+    builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ =>
+    {
+        var redisOptions = StackExchange.Redis.ConfigurationOptions.Parse(redis);
+        redisOptions.AbortOnConnectFail = false;
+        return StackExchange.Redis.ConnectionMultiplexer.Connect(redisOptions);
+    });
     builder.Services.AddSingleton<ICacheService, RedisCacheService>();
 }
 else

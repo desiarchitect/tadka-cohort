@@ -110,23 +110,30 @@ public sealed class PaymentResultsConsumer(
         // ONE transaction: domain reaction (confirm/cancel + outbox) + inbox stamp.
         // Handlers call SaveChanges on this same scoped DbContext; EF enrolls those flushes in the tx
         // until Commit — so we never "confirm committed, inbox not yet" (or the reverse).
-        await using var tx = await db.Database.BeginTransactionAsync(ct);
-        try
+        // ADR-064: the unit runs inside the execution strategy so a retrying strategy can replay it from the
+        // top after a transient fault (flag off = runs once, exactly as before).
+        var strategy = db.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
         {
-            var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
-            if (string.Equals(msg.Status, "Completed", StringComparison.OrdinalIgnoreCase))
-                await mediator.Publish(new PaymentCompletedEvent(msg.OrderId, msg.GatewayReference ?? ""), ct);
-            else
-                await mediator.Publish(new PaymentFailedEvent(msg.OrderId, msg.FailureReason ?? "Payment failed"), ct);
+            db.ChangeTracker.Clear(); // a replay starts clean: no half-applied order/inbox from the failed attempt
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            try
+            {
+                var mediator = scope.ServiceProvider.GetRequiredService<IMediator>();
+                if (string.Equals(msg.Status, "Completed", StringComparison.OrdinalIgnoreCase))
+                    await mediator.Publish(new PaymentCompletedEvent(msg.OrderId, msg.GatewayReference ?? ""), ct);
+                else
+                    await mediator.Publish(new PaymentFailedEvent(msg.OrderId, msg.FailureReason ?? "Payment failed"), ct);
 
-            db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
-            await db.SaveChangesAsync(ct);
-            await tx.CommitAsync(ct);
-        }
-        catch
-        {
-            await tx.RollbackAsync(ct);
-            throw; // no Kafka commit → redelivery; handlers are idempotent
-        }
+                db.Set<InboxMessage>().Add(new InboxMessage { MessageId = msg.MessageId });
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+            }
+            catch
+            {
+                await tx.RollbackAsync(ct);
+                throw; // no Kafka commit → redelivery; handlers are idempotent
+            }
+        });
     }
 }
