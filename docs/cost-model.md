@@ -1,11 +1,13 @@
 # Tadka — Cost Model (₹)
 
-> **Modeled, not a real invoice.** Tadka is never actually deployed to a cloud in
-> this cohort — deployment is taught **black-box** (ADR-039). These are teaching
+> **Modeled, not a real invoice.** The AWS tables below are teaching
 > approximations: AWS Mumbai (`ap-south-1`) list prices, ₹ at ~₹83/USD, rounded.
 > The *ratios and breaking points* are realistic; the exact rupee is not a quote.
 > The point is the **shape of the bill and what moves it**, not three decimal
-> places.
+> places. The AWS stack in `terraform/` is plan-only and never applied. Since
+> ADR-064 the cohort *does* deploy live, per session, on Azure: the real bills
+> for those sessions go in [Real Azure bills](#real-azure-bills-per-session-adr-064)
+> at the end of this page.
 
 Cost is a **Day-1 architecture driver**, not a Day-16 afterthought. Every box on
 the architecture diagram is a line on this bill. An architect reads the two
@@ -116,3 +118,34 @@ that bet starts paying off.
 made it worth paying. That mapping — *"here's the rupee, here's the failure that
 justified it, here's the load where it flips"* — is the difference between a
 senior engineer and an architect.
+
+---
+
+## How this maps to the AWS reference in `terraform/`
+
+The ~₹31,300 "built" table above is the one AWS figure to quote (it replaces the
+older "~₹20–60k/month" range in `deploy/README.md` and `terraform/README.md`).
+The plan-only stack in `terraform/environments/demo` differs from that table in
+two ways, both unpriced here on purpose (check the AWS pricing page before you
+quote a number):
+
+- It adds **one NAT gateway** (hourly + per-GB), which the table above does not
+  include. Private ECS tasks need it to pull images and call out.
+- **MSK is off by default** (`enable_msk = false`): Kafka runs as one Fargate
+  task instead, which removes the ~₹5,500 idle-broker line and adds one more
+  small Fargate task.
+
+## Real Azure bills per session (ADR-064)
+
+The live class environment runs on Azure for one session at a time and is
+destroyed afterwards (`scripts/cloud-up.ps1` / `cloud-down.ps1`). These rows hold
+**real Cost Management figures** for one session's resource group, not models.
+
+| Session | Mode | Hours up | Real bill (Cost Management) | Planning estimate (not a bill) |
+|---------|------|---------:|----------------------------:|-------------------------------|
+| Real Azure bill, basic session | `basic` | TO BE FILLED after first dry run | **TO BE FILLED after first dry run** | ~₹50–150 per ~4 h |
+| Real Azure bill, ha session | `ha` | TO BE FILLED after first dry run | **TO BE FILLED after first dry run** | ~₹250–350 per 4 h |
+
+Read the real number next to the modeled monthly AWS bill on Day 16: one is a
+month of a system that runs forever, the other is an afternoon of one that
+exists only while you look at it. Both are architecture decisions.

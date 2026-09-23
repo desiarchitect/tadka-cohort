@@ -1,8 +1,14 @@
 # ADR-039: Cloud Deployment (Terraform + ECS + ALB + API Gateway)
 
 **Date:** 2026-06-05
-**Status:** Accepted
+**Status:** Accepted, superseded in part by [ADR-064](064-live-cloud-deployment-azure-container-apps.md)
 **Deciders:** Tadka Engineering Team
+
+> **Superseded in part (2026-09-23, ADR-064).** The course now deploys live, per session, on **Azure
+> Container Apps** (`deploy/azure/`, `scripts/cloud-up.ps1`). The "never deployed, black box only" stance
+> below no longer holds. What still holds: the ECS/ALB shape as the **AWS reference** (`terraform/`,
+> plan-only, now complete enough to `plan`: ECS services, IGW/NAT/routes, ECR, autoscaling, CloudFront,
+> generated passwords; MSK optional and off by default), and "results, not HCL" for students.
 
 ## Context
 

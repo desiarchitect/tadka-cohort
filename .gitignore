@@ -55,6 +55,8 @@ coverage/
 
 # Terraform
 terraform/.terraform/
+# Provider caches in any Terraform root (terraform/environments/demo, deploy/azure, ...).
+**/.terraform/
 terraform/*.tfstate
 terraform/*.tfstate.backup
 terraform/*.tfplan
