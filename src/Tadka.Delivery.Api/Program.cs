@@ -5,6 +5,7 @@ using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
 using Tadka.Delivery.Api;
 using Tadka.Delivery.Api.Data;
+using Tadka.Delivery.Api.Domain;
 using Tadka.Delivery.Api.Messaging;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -22,10 +23,13 @@ if (!string.IsNullOrWhiteSpace(redis))
 {
     builder.Services.AddSingleton<StackExchange.Redis.IConnectionMultiplexer>(_ => StackExchange.Redis.ConnectionMultiplexer.Connect(redis));
     builder.Services.AddSingleton<ILocationStore, RedisLocationStore>();
+    // Same Redis connection publishes rider-location pings onto Day 6's live-tracking backplane (ADR-020/036).
+    builder.Services.AddSingleton<IOrderTrackingPublisher, RedisOrderTrackingPublisher>();
 }
 else
 {
     builder.Services.AddSingleton<ILocationStore, NullLocationStore>();
+    builder.Services.AddSingleton<IOrderTrackingPublisher, NullOrderTrackingPublisher>();
 }
 
 // Kafka (ADR-027): consume order-confirmed → assign a rider → publish delivery-assigned. OFF when unconfigured.
@@ -67,13 +71,20 @@ app.UseAuthorization();
 
 app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "delivery" })); // public
 
-// The assigned rider posts their live position → Redis GEOADD (ADR-034).
-app.MapPut("/api/v1/deliveries/{orderId:guid}/location", async (Guid orderId, LocationRequest req, DeliveryDbContext db, ILocationStore loc) =>
+// The assigned rider posts their live position → Redis GEOADD (ADR-034), and — while actively on this
+// delivery — a ping onto the customer's SSE live-tracking stream via the Day-6 backplane (ADR-020/036).
+app.MapPut("/api/v1/deliveries/{orderId:guid}/location", async (Guid orderId, LocationRequest req, DeliveryDbContext db, ILocationStore loc, IOrderTrackingPublisher tracking) =>
 {
     var assignment = await db.Assignments.AsNoTracking().FirstOrDefaultAsync(a => a.OrderId == orderId);
     if (assignment is null) return Results.NotFound();
     if (!loc.Enabled) return Results.StatusCode(503); // Redis not configured
     await loc.SetAsync(assignment.AgentId, req.Latitude, req.Longitude);
+
+    // Only push a live ping while the agent is actively on this delivery — no point publishing for an
+    // assignment that's already Delivered/Cancelled; nobody's SSE stream cares anymore.
+    if (tracking.Enabled && assignment.Status is AssignmentStatus.Assigned or AssignmentStatus.PickedUp)
+        await tracking.PublishLocationAsync(orderId, req.Latitude, req.Longitude);
+
     return Results.NoContent();
 }).RequireAuthorization();
 

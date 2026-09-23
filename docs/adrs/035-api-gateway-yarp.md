@@ -26,6 +26,7 @@ After extracting Payment (Day 8) and Delivery (ADR-033), a client faces **three 
 - **A new hop** (latency + one more thing to run and make HA — a gateway outage is a front-door outage).
 - Tempting to make it a **trust boundary** (validate-only-at-edge) → the forge-the-header breach (ADR-031). We explicitly keep per-service validation.
 - Tempting to stuff business logic into the gateway → it must stay a thin edge (routing + cross-cutting only).
+- **Static routing, not service discovery:** the gateway→backend targets in `Tadka.Gateway/appsettings.json` are hardcoded (`localhost:5224/5240/5250`) — adding/moving a service instance means editing config and redeploying the gateway, not automatic registration. Fine at 3 fixed local services; a real limitation once instances scale dynamically (ECS/K8s).
 
 ### Cost (₹ / effort)
 A small YARP project + a routes config; near-zero locally. In the cloud it's a managed **ALB / API Gateway / App Gateway + APIM** (real cost — justify; sized by traffic).
@@ -44,4 +45,4 @@ YARP ≈ **Spring Cloud Gateway** (Java) · **Express Gateway** / a Node proxy �
 - Implementation: `src/Tadka.Gateway` (YARP routes + rate-limiting)
 
 ## Revisit When
-Move auth/rate-limit/TLS to a **cloud-managed gateway** at deployment (Day 12 / production). Adopt **Kong/Envoy** if you need a rich plugin/policy ecosystem or a service mesh. Add request aggregation / BFF only when a client genuinely needs it (don't pre-build).
+Move auth/rate-limit/TLS to a **cloud-managed gateway** at deployment (Day 12 / production). Adopt **Kong/Envoy** if you need a rich plugin/policy ecosystem or a service mesh. Add request aggregation / BFF only when a client genuinely needs it (don't pre-build). **Gateway↔backend is plain HTTP today** (client↔gateway TLS is the deployment's job, not shown here) — revisit with TLS or mTLS between the gateway and each service before this topology is genuinely internet-facing in production. **Gateway-level circuit breaking/retries** (as distinct from the per-service Polly already used at each service's own outbound calls, ADR-021) haven't been added here either — revisit if a failing backend should be tripped at the edge instead of (or in addition to) within each caller.
