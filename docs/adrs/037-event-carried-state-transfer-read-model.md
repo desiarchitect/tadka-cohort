@@ -29,7 +29,7 @@ The Ordering service will maintain a **Local Read Model** (a read-only replica) 
 ### Negative / Risks
 - **Eventual Consistency:** There is a brief window (typically milliseconds to seconds) between a menu price change and the replica updating. Orders placed during this window may be processed with stale prices. 
 - **Data Duplication:** Catalog data is duplicated across two databases, requiring storage overhead and introducing the risk of data drift if events are lost or mishandled.
-- **Infrastructure Reliance:** This pattern relies heavily on the reliability of the Kafka message broker and the Inbox/Outbox implementation to guarantee exactly-once processing semantics.
+- **Infrastructure Reliance:** This pattern relies on the reliability of the Kafka message broker and the **Outbox** pattern on the publish side (the Restaurant service, ADR-028/036) for at-least-once delivery of `menu-updated`. On the consume side, `MenuUpdatedConsumer` does **not** use an Inbox — a redelivery is handled by the upsert being naturally idempotent (the event carries the full snapshot, so re-applying it is last-write-wins, not a duplicate). An Inbox earns its keep when a consumer's side effect is NOT naturally idempotent (e.g. "charge the card," ADR-028's original motivation); a full-snapshot replica upsert doesn't need one.
 
 ## Alternatives Considered
 - **Synchronous HTTP Call with Circuit Breaker:** Rejected. Even with fallbacks, a degraded Restaurant service directly impacts order processing rates. 

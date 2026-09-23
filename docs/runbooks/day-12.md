@@ -78,4 +78,8 @@ PgBouncer is not a Day-12 teaching beat — the demo lives on `day-11`. The serv
 `docker compose down -v` clears all volumes (incl. the backfill's synthetic rows).
 
 ## Tests
-`dotnet test` → **39/39** (monolith 28 + payment 5 + delivery 3 + restaurant 3).
+39/39 (monolith 28 + payment 5 + delivery 3 + restaurant 3) was the count at this branch's Day-12 landing
+commit (`3a8e1b0`). `day-12` is intentionally kept fast-forwarded to `main` (the cumulative-branch policy
+in `docs/runbooks/DAY-EVOLUTION.md`), so `dotnet test` today shows more — **90/90** as of this check
+(monolith 57 + payment 20 + delivery 5 + restaurant 8, incl. the ADR-063 replica-lag-metric tests).
+Re-run it yourself before class; the count moves as `main` moves.

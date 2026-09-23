@@ -44,8 +44,14 @@ public sealed class MenuUpdatedConsumer(
                 if (cr is null) continue;
                 using var activity = TadkaDiagnostics.ActivitySource.StartActivity(   // rejoin the trace (ADR-041)
                     $"consume {Topics.MenuUpdated}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
-                await HandleAsync(cr.Message.Value, stoppingToken);
+                var applied = await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr);
+
+                // Replica-lag gauge (ADR-063): use Kafka's own per-message timestamp as "the event's own
+                // timestamp" — no wire-contract change needed. Only advance on an actual apply; a
+                // null/undeserializable message (logged, not applied) shouldn't make the replica look fresher.
+                if (applied)
+                    Interlocked.Exchange(ref TadkaDiagnostics.LastMenuReplicaAppliedEventUnixMs, cr.Message.Timestamp.UnixTimestampMs);
             }
             catch (OperationCanceledException) { break; }
             catch (ConsumeException ex) { logger.LogError(ex, "MenuUpdatedConsumer consume error."); }
@@ -60,10 +66,11 @@ public sealed class MenuUpdatedConsumer(
             ? Encoding.UTF8.GetString(bytes)
             : null;
 
-    private async Task HandleAsync(string value, CancellationToken ct)
+    /// <returns>true if the snapshot was actually applied to the replica (used to drive the ADR-063 lag gauge).</returns>
+    private async Task<bool> HandleAsync(string value, CancellationToken ct)
     {
         var msg = JsonSerializer.Deserialize<RestaurantSnapshotMessage>(value);
-        if (msg is null) return;
+        if (msg is null) return false;
 
         using var scope = scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
@@ -95,5 +102,6 @@ public sealed class MenuUpdatedConsumer(
 
         await db.SaveChangesAsync(ct);
         logger.LogInformation("menu-updated applied for restaurant {RestaurantId} ({Count} items).", msg.RestaurantId, msg.Menu.Count);
+        return true;
     }
 }

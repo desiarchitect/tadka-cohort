@@ -25,7 +25,7 @@ We will adopt the **Expand & Contract** pattern for schema changes, and **Chunke
    - *Chunked Processing:* Data is migrated in small, discrete batches (e.g., 500-1000 rows per transaction) to avoid long table locks and transaction log bloat.
    - *Concurrency Control:* Background workers use `FOR UPDATE SKIP LOCKED` to safely claim batches of rows without blocking live traffic or other workers.
    - *Throttling:* Migration scripts dynamically monitor database health (specifically `pg_stat_replication` for replica lag) and inject artificial pauses between batches to prevent I/O saturation.
-   - *Idempotency:* Backfill operations track progress via high-water marks and use upsert semantics, allowing migrations to safely resume after a crash or interruption.
+   - *Idempotency:* Backfill batches are applied as upserts (`INSERT ... ON CONFLICT DO UPDATE`), so re-processing an already-applied row is a no-op, not a duplicate or a corruption. The shipped demo (`scripts/backfill-menu-replica.ps1`) tracks its keyset cursor in an in-memory script variable, not a persisted checkpoint — a crash mid-run loses the cursor, and a restart re-scans from the beginning rather than resuming past what was already applied. That is **safe** (idempotent upserts make redoing already-done batches harmless) but **not an efficient resume** — a genuinely large backfill that crashes near the end would redo the full pass. A persisted high-water mark (a small "last id processed" row/table, updated per batch) is the natural next step if backfills grow large enough for that inefficiency to matter.
 
 ## Consequences
 

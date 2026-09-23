@@ -43,4 +43,32 @@ public static class TadkaDiagnostics
     /// count explode, then revert. This exists ONLY to show why ids must never be metric labels.</summary>
     public static readonly Counter<long> OrdersPlacedByIdBAD =
         Meter.CreateCounter<long>("tadka.orders.placed.by_id", description: "DEMO ONLY — high-cardinality anti-pattern (ADR-042). Do not copy.");
+
+    /// <summary>
+    /// Unix-ms timestamp (Kafka's own per-message timestamp, i.e. when the <c>menu-updated</c> event was
+    /// produced) of the most recent event <see cref="MenuUpdatedConsumer"/> actually applied to the local
+    /// replica (ADR-063). Starts at process-start time so the gauge reads ~0 before the first event ever
+    /// arrives rather than an undefined/huge lag. A plain static field, not per-request state — one
+    /// consumer instance per process (ADR-042 cardinality discipline: one series, no labels).
+    /// </summary>
+    public static long LastMenuReplicaAppliedEventUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    /// <summary>Pure calculation backing <see cref="ReplicaLagSeconds"/>, pulled out so it's testable without
+    /// a live OTEL pipeline or a real clock (ADR-063).</summary>
+    public static double ComputeReplicaLagSeconds(long lastAppliedEventUnixMs, long? nowUnixMs = null)
+        => Math.Max(0, ((nowUnixMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) - lastAppliedEventUnixMs) / 1000.0);
+
+    /// <summary>
+    /// Replica staleness (ADR-063): seconds since the local menu/price replica last applied a
+    /// <c>menu-updated</c> event, evaluated live at scrape time — not a per-message histogram. That's
+    /// deliberate: if the Outbox relay or this consumer stalls, NO new messages arrive to record a sample,
+    /// so a per-message metric would just go flat and hide the stall. An observed gauge keeps counting up
+    /// from the last known-applied event even while nothing is happening, which is the actual "are we
+    /// silently serving stale prices right now" signal ADR-037 never had.
+    /// </summary>
+    public static readonly ObservableGauge<double> ReplicaLagSeconds = Meter.CreateObservableGauge(
+        "tadka.replica.lag_seconds",
+        () => ComputeReplicaLagSeconds(Interlocked.Read(ref LastMenuReplicaAppliedEventUnixMs)),
+        unit: "s",
+        description: "Seconds since the local menu/price replica last applied a menu-updated event.");
 }
