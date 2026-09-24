@@ -12,7 +12,17 @@ public sealed class KafkaProducer : IDisposable
     public KafkaProducer(IOptions<KafkaOptions> options)
     {
         _producer = new ProducerBuilder<string, string>(
-            new ProducerConfig { BootstrapServers = options.Value.BootstrapServers, Acks = Acks.All }).Build();
+            new ProducerConfig
+            {
+                BootstrapServers = options.Value.BootstrapServers,
+                Acks = Acks.All,
+                // ADR-028: bound how long a stuck broker can hold the outbox row's
+                // "FOR UPDATE SKIP LOCKED" transaction open. Without this, librdkafka's
+                // default MessageTimeoutMs (300s) applies and the lock is held that long
+                // when Kafka is unreachable. Kept short and paired with the outbox retry loop.
+                MessageTimeoutMs = 10_000,
+                RequestTimeoutMs = 10_000
+            }).Build();
     }
 
     public Task PublishAsync(string topic, string key, object payload, CancellationToken cancellationToken = default)
