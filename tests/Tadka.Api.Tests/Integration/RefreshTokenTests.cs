@@ -1,5 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Tadka.Api.Auth;
+using Tadka.Api.Data;
+using Tadka.Api.Domain.Users;
 
 namespace Tadka.Api.Tests.Integration;
 
@@ -116,5 +121,70 @@ public class RefreshTokenTests(TadkaApiFactory factory) : IClassFixture<TadkaApi
         // Priya's refresh token is still perfectly usable — the mismatched-owner logout was a no-op.
         var refreshResp = await client.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = tokens.RefreshToken });
         Assert.Equal(HttpStatusCode.OK, refreshResp.StatusCode);
+    }
+
+    /// <summary>
+    /// Fix 4's watch-out: a zero-row atomic claim does NOT automatically mean reuse. An expired (but
+    /// never revoked) token must be a plain 401, with the family left completely untouched - a family
+    /// member rotated moments earlier must still work.
+    /// </summary>
+    [Fact]
+    public async Task Expired_refresh_token_is_rejected_and_the_family_is_left_alone()
+    {
+        var client = CreateClient();
+        var loginResp = await client.PostAsJsonAsync("/api/v1/auth/login", new { email = "priya@tadka.test", password = "Password123!" });
+        var t0 = await loginResp.Content.ReadFromJsonAsync<TokenBody>();
+
+        // Rotate once for a second, still-live family member.
+        var r1 = await client.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = t0!.RefreshToken });
+        var t1 = await r1.Content.ReadFromJsonAsync<TokenBody>();
+
+        // Directly seed an EXPIRED (never used, never revoked) token into t1's own family, bypassing
+        // the 7-day real wait. This simulates a token that simply aged out.
+        var expiredRaw = RefreshTokenService.GenerateRawToken();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
+            var t1Row = await db.RefreshTokens.FirstAsync(x => x.TokenHash == RefreshTokenService.Hash(t1!.RefreshToken));
+            db.RefreshTokens.Add(new RefreshToken
+            {
+                Id = Guid.NewGuid(),
+                UserId = t1Row.UserId,
+                FamilyId = t1Row.FamilyId,
+                TokenHash = RefreshTokenService.Hash(expiredRaw),
+                CreatedAt = DateTime.UtcNow.AddDays(-10),
+                ExpiresAt = DateTime.UtcNow.AddDays(-3), // expired 3 days ago, never revoked
+                RevokedAt = null
+            });
+            await db.SaveChangesAsync();
+        }
+
+        var expiredResp = await client.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = expiredRaw });
+        Assert.Equal(HttpStatusCode.Unauthorized, expiredResp.StatusCode);
+
+        // The family's genuinely current token (t1) must still work — expiry of an unrelated sibling
+        // token must never revoke the family the way real reuse does.
+        var t1StillWorks = await client.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = t1!.RefreshToken });
+        Assert.Equal(HttpStatusCode.OK, t1StillWorks.StatusCode);
+    }
+
+    /// <summary>
+    /// Fix 4's core claim: two concurrent presentations of the SAME refresh token must not both
+    /// succeed. The atomic UPDATE ... WHERE RevokedAt IS NULL claim means only one request can ever
+    /// win; the other must see the row already revoked by its sibling and get reuse-detected.
+    /// </summary>
+    [Fact]
+    public async Task Two_concurrent_refreshes_of_the_same_token_exactly_one_wins()
+    {
+        var client = CreateClient();
+        var loginResp = await client.PostAsJsonAsync("/api/v1/auth/login", new { email = "priya@tadka.test", password = "Password123!" });
+        var t0 = await loginResp.Content.ReadFromJsonAsync<TokenBody>();
+
+        var task1 = client.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = t0!.RefreshToken });
+        var task2 = client.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = t0.RefreshToken });
+        var results = await Task.WhenAll(task1, task2);
+
+        var statusCodes = results.Select(r => r.StatusCode).OrderBy(s => s).ToList();
+        Assert.Equal(new[] { HttpStatusCode.OK, HttpStatusCode.Unauthorized }, statusCodes);
     }
 }

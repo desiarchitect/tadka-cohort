@@ -56,28 +56,48 @@ public sealed class RefreshTokenService(TadkaDbContext db, TokenService tokens, 
     public async Task<RefreshResult> RotateAsync(string rawToken, CancellationToken ct = default)
     {
         var hash = Hash(rawToken);
-        var stored = await db.RefreshTokens.FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
-        if (stored is null)
-            return new RefreshResult(RefreshOutcome.Invalid, null, null, null);
+        var now = DateTime.UtcNow;
 
-        if (stored.RevokedAt is not null)
+        // Atomic claim (fix 4): the previous version was check-then-act - SELECT the row, check
+        // RevokedAt in C#, and only write RevokedAt back on SaveChangesAsync much later. Two
+        // concurrent requests presenting the SAME token both read RevokedAt == null, both passed
+        // the check, and both rotated - reuse detection was silently skipped, and the family ended
+        // up with two "current" tokens instead of one. This single UPDATE ... WHERE RevokedAt IS
+        // NULL is atomic at the database: only one concurrent caller can ever claim the row.
+        var claimed = await db.RefreshTokens
+            .Where(t => t.TokenHash == hash && t.RevokedAt == null && t.ExpiresAt > now)
+            .ExecuteUpdateAsync(s => s.SetProperty(t => t.RevokedAt, now), ct);
+
+        if (claimed == 1)
         {
-            await RevokeFamilyAsync(stored.FamilyId, ct);
+            // We won the claim. ExecuteUpdateAsync doesn't return the entity, so re-read it (now
+            // revoked) for the FamilyId/UserId needed to issue the rotated token in the same family.
+            var stored = await db.RefreshTokens.AsNoTracking().FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
+            if (stored is null)
+                return new RefreshResult(RefreshOutcome.Invalid, null, null, null); // defensive; should not happen
+
+            var claimedUser = await db.Users.FirstOrDefaultAsync(u => u.Id == stored.UserId, ct);
+            if (claimedUser is null)
+                return new RefreshResult(RefreshOutcome.Invalid, null, null, null);
+
+            var newRaw = await IssueAsync(claimedUser.Id, stored.FamilyId, ct); // same family = rotation, not a fresh chain
+            var accessToken = tokens.CreateAccessToken(claimedUser);
+            return new RefreshResult(RefreshOutcome.Ok, accessToken, newRaw, claimedUser);
+        }
+
+        // Zero rows claimed does NOT automatically mean reuse. Look the token up separately (no
+        // WHERE filter this time) and only treat it as genuine reuse if the row exists, is not
+        // expired, AND is already revoked - i.e. someone is presenting a token that was already
+        // consumed by an earlier, successful rotation. A missing row, an expired row, or a garbage
+        // hash is just an invalid token: 401, and the family is left alone.
+        var lookedUp = await db.RefreshTokens.AsNoTracking().FirstOrDefaultAsync(t => t.TokenHash == hash, ct);
+        if (lookedUp is not null && lookedUp.RevokedAt is not null && lookedUp.ExpiresAt > now)
+        {
+            await RevokeFamilyAsync(lookedUp.FamilyId, ct);
             return new RefreshResult(RefreshOutcome.ReuseDetected, null, null, null);
         }
 
-        if (stored.ExpiresAt <= DateTime.UtcNow)
-            return new RefreshResult(RefreshOutcome.Invalid, null, null, null);
-
-        var user = await db.Users.FirstOrDefaultAsync(u => u.Id == stored.UserId, ct);
-        if (user is null)
-            return new RefreshResult(RefreshOutcome.Invalid, null, null, null);
-
-        stored.RevokedAt = DateTime.UtcNow; // this exact token is now single-used
-        var newRaw = await IssueAsync(user.Id, stored.FamilyId, ct); // same family = rotation, not a fresh chain
-        var accessToken = tokens.CreateAccessToken(user);
-        await db.SaveChangesAsync(ct);
-        return new RefreshResult(RefreshOutcome.Ok, accessToken, newRaw, user);
+        return new RefreshResult(RefreshOutcome.Invalid, null, null, null);
     }
 
     /// <summary>Revokes every still-active token in a family — used by reuse detection and by logout.</summary>

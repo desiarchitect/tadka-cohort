@@ -39,13 +39,22 @@ token.
   right under concurrent requests (no risk of a partially-walked chain) at the cost of losing the
   literal "who replaced whom" audit trail a linked list would give for free — we don't need that
   trail today; `CreatedAt`/`RevokedAt` timestamps are enough to reconstruct the sequence if needed.
-- **`POST /api/v1/auth/refresh`**: looks the presented token up by hash.
-  - Not found / expired → generic `401`.
-  - **Already revoked → reuse detected.** The entire family is revoked immediately
-    (`RevokeFamilyAsync`), and the response is still a generic `401` — identical to "not found," so
-    a caller can never tell which case fired (ADR-047's same honesty-about-leakage stance).
-  - Valid → the presented token is revoked (single-use), a NEW token in the SAME family is issued,
-    a new access token is minted, both returned. This is the rotation.
+- **`POST /api/v1/auth/refresh`**: claims the presented token with a single atomic
+  `UPDATE ... SET RevokedAt = now() WHERE TokenHash = @hash AND RevokedAt IS NULL AND ExpiresAt > now()`
+  (`ExecuteUpdateAsync`), not a read-then-write. **This matters under concurrency:** an earlier
+  version of this code did `SELECT`, check `RevokedAt` in C#, then write it back much later via
+  `SaveChangesAsync` — two simultaneous requests presenting the SAME token could both read
+  `RevokedAt == null`, both pass the check, and both rotate, silently skipping reuse detection
+  entirely (the exact "two tabs" scenario below, except undetected instead of a false positive).
+  The atomic claim means only ONE concurrent caller can ever win the row.
+  - Claim succeeds (1 row) → the presented token is revoked (single-use), a NEW token in the SAME
+    family is issued, a new access token is minted, both returned. This is the rotation.
+  - Claim affects 0 rows → **not automatically reuse.** Look the token up again (no filter this
+    time): not found, or found-but-expired → generic `401`, family untouched — it's just an invalid
+    token, not theft. Found AND not expired AND already revoked → **reuse detected.** The entire
+    family is revoked immediately (`RevokeFamilyAsync`), and the response is still a generic `401`,
+    identical to "not found," so a caller can never tell which case fired (ADR-047's same
+    honesty-about-leakage stance).
 - **`POST /api/v1/auth/logout`** (`[Authorize]`): revokes the caller's own refresh-token family
   (verified by matching `UserId` — one user cannot silently kill another's session by guessing/
   submitting their token). **Named limitation, not oversold:** the ACCESS token already handed out
