@@ -11,10 +11,11 @@ namespace Tadka.Api.Controllers;
 [ApiController]
 [Route("api/v1/orders")]
 [Authorize] // the live-tracking SSE stream requires a valid JWT (ADR-030)
-public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository orders) : ControllerBase
+public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository orders, SseStreamLimiter limiter) : ControllerBase
 {
     private readonly IOrderTrackingBus _bus = bus;
     private readonly IOrderRepository _orders = orders;
+    private readonly SseStreamLimiter _limiter = limiter;
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
     /// <summary>
@@ -47,50 +48,70 @@ public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository ord
             return new EmptyResult();
         }
 
-        Response.ContentType = "text/event-stream";
-        Response.Headers.CacheControl = "no-cache";
-
-        // Subscribe FIRST, so any event published between "read the replay buffer" and "start
-        // draining the live queue" is captured (in the queue) rather than silently missed.
-        var queue = Channel.CreateUnbounded<SequencedTrackingEvent>();
-        await using var subscription = await _bus.SubscribeAsync(
-            id, e => { queue.Writer.TryWrite(e); return Task.CompletedTask; }, ct);
-
-        var lastEventId = Request.Headers["Last-Event-ID"].FirstOrDefault();
-        var replayedThrough = 0L;
-
-        if (long.TryParse(lastEventId, out var sinceSeq))
+        // Per-user concurrent-stream cap (ADR-064, fix 5): the SSE path is exempt from the gateway's
+        // Front Door origin lock, so without this a single logged-in user could hold unlimited
+        // streams open. The slot is acquired BEFORE any streaming starts and released in a finally
+        // below so a client that drops mid-stream (OperationCanceledException or otherwise) never
+        // permanently burns a slot.
+        var userId = User.UserId() ?? Guid.Empty;
+        if (!_limiter.TryAcquire(userId, out var lease))
         {
-            var missed = await _bus.GetEventsSinceAsync(id, sinceSeq, ct);
-            foreach (var sequenced in missed)
-            {
-                await WriteEventAsync(sequenced, ct);
-                replayedThrough = sequenced.Seq;
-            }
-        }
-        else
-        {
-            // No reconnect in progress — send the current status immediately so a fresh
-            // subscriber isn't blank while waiting for the next transition (seq 0: not
-            // replayable, always resent on a fresh connect). `order` was already loaded above
-            // for the ownership check, and is guaranteed non-null (404 returned otherwise).
-            await WriteEventAsync(new SequencedTrackingEvent(0,
-                new OrderTrackingEvent(id, order.Status.ToString(), $"Current status: {order.Status}.", DateTime.UtcNow)), ct);
+            Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            await Response.WriteAsync("Too many concurrent live-tracking streams for this user.", ct);
+            return new EmptyResult();
         }
 
         try
         {
-            await foreach (var sequenced in queue.Reader.ReadAllAsync(ct))
+            Response.ContentType = "text/event-stream";
+            Response.Headers.CacheControl = "no-cache";
+
+            // Subscribe FIRST, so any event published between "read the replay buffer" and "start
+            // draining the live queue" is captured (in the queue) rather than silently missed.
+            var queue = Channel.CreateUnbounded<SequencedTrackingEvent>();
+            await using var subscription = await _bus.SubscribeAsync(
+                id, e => { queue.Writer.TryWrite(e); return Task.CompletedTask; }, ct);
+
+            var lastEventId = Request.Headers["Last-Event-ID"].FirstOrDefault();
+            var replayedThrough = 0L;
+
+            if (long.TryParse(lastEventId, out var sinceSeq))
             {
-                // The live subscription started before the replay read, so an event already
-                // delivered by replay can also arrive here — skip anything not newer.
-                if (sequenced.Seq <= replayedThrough) continue;
-                await WriteEventAsync(sequenced, ct);
+                var missed = await _bus.GetEventsSinceAsync(id, sinceSeq, ct);
+                foreach (var sequenced in missed)
+                {
+                    await WriteEventAsync(sequenced, ct);
+                    replayedThrough = sequenced.Seq;
+                }
+            }
+            else
+            {
+                // No reconnect in progress — send the current status immediately so a fresh
+                // subscriber isn't blank while waiting for the next transition (seq 0: not
+                // replayable, always resent on a fresh connect). `order` was already loaded above
+                // for the ownership check, and is guaranteed non-null (404 returned otherwise).
+                await WriteEventAsync(new SequencedTrackingEvent(0,
+                    new OrderTrackingEvent(id, order.Status.ToString(), $"Current status: {order.Status}.", DateTime.UtcNow)), ct);
+            }
+
+            try
+            {
+                await foreach (var sequenced in queue.Reader.ReadAllAsync(ct))
+                {
+                    // The live subscription started before the replay read, so an event already
+                    // delivered by replay can also arrive here — skip anything not newer.
+                    if (sequenced.Seq <= replayedThrough) continue;
+                    await WriteEventAsync(sequenced, ct);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Client disconnected — normal end of an SSE stream.
             }
         }
-        catch (OperationCanceledException)
+        finally
         {
-            // Client disconnected — normal end of an SSE stream.
+            lease?.Dispose(); // always releases the per-user slot, even on a dropped/cancelled client
         }
 
         return new EmptyResult(); // response body was streamed directly above

@@ -147,6 +147,10 @@ else
     builder.Services.AddSingleton<Tadka.Api.Infrastructure.Realtime.IOrderTrackingBus, Tadka.Api.Infrastructure.Realtime.NullOrderTrackingBus>();
 }
 
+// ADR-064: per-user concurrent-SSE-stream cap (fix 5) - the SSE path skips the gateway's Front Door
+// origin lock, so this plus the resource-ownership check (fix 1) are its abuse protection.
+builder.Services.AddSingleton(new Tadka.Api.Infrastructure.Realtime.SseStreamLimiter(maxPerUser: 3));
+
 // â”€â”€ Payment over KAFKA, durable (ADR-027/028/029) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Day 9: the Day-8 synchronous HTTP bridge is replaced by an async event backbone. Order creation writes
 // an `order-placed` row to the transactional Outbox (in the order's transaction); the OutboxRelay

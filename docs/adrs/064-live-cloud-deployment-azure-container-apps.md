@@ -78,6 +78,17 @@ costs: the realtime path has no WAF rate limit in front of it. The JWT still gua
 gateway's own limiter is the only brake, which is why the gateway's limiter matters again (see "Per-IP rate
 limiting" under Risks).
 
+**Per-user stream cap (fix 5).** The gap above was real: one authenticated user could hold an unbounded
+number of concurrent SSE streams against the gateway's public URL, since neither Front Door's WAF nor the
+origin lock ever see that traffic. `OrderTrackingController` now caps concurrent streams per user (`sub`
+claim) at 3, counted in-memory per replica via `SseStreamLimiter`, acquired before streaming starts and
+released in a `finally` so a dropped client never leaks a slot; over the cap gets `429`, not a stream. This
+is deliberately cheap (no Redis, no cross-replica coordination): a determined attacker with N Container
+Apps replicas gets `3 x N` streams, not 3, an accepted trade-off at this scale, not a hard limit. Combined
+with the resource-ownership check (fix 1, `order.CustomerId == User.UserId()` or Admin), this pair is the
+realtime path's actual protection now that it skips Front Door: ownership stops a user from reading someone
+else's order, and the cap stops one user from holding the gateway open indefinitely.
+
 **Origin lockdown (Standard tier).** Without it, anyone who finds the `*.azurecontainerapps.io` URL can skip
 the WAF and the CDN. Front Door adds an `X-Azure-FDID` header with the profile's id to every request it sends
 to the origin. Terraform passes `azurerm_cdn_frontdoor_profile.fd.resource_guid` to the gateway as
