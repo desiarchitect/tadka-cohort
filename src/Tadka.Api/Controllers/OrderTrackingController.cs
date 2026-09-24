@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Tadka.Api.Auth;
 using Tadka.Api.Data.Repositories;
 using Tadka.Api.Infrastructure.Realtime;
 
@@ -28,13 +29,22 @@ public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository ord
     /// not a bigger buffer.
     /// </summary>
     [HttpGet("{id:guid}/events")]
-    public async Task GetEvents(Guid id, CancellationToken ct)
+    public async Task<IActionResult> GetEvents(Guid id, CancellationToken ct)
     {
+        // Resource ownership (ADR-031), same rule as OrdersController.GetById: a real-time channel
+        // needs the same BOLA/IDOR check as REST. Before this, any logged-in customer could stream
+        // ANY order id (and on day-11+, the rider's live GPS along with it) just by guessing a guid.
+        var order = await _orders.GetByIdAsync(id);
+        if (order is null)
+            return NotFound();
+        if (!User.IsAdmin() && order.CustomerId != User.UserId())
+            return Forbid();
+
         if (!_bus.IsEnabled)
         {
             Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             await Response.WriteAsync("Live tracking requires Redis (ADR-020).", ct);
-            return;
+            return new EmptyResult();
         }
 
         Response.ContentType = "text/event-stream";
@@ -62,11 +72,10 @@ public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository ord
         {
             // No reconnect in progress — send the current status immediately so a fresh
             // subscriber isn't blank while waiting for the next transition (seq 0: not
-            // replayable, always resent on a fresh connect).
-            var order = await _orders.GetByIdAsync(id);
-            if (order is not null)
-                await WriteEventAsync(new SequencedTrackingEvent(0,
-                    new OrderTrackingEvent(id, order.Status.ToString(), $"Current status: {order.Status}.", DateTime.UtcNow)), ct);
+            // replayable, always resent on a fresh connect). `order` was already loaded above
+            // for the ownership check, and is guaranteed non-null (404 returned otherwise).
+            await WriteEventAsync(new SequencedTrackingEvent(0,
+                new OrderTrackingEvent(id, order.Status.ToString(), $"Current status: {order.Status}.", DateTime.UtcNow)), ct);
         }
 
         try
@@ -83,6 +92,8 @@ public class OrderTrackingController(IOrderTrackingBus bus, IOrderRepository ord
         {
             // Client disconnected — normal end of an SSE stream.
         }
+
+        return new EmptyResult(); // response body was streamed directly above
     }
 
     private async Task WriteEventAsync(SequencedTrackingEvent sequenced, CancellationToken ct)
