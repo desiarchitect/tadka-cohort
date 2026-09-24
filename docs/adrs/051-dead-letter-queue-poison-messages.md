@@ -67,6 +67,14 @@ the DLQ, which is the correct, safe outcome).
 - A burst of poison messages (a bad deploy affecting every message, not one) would DLQ everything
   quickly — correct behaviour, but worth being ready for: the DLQ growing fast is itself the
   incident signal, and today nothing pages on it.
+- **A short, transient Postgres outage looks identical to a genuinely poison message.** 3 attempts
+  at a fixed 300ms gap is ~1 second total — a Postgres restart, a brief connection-pool exhaustion,
+  or a short network blip inside `ChargeAsync` routinely outlasts that window. Real, healthy orders
+  DLQ alongside truly malformed ones, with no distinction in the DLQ payload. Revisit: exponential
+  backoff (so a multi-second outage gets a real chance to recover before quarantine), or classify
+  the exception — don't count infra/transient errors (`DbUpdateException` from a dropped
+  connection, `TimeoutException`) toward the poison-attempt counter the same way a permanent
+  deserialization/business failure counts.
 
 ## Alternatives Considered
 
