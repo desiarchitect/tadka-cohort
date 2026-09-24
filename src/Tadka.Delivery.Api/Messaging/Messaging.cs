@@ -41,7 +41,14 @@ public sealed class KafkaProducer : IDisposable
 
     public KafkaProducer(IOptions<KafkaOptions> options)
         => _producer = new ProducerBuilder<string, string>(
-            new ProducerConfig { BootstrapServers = options.Value.BootstrapServers, Acks = Acks.All }).Build();
+            // ADR-028: bound outbox lock duration (see ADR-028 for the full trade-off).
+            new ProducerConfig
+            {
+                BootstrapServers = options.Value.BootstrapServers,
+                Acks = Acks.All,
+                MessageTimeoutMs = 10_000,
+                RequestTimeoutMs = 10_000
+            }).Build();
 
     public Task PublishAsync(string topic, string key, object payload, CancellationToken ct = default)
     {
