@@ -198,6 +198,13 @@ docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \`"OrderI
 
 Zero rows means `GROUP BY OrderId` never found a duplicate, across every order placed so far. This is the same query you would run against production traffic, and it does not require you to stage a redelivery yourself.
 
+Where to see this in code:
+
+- `src/Tadka.Payment.Api/Data/InboxMessage.cs`: the Inbox row itself, one row per processed message id.
+- `src/Tadka.Payment.Api/Messaging/OrderPlacedConsumer.cs`, the `HandleAsync` method: the check-then-work-then-stamp order in practice. It checks the Inbox first, then charges, then publishes the result, then stamps the Inbox, and the loop only commits the Kafka offset after all of that succeeds.
+- `src/Tadka.Payment.Api/Data/PaymentDbContext.cs`, line 38: `builder.HasIndex(p => p.OrderId).IsUnique();`, the database-level guard underneath the Inbox check.
+- `src/Tadka.Api/Infrastructure/Messaging/PaymentResultsConsumer.cs`: the same check-then-work-then-stamp pattern on the monolith's side, for the `payment-results` topic.
+
 A deterministic version of this proof lives in `Tadka.Payment.Api.Tests`: charging the same order twice produces one payment row with the same reference.
 
 ## 5. A declined payment cancels the order
