@@ -37,6 +37,8 @@ foreach ($t in "order-placed","payment-results","order-placed.dlq") {
   docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
 }
 ```
+**Open Kafka UI now and confirm the three topics are actually there** — a quick visual check that the pre-create step above worked, before you go any further. Open <http://localhost:8090> in a browser, click the **`tadka`** cluster on the Dashboard, then **Topics** in the left nav. You should see `order-placed`, `order-placed.dlq`, and `payment-results` listed (plus Kafka's own internal `__consumer_offsets`), each showing **0** messages — that's correct for a fresh stack, not a problem. Click any topic name to open it; its own tab bar (**Overview / Messages / Consumers / Settings / Statistics / ACLs**) is where you'll come back to later in this runbook — **Messages** to read what was actually published, **Consumers** to see that specific topic's consumer groups.
+
 Now start the two apps in two terminals, in either order — each one connects to Kafka independently, there's no startup-ordering dependency between them (identical command, either shell):
 ```bash
 dotnet run --project src/Tadka.Payment.Api    # :5240 — Kafka consumer of order-placed
@@ -44,7 +46,7 @@ dotnet run --project src/Tadka.Api            # :5224 — Outbox relay + payment
 ```
 **Give each app 15-20 seconds after its own "Application started" log line before you trust it.** First-run JIT, the EF migration check, and joining its Kafka consumer group all take real wall-clock time — a few seconds, not milliseconds — and this runbook's `sleep`/`Start-Sleep` values later on all assume both apps are already fully up and idle, not mid-startup. This matters most every time you **restart** either app later in this runbook (§3, §5, §8) — give the same 15-20 seconds after each restart before checking status, not just at the very start of the day.
 
-Kafka UI is a read-only window into the broker — open it and leave it open in a browser tab for the rest of this runbook, it's the fastest way to see lag and message flow without typing CLI commands each time: <http://localhost:8090> (watch topics `order-placed` / `payment-results` and consumer-group **lag**).
+**Once both apps are up, go back to Kafka UI and click the top-level `Consumers` tab** (left nav, not a topic's own Consumers sub-tab) — <http://localhost:8090/ui/clusters/tadka/consumer-groups>. You'll see two rows, `tadka-monolith` and `tadka-payment` (one consumer group per app), each with a live **`Consumer Lag`** column and a **State** (`STABLE` once settled, verified live). This is the GUI version of every `kafka-consumer-groups.sh --describe --group ...` command later in this runbook — leave this tab open, it updates without a refresh, and it's the fastest way to watch lag change during the catch-up demo (§3) without retyping a CLI command each time.
 
 The same order-placement body from Day 7/8, reused everywhere below so every beat is comparing apples to apples:
 ```bash
