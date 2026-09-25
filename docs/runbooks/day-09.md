@@ -6,17 +6,29 @@
 
 ## 1. Run it (infra + BOTH apps)
 
-Bring up the full stack — Day 8's four containers plus Kafka and its UI:
+**Fresh start — wipe everything and recreate from scratch.** Run this once at the start of the day, or any time you want a guaranteed-clean slate (old orders, old topics, old consumer-group offsets — all gone, not just stopped):
 ```bash
 git checkout day-09
+docker compose down -v        # stops + removes all 6 containers AND their volumes (Postgres data, Kafka log) — a real wipe, not just a stop
 docker compose up -d          # postgres 5432 + replica 5433 + redis 6379 + payment-db 5434 + KAFKA 9092 + kafka-ui 8090
-docker compose ps             # wait for tadka-kafka = healthy
 ```
-Kafka's own startup (broker init, topic auto-creation) is slower than Postgres or Redis coming up — don't start either app until `tadka-kafka` itself reports `healthy` in `docker compose ps`, or the first consumer connection attempt will fail before the broker is listening. Start the two apps in two terminals, in either order — each one connects to Kafka independently, there's no startup-ordering dependency between them:
+Wait for Kafka specifically, not just "containers running" — its own startup (broker init) is slower than Postgres or Redis, and a plain `docker compose ps` doesn't block on it:
+```bash
+until docker inspect tadka-kafka --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+```
+**Pre-create the three Kafka topics before starting either app.** Skip this and you will hit a real, first-run-only trap verified live on this exact branch: a freshly wiped broker has no topics yet, and each app's consumer subscribes to its topic the instant it starts. If it starts before the *other* app has ever published anything, you'll see `Confluent.Kafka.ConsumeException: Subscribed topic not available: <topic>: Broker: Unknown topic or partition` logged roughly once a second. It's harmless — the consumer loop catches it, retries, and picks the topic up the moment it exists — but it looks like a crash on a first run, and it isn't one. Pre-creating the topics avoids the noise entirely instead of just tolerating it:
+```bash
+for t in order-placed payment-results order-placed.dlq; do
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+done
+```
+Now start the two apps in two terminals, in either order — each one connects to Kafka independently, there's no startup-ordering dependency between them:
 ```bash
 dotnet run --project src/Tadka.Payment.Api    # :5240 — Kafka consumer of order-placed
 dotnet run --project src/Tadka.Api            # :5224 — Outbox relay + payment-results consumer
 ```
+**Give each app 15-20 seconds after its own "Application started" log line before you trust it.** First-run JIT, the EF migration check, and joining its Kafka consumer group all take real wall-clock time — a few seconds, not milliseconds — and this runbook's `sleep` values later on all assume both apps are already fully up and idle, not mid-startup. This matters most every time you **restart** either app later in this runbook (§3, §5, §8) — give the same 15-20 seconds after each restart before checking status, not just at the very start of the day.
+
 Kafka UI is a read-only window into the broker — open it and leave it open in a browser tab for the rest of this runbook, it's the fastest way to see lag and message flow without typing CLI commands each time: <http://localhost:8090> (watch topics `order-placed` / `payment-results` and consumer-group **lag**).
 
 The same order-placement body from Day 7/8, reused everywhere below so every beat is comparing apples to apples:
@@ -36,7 +48,7 @@ sleep 2
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Confirmed
 curl -s http://localhost:5240/payments/$ORDER                                                        # {"status":"Completed",...}
 ```
-The `sleep 2` exists because this is now an **asynchronous, multi-hop** flow — the order row commits, the outbox relay has to notice and publish it, Payment has to consume and charge, and the monolith has to consume the result — each hop adds a small, real delay that a synchronous call (Day 7/8) didn't have. A short e2e settle-time capture for this exact flow is **TO BE CAPTURED on next live run** — Docker is down on this machine, so we can't measure it fresh here; expect low hundreds of milliseconds based on Day 8's HTTP-bridge numbers plus one extra broker round-trip, not a number to quote as fact until it's actually measured.
+The `sleep 2` exists because this is now an **asynchronous, multi-hop** flow — the order row commits, the outbox relay has to notice and publish it, Payment has to consume and charge, and the monolith has to consume the result — each hop adds a small, real delay that a synchronous call (Day 7/8) didn't have. Captured live on this branch, steady-state (not the very first order after a fresh start, which pays extra JIT/first-query warmup): `POST /orders` itself returns in **~150-180 ms**, and the order settles to `Confirmed` roughly **600 ms to 1.1 s after that** — so `sleep 2` is a comfortable margin, not a tight one, and you'll usually see `Confirmed` well before it.
 
 Flow: `POST /orders` (ms) → outbox row (same txn as the order) → OutboxRelay → Kafka `order-placed` → Payment charges → Kafka `payment-results` → monolith confirms. See it in the order DB — the `Topic` column tells you which outbox row this is, and `ProcessedAt IS NOT NULL` (aliased `sent`) tells you whether the relay has actually pushed it to Kafka yet, as opposed to it still sitting unclaimed in the table:
 ```bash
@@ -69,12 +81,12 @@ FIX — restart the Payment service. It reconnects to Kafka, rejoins the `tadka-
 ```bash
 dotnet run --project src/Tadka.Payment.Api
 ```
-Give it a moment to consume the waiting message, charge, publish `payment-results`, and let the monolith consume that in turn — then check both the order status and the lag again:
+Give it real time to actually come back up before you check anything — a restart isn't instant. Consumer-group **rebalance** alone (the group going from "one member" to "zero" to "one member again") takes several seconds on top of the app's own JIT/EF-migration-check startup, and checking too early just shows you a stale in-progress state, not a wrong one. **Wait ~15-20 seconds after the "Application started" log line**, then check both the order status and the lag:
 ```bash
-sleep 4
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Confirmed — caught up
 docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-payment   # LAG 0
 ```
+If you see `order: Created` still, or the describe output says `Warning: Consumer group 'tadka-payment' is rebalancing`, that's not a failure — wait another 5-10 seconds and check again, this was verified live and settled well within 20 seconds total every time.
 > Captured: pending + **LAG 1** while down → restart → **Confirmed**, **LAG 0**. On **Day 8** the same outage **lost** the charge and stranded the order forever. That's the whole point of Kafka + Outbox.
 
 **Outcome interpretation — why this matters more than it looks:** `LAG 1 → LAG 0` and `Created → Confirmed` are two views of the same fact, but the lag number is the one that scales — with one order it's a curiosity, with a thousand orders queued during an outage it's the metric that tells you whether the system is recovering or falling further behind. Compare this directly to Day 8 §4 (`docs/runbooks/day-08.md`): there, a Payment outage left the order **permanently** `Created` with no mechanism to ever recover it short of a manual fix. Here, the exact same outage self-heals the moment the consumer comes back — nothing about the order-placement code changed, only the transport between the two services.
@@ -98,23 +110,30 @@ Zero rows is the proof — it means across every order this session, `GROUP BY O
 
 **The story (say this before any command):** the happy path (§2) and the catch-up path (§3) both end in `Confirmed`. But payments fail for real reasons — a declined card, an expired one — and there's no shared database transaction spanning Order and Payment any more to roll back automatically. The Saga pattern (choreography, ADR-029) is what stands in for that rollback: Payment publishes `Failed`, and the monolith reacts to that event with its own **compensating action** — cancelling the order.
 
-Restart the Payment service with the fake gateway set to decline every charge:
+Restart the Payment service with the fake gateway set to decline every charge. Wait the same ~15-20 seconds as always after a restart before doing anything else — the consumer group has to rejoin, same as §3:
 ```powershell
 $env:Payment__Gateway__Behavior="Failing"; dotnet run --project src/Tadka.Payment.Api
 ```
 Place an order against the now-declining gateway the same way as every other beat:
 ```bash
 ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
-sleep 3
+sleep 10
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Cancelled (compensating action via payment-results=Failed)
 ```
+If it still shows `Created`, wait a few more seconds and check again — same settling behaviour as every other beat that reacts to Payment's output, not a different failure.
+
 **Outcome interpretation:** `Cancelled` here is not an error state, it's a **correct, expected outcome** of the saga — the same `PaymentFailed → order.Cancel()` reaction that existed since Day 7/8, just driven by a Kafka event instead of an in-process call or a synchronous HTTP response. Compare the three days: Day 7 cancelled the order in-process (§6 of that runbook); Day 8 cancelled it via a synchronous HTTP response; Day 9 cancels it via an asynchronous event the monolith consumes independently — the *business rule* ("a decline cancels the order") hasn't moved once across three architectural rewrites, only the mechanism carrying the news of the decline has.
+
+**Reset the gateway back to normal before moving on.** Every beat from here on (§6-§8) assumes a healthy gateway that confirms orders — skip this and later orders keep coming back `Cancelled`, which looks like a new bug when it's really just this switch left on. Stop Payment (Ctrl+C) and restart it plain, no `Behavior` env var, same ~15-20 second wait as always:
+```bash
+dotnet run --project src/Tadka.Payment.Api
+```
 
 ## 6. The boundary still holds (ADR-024/027) + tests
 
-The Payment extraction from Day 8 didn't just survive the Kafka rewrite, it's what made the rewrite a drop-in replacement instead of a redesign — Ordering never had a compile-time reference to Payment to begin with, so swapping the transport underneath didn't touch Ordering's code shape at all. Confirm the grep is still clean:
+The Payment extraction from Day 8 didn't just survive the Kafka rewrite, it's what made the rewrite a drop-in replacement instead of a redesign — Ordering never had a compile-time reference to Payment to begin with, so swapping the transport underneath didn't touch Ordering's code shape at all. Confirm the grep is still clean — **exclude `Migrations/` and comment lines**, or you'll see false-hit noise from frozen pre-extraction EF migration snapshots and an explanatory code comment, neither of which is a real compile-time dependency:
 ```bash
-grep -rn "FakePaymentGateway\|PaymentDbContext\|Domain.Payments\|IPaymentClient" src/Tadka.Api    # nothing — Ordering talks to Payment ONLY via Kafka events
+grep -rn "FakePaymentGateway\|PaymentDbContext\|Domain.Payments\|IPaymentClient" src/Tadka.Api --exclude-dir=Migrations | grep -v '^\S*:\s*//'    # nothing — Ordering talks to Payment ONLY via Kafka events
 ```
 No hits means Ordering has zero compile-time knowledge of Payment's gateway, database, or even the `IPaymentClient` interface Day 8 introduced for the HTTP bridge — that interface is gone entirely, replaced by "publish an event and react to another one." Run the full suite to confirm none of this broke anything the earlier days already covered:
 ```bash
@@ -128,9 +147,9 @@ The count grew from Day 8's 25/25 to 34/34: the architecture/boundary tests now 
 
 **The story (say this before any command):** at-least-once delivery and idempotency (§3, §4) solve "the consumer was down" and "the same message arrived twice." Neither solves a third failure mode: a message that the consumer picks up but **cannot process at all** — malformed JSON, a business exception on every attempt. Naively, `Consumer.Consume()` advances the fetch position on every call **regardless of whether you committed** — so a plain manual-commit loop that logs-and-continues on failure doesn't retry that message, it silently, permanently skips it the instant a *later* message's offset commits. This was verified live against this exact codebase, not assumed: a poison message failed once, a healthy order placed right after committed an offset past both messages, and the group's lag went straight back to `0` — with the poisoned order sitting at `Created` forever and nothing anywhere logging that it had been abandoned.
 
-BREAK — inject a malformed message directly onto the `order-placed` topic:
-```bash
-pwsh scripts/inject-poison.ps1 -Mode Malformed             # syntactically invalid JSON
+BREAK — inject a malformed message directly onto the `order-placed` topic. Run this in **PowerShell**, not the bash shell you've been using for the `curl`/`docker exec` commands above — it's a `.ps1` script, and it runs fine on plain Windows PowerShell 5.1 (`pwsh`/PowerShell 7 is not required, and isn't installed on every machine):
+```powershell
+.\scripts\inject-poison.ps1 -Mode Malformed             # syntactically invalid JSON
 ```
 Watch the lag while the consumer is retrying it — a small helper function to save retyping the describe command:
 ```bash
@@ -148,17 +167,17 @@ Payment's own log is the other half of the proof — it should show `will retry`
 # place a normal order here using the same $BODY as every other beat, then confirm it converges to Confirmed as usual
 ```
 
-**Additive-only vs a breaking rename (ADR-050) — different failure shapes, both worth seeing:** a DLQ only catches messages that **throw**. A message that deserializes fine but silently drops a renamed field is a different, sharper failure — it throws nothing and DLQs nothing.
-```bash
-pwsh scripts/inject-poison.ps1 -Mode SafeExtraField          # an EXTRA unknown field — processes fine, no code change needed
-pwsh scripts/inject-poison.ps1 -Mode MissingRequiredField    # Currency renamed to CurrencyCode — ALSO processes fine, NO error, NO DLQ entry
+**Additive-only vs a breaking rename (ADR-050) — different failure shapes, both worth seeing:** a DLQ only catches messages that **throw**. A message that deserializes fine but silently drops a renamed field is a different, sharper failure — it throws nothing and DLQs nothing. (PowerShell again.)
+```powershell
+.\scripts\inject-poison.ps1 -Mode SafeExtraField          # an EXTRA unknown field — processes fine, no code change needed
+.\scripts\inject-poison.ps1 -Mode MissingRequiredField    # Currency renamed to CurrencyCode — ALSO processes fine, NO error, NO DLQ entry
 docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"OrderId\", currency FROM payment.payments ORDER BY \"CreatedAt\" DESC LIMIT 1;"   # currency = INR (a DB column default silently filled the gap)
 ```
 **Outcome interpretation:** `SafeExtraField` processing cleanly is expected and fine — `System.Text.Json`'s default behaviour ignores unmapped properties, and that's the correct, desired forward-compatibility behaviour for an additive change. `MissingRequiredField` processing *just as cleanly* is the actual lesson: the missing constructor parameter bound to `null`, and a Postgres column default (`HasDefaultValue("INR")`) silently filled it in on `INSERT` — the payment "succeeded" with a currency nobody actually specified, and nothing (not the consumer, not the database, not a log line) ever surfaced that anything was wrong. Schema discipline — never rename or remove a field on a shared event, only ever add — is a **code-review-time rule**; no runtime mechanism shown in this runbook, DLQ included, can catch a rename for you.
 
-Once the root cause is fixed, replay the DLQ — every quarantined message gets republished to `order-placed` and reprocessed from scratch:
-```bash
-pwsh scripts/replay-dlq.ps1
+Once the root cause is fixed, replay the DLQ — every quarantined message gets republished to `order-placed` and reprocessed from scratch (PowerShell):
+```powershell
+.\scripts\replay-dlq.ps1
 ```
 A message that's still genuinely broken simply fails its 3 attempts again and lands back on the DLQ — which is the correct, safe outcome, not a bug in the replay script.
 
@@ -166,16 +185,18 @@ A message that's still genuinely broken simply fails its 3 attempts again and la
 
 **The story (say this before any command):** §4 proved the Inbox stops a *single* redelivered message from double-charging. This beat is the stress-test version of that same claim — replay the **entire topic from offset 0**, every message ever published, and confirm the payments table doesn't grow by a single row.
 
-Stop the Payment service, wait roughly ten seconds for its consumer group to go inactive (a still-active group refuses an offset reset), then reset the group's offset back to the very beginning of the topic:
+Stop the Payment service, then reset the group's offset back to the very beginning of the topic — but a still-active consumer-group registration refuses an offset reset, and it takes **longer than you'd guess** to go inactive. This is the client library's session timeout, not the broker being slow: `Confluent.Kafka`'s default `session.timeout.ms` is 45 seconds, and verified live on this exact branch, the reset command failed on retries at 10s and at 22s elapsed before finally succeeding around a 60-70 second total wait. Don't fight it — poll instead of guessing a fixed sleep:
 ```bash
-# stop the Payment service, wait ~10s for the consumer group to go inactive, then:
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute
+# stop the Payment service first, then:
+until docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute; do
+  echo "group still active, retrying in 5s..."; sleep 5
+done
 ```
 Note the payment count **before** restarting, so you have something to compare against once the full replay finishes:
 ```bash
 docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT count(*) FROM payment.payments;"   # note this BEFORE restarting
 ```
-Restart the Payment service — with its offset reset to earliest, it will re-consume **every** `order-placed` message that has ever been published to the topic, from the very first order of the day:
+Restart the Payment service — with its offset reset to earliest, it will re-consume **every** `order-placed` message that has ever been published to the topic, from the very first order of the day. Give it the usual ~15-20 seconds to fully come up and finish reprocessing before checking anything:
 ```bash
 dotnet run --project src/Tadka.Payment.Api    # reprocesses every message from offset 0
 ```
@@ -213,11 +234,14 @@ docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"OrderId
 
 ## Troubleshooting
 - **`tadka-kafka` name conflict / stuck "starting":** `docker rm -f tadka-kafka tadka-kafka-ui` then `docker compose up -d kafka kafka-ui`.
-- **Order never Confirmed:** is the Payment service up and is `tadka-kafka` healthy? Check the monolith log for `OutboxRelay published` and the Payment log for `OrderPlacedConsumer subscribed`. Confirm `Kafka:BootstrapServers=localhost:9092` in both apps' `appsettings.Development.json`.
-- **Lag not dropping after a restart:** confirm the Payment service actually rejoined the `tadka-payment` consumer group (`kafka-consumer-groups.sh --describe`) — a stale process still bound to `:5240` will silently prevent the new one from starting and you'll be watching the old, still-crashed instance.
+- **`ConsumeException: Subscribed topic not available` spamming the log on first startup:** expected and harmless on a fresh broker if you skipped the topic pre-create step in §1 — it self-heals the moment the topic is created by its first producer. Not a crash; the consumer loop keeps polling. Pre-create the topics next time to avoid the noise.
+- **Order never Confirmed:** is the Payment service up and is `tadka-kafka` healthy? Check the monolith log for `OutboxRelay published` and the Payment log for `OrderPlacedConsumer subscribed`. Confirm `Kafka:BootstrapServers=localhost:9092` in both apps' `appsettings.Development.json`. If you *just* started or restarted either app, also just wait — see the next item.
+- **Order/lag looks stuck right after starting or restarting an app:** this is very often just impatience, not a bug — verified live, a restart needs a genuine 15-20 seconds (JIT + EF migration check + Kafka consumer-group rejoin) before its output means anything. `kafka-consumer-groups.sh --describe` printing `Warning: Consumer group '...' is rebalancing` is your confirmation it's still settling, not broken.
+- **`inject-poison.ps1` (or any `.ps1` script here) says "command not found" or "pwsh not recognized":** run it as `.\scripts\inject-poison.ps1 ...` in plain Windows PowerShell — none of this repo's scripts need PowerShell 7/`pwsh`, which may not be installed on your machine at all.
 - **`inject-poison.ps1` seems to do nothing:** it publishes directly to the raw topic bypassing the API, so nothing shows up via `POST /orders` — watch the Payment service log and the DLQ topic directly, not the orders endpoint.
-- **`--reset-offsets` fails with "group is still active":** the consumer group registration lingers for a few seconds after you Ctrl+C the process — the `~10s` wait in §8 isn't cosmetic, retry the reset command if it refuses.
+- **The §6 boundary `grep` shows hits and you were told to expect none:** make sure your command excludes `Migrations/` and comment-only lines (see §6) — old EF migration snapshots from before Payment was extracted still mention `Domain.Payments.Payment`, and one source comment mentions `PaymentDbContext` by name; neither is a real compile-time dependency, and the plain grep without those exclusions will always show a false positive.
+- **`--reset-offsets` fails with "group is still active":** this is normal, not a sign anything's wrong — the consumer group registration takes a genuinely long time to expire after you stop the process (`Confluent.Kafka`'s default `session.timeout.ms` is 45 seconds; a live run on this branch needed ~60-70s total before the reset succeeded). Use the polling loop in §8 rather than a single fixed `sleep`.
 - **Outbox row stuck `sent=false` for longer than a few seconds:** check the monolith log for `OutboxRelay` errors — either the relay loop isn't running, or the row's claim lock is being held open by a slow Kafka publish (see the callout in §2); `docker compose ps` to confirm `tadka-kafka` is actually healthy, not just "running."
-- **Reset everything:** `docker compose down -v && docker compose up -d` (Kafka data + DBs wiped), then run both apps.
+- **Reset everything:** the §1 fresh-start block (`docker compose down -v && docker compose up -d`, then re-create the three topics) is exactly this — run it any time you want a guaranteed-clean slate, not just at the start of the day.
 
 ➡️ Next (Day 10): authentication + RBAC across services (JWT validated per-service), the **data-privacy / PII** thread, and extracting the **Delivery** service.
