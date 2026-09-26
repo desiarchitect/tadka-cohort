@@ -59,6 +59,8 @@ curl -s -o /dev/null -w "GET /restaurants (public): %{http_code}\n" http://local
 ### Step 2: Log in and place an order with a valid JWT
 Log in as Priya to receive a signed RS256 token, then submit the order with the bearer token:
 
+> 💡 **Deep Dive Reference:** For full sequence diagrams, RS256/JWKS mechanics, and atomic CAS refresh-token rotation with replay detection, see [`docs/learn/token-and-refresh-flow.md`](../learn/token-and-refresh-flow.md) and [`docs/diagrams/day-10-auth.md`](../diagrams/day-10-auth.md).
+
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" \
   -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
@@ -247,11 +249,16 @@ dotnet test
 ## 8. Wiring Reference & Cross-Stack Architecture
 
 ### Where the code lives in Tadka:
-- **JWT Issuance & Verification:** [`src/Tadka.Api/Auth/TokenService.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/TokenService.cs), [`Jwks.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/Jwks.cs), [`SigningKeyStore.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/SigningKeyStore.cs).
+- **JWT Issuance & Signing:** [`src/Tadka.Api/Auth/TokenService.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/TokenService.cs), [`Jwks.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/Jwks.cs), [`SigningKeyStore.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/SigningKeyStore.cs).
+- **Refresh Token Lifecycle & CAS Rotation:** [`src/Tadka.Api/Auth/RefreshTokenService.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/RefreshTokenService.cs).
 - **Per-Service Validation:** [`src/Tadka.Payment.Api/Auth/JwksClient.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Auth/JwksClient.cs) and `Program.cs` (`AddJwtBearer` with dynamic key resolver).
 - **Ownership Gates:** Inline checks in [`OrdersController.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/OrdersController.cs) and [`RestaurantsController.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/RestaurantsController.cs) (`OwnsOrAdmin`).
 - **PII Masking & RTBF:** [`UsersController.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/UsersController.cs), [`FieldCipher.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Infrastructure/Security/FieldCipher.cs).
 - **Payment Tokenization:** [`CardTokenizer.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Infrastructure/CardTokenizer.cs).
+
+### In-Depth Visual Guides:
+- **Token Generation & Refresh-Token Flow:** [`docs/learn/token-and-refresh-flow.md`](../learn/token-and-refresh-flow.md) — Comprehensive guide covering dual-token design, RS256/JWKS key distribution, atomic CAS rotation, and replay detection sequence diagrams.
+- **Authentication & Authorization Diagrams:** [`docs/diagrams/day-10-auth.md`](../diagrams/day-10-auth.md) — Sequence diagrams and 401 vs 403 decision trees.
 
 ### Cross-Stack Implementation Matrix:
 

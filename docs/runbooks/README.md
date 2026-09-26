@@ -1,6 +1,6 @@
-# Tadka — Student Runbooks (Day 1 → Day 6)
+# Tadka — Student Runbooks (Day 1 → Day 10)
 
-Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself**. One file per day; each reflects that day's branch state (the system grows as you go — Day 3 has no cache/replica yet, Day 5 adds the replica, Day 6 adds Redis). Every architectural move is *earned by a failure you can reproduce* — these runbooks show you how.
+Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself**. One file per day; each reflects that day's branch state (the system grows as you go — Day 3 has no cache/replica yet, Day 5 adds the replica, Day 6 adds Redis, Day 8 extracts Payment, Day 9 adds Kafka, Day 10 adds Auth & PII). Every architectural move is *earned by a failure you can reproduce* — these runbooks show you how.
 
 | Day | What you build & verify | Runbook |
 |----|----|----|
@@ -10,6 +10,10 @@ Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself*
 | 4 | Hardening: idempotency, optimistic concurrency (409), domain events; integration tests | [day-04.md](day-04.md) |
 | 5 | Scaling: indexes (EXPLAIN), connection pool, streaming **read replica** + load test | [day-05.md](day-05.md) |
 | 6 | **Redis** cache-aside + stampede lock + invalidation, and **SSE live tracking** over a Redis backplane | [day-06.md](day-06.md) |
+| 7 | Payment brownout → Polly (timeout + bulkhead), modular monolith + MediatR, async payment | [day-07.md](day-07.md) |
+| 8 | First microservice extraction: **Payment Service** HTTP bridge, Outbox, and decoupled DB | [day-08.md](day-08.md) |
+| 9 | Distributed events with **Apache Kafka**, transactional outbox publisher, idempotent consumer | [day-09.md](day-09.md) |
+| 10 | **Authentication & Security**: RS256/JWKS, RBAC + Ownership, Refresh Rotation, AES-GCM PII & PCI | [day-10.md](day-10.md) |
 
 > Consolidated demo index (issue → fix → trade-off → captured numbers): the instructor pack's `cohort-prep/DEMOS.md`.
 
