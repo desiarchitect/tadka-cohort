@@ -379,6 +379,48 @@ $env:Payment__LogRawCardNumber="true"; dotnet run --project src/Tadka.Payment.Ap
 
 Triggering a charge now prints the raw card number to standard out. This illustrates the catastrophic defect of accidental debug logging in production (which violates PCI-DSS Requirement 3). The default `false` lever prevents card numbers from ever entering log aggregation pipelines.
 
+### How §6 Is Actually Implemented
+
+**Encryption (Phone) — reversible, AES-256-GCM.** The cipher itself, [`FieldCipher.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Infrastructure/Security/FieldCipher.cs):
+```csharp
+public static string Encrypt(string plaintext)
+{
+    var nonce = RandomNumberGenerator.GetBytes(NonceSize);   // 12 random bytes, fresh every call
+    ...
+    using var aes = new AesGcm(_key, TagSize);
+    aes.Encrypt(nonce, plainBytes, cipherBytes, tag);
+    // stored as: nonce (12B) + tag (16B) + ciphertext, base64
+}
+```
+A fresh random nonce on every call is exactly why the same phone number produces different ciphertext each time it's saved — the trade-off named above.
+
+It hooks into EF Core as a **value converter**, [`UserConfiguration.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Data/Configurations/UserConfiguration.cs):
+```csharp
+var phone = builder.Property(u => u.Phone).HasMaxLength(250);
+if (FieldCipher.Enabled)
+    phone.HasConversion(v => FieldCipher.Encrypt(v), v => FieldCipher.Decrypt(v));
+```
+EF calls `Encrypt` on every `SaveChanges()` and `Decrypt` the moment a row materializes back into a `User` object — nothing in `UsersController` or anywhere else knows encryption is happening; `Phone` is just a `string` everywhere except this one config file. The key itself is wired up once at startup in `Program.cs` via `FieldCipher.Configure(Demo:EncryptPiiAtRest, Demo:EncryptionKey)`, before the EF model builds — which is exactly why flipping `Demo:EncryptPiiAtRest` needs a fresh volume: the flag is read once, at model-build time, not per request.
+
+**Tokenization (card number) — one-way, keyed HMAC-SHA-256.** [`CardTokenizer.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Infrastructure/CardTokenizer.cs):
+```csharp
+var hash = HMACSHA256.HashData(_key, Encoding.UTF8.GetBytes(digitsOnly));
+var token = "TOK-" + Convert.ToHexString(hash)[..16];
+var last4 = digitsOnly[^4..];
+```
+No decrypt function exists anywhere in this class — this is a one-way hash, not a cipher. It must be *keyed*, not a bare hash: a card's real entropy once the public BIN and the already-visible last 4 digits are accounted for is only around 6 digits, roughly 100,000 SHA-256 guesses per candidate — trivial to brute-force from a leaked token table unless the hash is keyed with a secret only this service holds.
+
+It's called from [`PaymentService.ChargeAsync`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/PaymentService.cs):
+```csharp
+if (!string.IsNullOrWhiteSpace(cardNumber))
+{
+    (cardToken, cardLast4) = CardTokenizer.Tokenize(cardNumber);
+    if (options.CurrentValue.LogRawCardNumber)
+        logger.LogWarning("DEMO LEVER (LogRawCardNumber): raw card number {CardNumber} ...", cardNumber, orderId);
+}
+```
+The raw `cardNumber` parameter only exists in this one method's local scope. The `Payment` entity actually saved to the database never has a `CardNumber` field, only `CardToken`/`CardLast4` — there's no column that *could* leak a PAN even by accident. `LogRawCardNumber` is a deliberately built anti-pattern: the one place in the codebase where the raw number touches a logger, gated behind a flag that defaults to `false`.
+
 ---
 
 ## 7. Run the Tests
