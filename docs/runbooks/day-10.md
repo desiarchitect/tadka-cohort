@@ -1,181 +1,292 @@
 # Day 10 — Runbook: Authentication, Authorization & PII
 
-**Branch:** `day-10`  ·  **What changed since Day 9:** [`docs/changelog.md`](../changelog.md). **What's new:** the system was wide open; now it's secured. **JWT login** (ADR-030), **RBAC + resource-ownership** validated **per-service** (ADR-031, defense in depth — the Payment service verifies the same token), and **PII protection** (ADR-032 — log masking + GDPR right-to-be-forgotten). Same infra as Day 9.
+**Branch:** `day-10`  ·  **What's new:** through Day 9 the system was wide open; now it is secured. **JWT login with RS256/JWKS** (ADR-030/049), **RBAC + resource ownership** validated **per-service** (ADR-031, defense in depth — Payment independently verifies tokens and ownership), and **PII protection** (ADR-032 — log/response masking + GDPR right-to-be-forgotten). Same infra as Day 9.
 
 > New here? Read [`README.md`](README.md). Windows PowerShell → `curl.exe`. Demo password for every seeded account: **`Password123!`**.
 
-## 1. Run it
+---
 
-Same infra as Day 9, plus both apps — the monolith now seeds demo users on its first boot:
+## 1. Run it (infra + BOTH apps)
+
+Start the shared infrastructure, then launch both services. The monolith seeds demo users into PostgreSQL on its first boot:
+
 ```bash
 git checkout day-10
-docker compose up -d                       # postgres + replica + redis + payment-db + kafka + kafka-ui
+docker compose up -d                       # postgres 5432 + replica 5433 + redis 6379 + payment-db 5434 + kafka 9092 + kafka-ui 8090
+docker compose ps                          # confirm all containers are healthy
+```
+
+In two separate terminals, run both applications:
+
+```bash
+# Terminal 1 — Payment service (validates JWT via JWKS from monolith)
 dotnet run --project src/Tadka.Payment.Api    # :5240
+
+# Terminal 2 — Core Monolith (Auth, Orders, Restaurants, Identity)
 dotnet run --project src/Tadka.Api            # :5224  (seeds demo users on startup)
 ```
-Every seeded account shares one password so the demos below don't get bogged down in credential bookkeeping: `admin@tadka.test` (Admin) · `priya@tadka.test` / `rahul@tadka.test` (Customers) · `owner1@tadka.test` (owns Meghana `a1b2c3d4-0001…`) · `owner2@tadka.test` (owns `a1b2c3d4-0002…`). The two-customer, two-owner spread is deliberate — every demo below needs a **second** identity to prove an authorization failure against, not just a first one to prove success.
 
-## 2. Demo 1 — auth bypass is closed (ADR-030)
+### Seeded Identities
+Every demo account shares password **`Password123!`** so you can test authorization boundaries without credential friction:
+- **`admin@tadka.test`** — System Admin (`Role: Admin`). Bypasses ownership checks.
+- **`priya@tadka.test`** — Customer 1 (`CustomerId: c1b2c3d4-0001-4000-8000-000000000001`).
+- **`rahul@tadka.test`** — Customer 2 (`CustomerId: c1b2c3d4-0002-4000-8000-000000000002`). Used to test cross-tenant boundaries.
+- **`owner1@tadka.test`** — Restaurant Owner (`RestaurantId: a1b2c3d4-0001-4000-8000-000000000001` — Meghana Foods).
+- **`owner2@tadka.test`** — Restaurant Owner (`RestaurantId: a1b2c3d4-0002-4000-8000-000000000002` — Truffles).
 
-**The story (say this before any command):** through Day 9 there is no authentication anywhere in this system — every endpoint is callable by anyone, `POST /orders` will happily place an order for any `customerId` you type into the body. This demo closes that gap for the write path while deliberately leaving the read-only menu browse public, because a customer shouldn't need an account just to look at a menu.
+---
 
-Call `POST /orders` with no `Authorization` header at all — this is the exact request that worked without complaint through every prior day:
+## 2. Demo 1 — Closing the Authentication Bypass (ADR-030)
+
+Through Day 9, there was zero authentication in the system: anyone could call `POST /orders` and pass any arbitrary `customerId` in the JSON body. Today, all mutating endpoints require a signed JWT, while public read operations (browsing restaurants and menus) remain open.
+
+### Step 1: Prove unauthenticated writes are rejected while public reads stay open
+Execute `POST /orders` without an `Authorization` header, followed by `GET /restaurants`:
+
 ```bash
-RID=a1b2c3d4-0001-4000-8000-000000000001; ITEM=b1b2c3d4-0001-4000-8000-000000000001
-BODY='{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"'$RID'","items":[{"menuItemId":"'$ITEM'","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.9,"longitude":77.7}}'
+RID="a1b2c3d4-0001-4000-8000-000000000001"; ITEM="b1b2c3d4-0001-4000-8000-000000000001"
+BODY="{\"customerId\":\"c1b2c3d4-0001-4000-8000-000000000001\",\"restaurantId\":\"$RID\",\"items\":[{\"menuItemId\":\"$ITEM\",\"quantity\":1}],\"deliveryAddress\":{\"line1\":\"x\",\"line2\":\"y\",\"city\":\"Bangalore\",\"pincode\":\"560066\",\"latitude\":12.9,\"longitude\":77.7}}"
 
-# No token → 401 (browsing the menu is still public):
-curl -s -o /dev/null -w "POST /orders (no token): %{http_code}\n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY"   # 401
-curl -s -o /dev/null -w "GET /restaurants (public): %{http_code}\n" http://localhost:5224/api/v1/restaurants   # 200
+# 1. Unauthenticated write → 401 Unauthorized:
+curl -s -o /dev/null -w "POST /orders (no token): %{http_code}\n" -X POST http://localhost:5224/api/v1/orders -H "Content-Type: application/json" -d "$BODY"
+
+# 2. Public read → 200 OK (customers can browse menus without logging in):
+curl -s -o /dev/null -w "GET /restaurants (public): %{http_code}\n" http://localhost:5224/api/v1/restaurants
 ```
-**Outcome interpretation:** the two status codes side by side are the point of this demo — `401` on the order write and `200` on the menu read are *both* correct, from the *same* pass through the router. Authentication is applied per-endpoint, not globally: writes that spend money or touch someone's identity require a token, but browsing what a restaurant sells shouldn't need an account any more than walking past a restaurant window does.
 
-Now log in and repeat the same write with a real token:
+**What this proves:** Authentication is applied intentionally per route. Financial and identity mutations require proof of identity (`401`), but reading restaurant listings does not require an account (`200`).
+
+### Step 2: Log in and place an order with a valid JWT
+Log in as Priya to receive a signed RS256 token, then submit the order with the bearer token:
+
 ```bash
 TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" \
   -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+
 curl -s -o /dev/null -w "POST /orders (with token): %{http_code}\n" -X POST http://localhost:5224/api/v1/orders \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY"   # 201
 ```
-> Captured: no token **401**; login → a real JWT; with the token **201**. Your identity is the token's `sub` — `POST /orders` ignores any `customerId` in the body for non-admins.
 
-**Why that last line matters more than it looks:** the request body above still carries `"customerId":"c1b2c3d4-0001…"` (Priya's own seeded id, by coincidence) — but the server never trusts that field for a non-admin caller. It reads `sub` off the verified, signed token instead. If you edited the body to claim a *different* customer's id, the order would still be recorded as belonging to whoever the token says you are — that's the actual security property this demo is proving, not just "a 401 turned into a 201."
+**Key Architectural Security Property:** Notice the payload contains `"customerId":"c1b2c3d4-0001..."`. Even if a malicious user alters that JSON body field to another customer's ID, `OrdersController` ignores body-supplied customer IDs for non-admins and extracts the authenticated caller's identity strictly from the verified token's `sub` claim (`User.UserId()`). Spoofing identity in the request body is impossible.
 
-## 3. Demo 2 — RBAC + resource ownership (ADR-031)
+---
 
-**The story (say this before any command):** a role check alone only answers "can this *kind* of user do this *kind* of thing" — it can't answer "does this *specific* user own this *specific* resource." A `Customer` can read orders in general, but only their own; a `RestaurantOwner` can edit menus in general, but only the restaurant they actually own. This demo runs three separate ownership checks to show the same pattern (role passes, ownership decides) across two different resource types.
+## 3. Demo 2 — RBAC vs. Resource Ownership (ADR-031)
 
-Priya places an order with her own token and reads it back — this should just work, it's her own resource:
+A role check alone (`[Authorize(Roles = "Customer")]`) only answers: *"Is this caller a customer?"* It cannot answer: *"Does this customer own THIS specific order?"* Similarly, `[Authorize(Roles = "RestaurantOwner")]` lets an owner edit menus, but must never let Owner 1 edit Owner 2's restaurant.
+
+### Step 1: Priya places an order and reads her own order
 ```bash
-# Priya places an order (token from above), grab its id:
+# Place an order and extract its generated ID:
 ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
-curl -s -o /dev/null -w "Priya reads her order: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN"   # 200
+
+# Priya reads her own order → 200 OK:
+curl -s -o /dev/null -w "Priya reads her order: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN"
 ```
-Now log in as a second, unrelated customer and try to read Priya's order with a perfectly valid token — just the wrong identity:
+
+### Step 2: Rahul (a different customer) tries to read Priya's order
+Log in as Rahul and attempt to read Priya's order ID:
+
 ```bash
-# Rahul (a different customer) tries to read Priya's order → 403:
 RAHUL=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"rahul@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
-curl -s -o /dev/null -w "Rahul reads Priya's order: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $RAHUL"   # 403
-```
-**Outcome interpretation:** Rahul's token is completely valid — it passes authentication, it carries a real `Customer` role, the RBAC check passes cleanly. The `403` comes entirely from the *ownership* check underneath it: `order.CustomerId != rahul.sub`. This is the exact scenario a role-only system would get wrong — a coarse "is this a Customer" check would let Rahul through, because he genuinely is one.
 
-The third case repeats the same pattern on a different resource — a restaurant owner editing a menu they don't own:
+# Rahul tries to read Priya's order → 403 Forbidden:
+curl -s -o /dev/null -w "Rahul reads Priya's order: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $RAHUL"
+```
+
+**Why this returns 403, not 401:** Rahul's token is valid and signed. His authentication succeeded, and he has the `Customer` role. But the resource ownership check (`order.CustomerId == User.UserId()`) fails. A role check alone would have leaked Priya's order to Rahul (BOLA / IDOR vulnerability); resource ownership prevents it.
+
+### Step 3: Restaurant Owner 1 attempts to edit Restaurant Owner 2's menu
+Owner 1 owns Meghana Foods (`...0001`). Attempt to patch a dish on Truffles' menu (`...0002`):
+
 ```bash
-# owner1 owns Meghana; editing ANOTHER restaurant's menu → 403 (role RestaurantOwner passes, ownership fails):
 O1=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"owner1@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
-# Truffles menu item (owner1 owns Meghana, not Truffles — role passes, ownership fails):
-curl -s -o /dev/null -w "owner1 edits OTHER restaurant menu: %{http_code}\n" -X PATCH "http://localhost:5224/api/v1/restaurants/a1b2c3d4-0002-4000-8000-000000000002/menu/b1b2c3d4-0002-4000-8000-000000000002" -H "Authorization: Bearer $O1" -H "Content-Type: application/json" -d '{"price":{"amount":1}}'   # 403
+
+# Edit Truffles dish as Owner 1 → 403 Forbidden:
+curl -s -o /dev/null -w "owner1 edits OTHER restaurant menu: %{http_code}\n" -X PATCH "http://localhost:5224/api/v1/restaurants/a1b2c3d4-0002-4000-8000-000000000002/menu/b1b2c3d4-0002-4000-8000-000000000002" \
+  -H "Authorization: Bearer $O1" -H "Content-Type: application/json" -d '{"price":{"amount":1}}'
 ```
-> **401 vs 403:** 401 = not authenticated (no/invalid token); 403 = authenticated but not allowed (wrong owner). `Admin` bypasses ownership.
 
-Worth saying explicitly: the ownership check here (`RestaurantsController.OwnsOrAdmin`) is a plain inline check reading the `restaurantId` claim off the token and comparing it to the resource's actual owner — not a policy engine, not a permissions table. At four roles and one ownership rule, that inline check is the whole mechanism; the "wiring reference" section at the end of this runbook shows what a heavier stack (a real `PermissionEvaluator`, or a `CASL` ability) looks like once the rule count grows past what fits comfortably inline.
+> **The 401 vs. 403 Rule:**
+> - **401 Unauthorized:** Authentication failed. "Who are you?" (Missing, expired, or invalid token).
+> - **403 Forbidden:** Authorization failed. "We know who you are, but you cannot touch this resource." (Wrong role or not the owner). `Admin` role bypasses ownership.
 
-## 4. Demo 3 — per-service JWT validation, defense in depth (ADR-031)
+---
 
-**The story (say this before any command):** the previous two demos both ran against the monolith. There is no API gateway in front of this system yet, so "did the request already pass through a trust boundary" isn't a safe assumption — the Payment service is reachable directly, on its own port, by anyone who can route to it. If Payment simply trusted whatever the monolith forwarded (a plain `X-User-Id` header, say), then anything that could reach `:5240` directly — bypassing the monolith entirely — would have full access with no identity check at all. This demo proves that isn't the case: Payment verifies the same token itself, independently. Since the initial cut of this branch, Payment also stopped stopping at "is there a valid token" — it now checks *whose* order this is (the `order-placed` event carries `CustomerId`, ADR-031), the same authentication-vs-authorization split as Demo 2, just enforced a service later.
+## 4. Demo 3 — Defense in Depth: Per-Service Validation (ADR-031)
 
-Hit Payment's own HTTP endpoint with no token, then with the same token from Demo 1:
+A classic microservice anti-pattern is **Gateway-Only Authentication**: the gateway verifies the JWT, strips it, and forwards a plain header like `X-User-Id: 123` to internal services over the internal network. If an attacker breaches the network or calls the service port directly, they gain complete unauthorized access.
+
+Tadka enforces **Per-Service Validation**: `Tadka.Payment.Api` on port `:5240` independently validates the JWT signature via JWKS (`/.well-known/jwks.json`) from `Tadka.Api`, without relying on a shared secret.
+
+### Step 1: Hit Payment HTTP endpoint with no token
 ```bash
-curl -s -o /dev/null -w "payment GET (no token): %{http_code}\n" http://localhost:5240/payments/$ORDER   # 401
-curl -s -o /dev/null -w "payment GET (with token): %{http_code}\n" http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN"   # 200/404
+curl -s -o /dev/null -w "Payment GET (no token): %{http_code}\n" http://localhost:5240/payments/$ORDER   # 401
 ```
-**Outcome interpretation:** the `401` without a token is the actual point of this demo — it means Payment is doing its **own** signature verification against the same signing key/JWKS as the monolith, not trusting a header or the fact that the request arrived at all. A `200` or `404` with the token (depending on whether that order has a payment row yet) both mean the same thing from an auth standpoint: the token was accepted and the request proceeded to the business logic, which is exactly what defense-in-depth is supposed to look like — two independent services, two independent checks, no implicit trust between them just because they're "internal." `$TOKEN` here is Priya's own token against an order *she* placed, so it also passes the ownership check underneath — swap in `$RAHUL` (Demo 2's other customer) against the same `$ORDER` and it comes back `403`, not `200`/`404`: a valid, authenticated, wrong-owner token, same shape as every other ownership check today.
 
-## 5. Demo 4 — PII: masking + right-to-be-forgotten (ADR-032)
-
-**The story (say this before any command):** authentication and authorization (Demos 1-3) answer *who can call what*. PII protection is a different, broader question: even an authenticated, authorized caller shouldn't see another user's raw phone number or email just because they can technically reach the endpoint — and a user who wants their data gone needs an actual, working mechanism for that, not just a policy document.
-
-`GET /users/{id}` returns full PII to the owner or an Admin, and a **masked** version to anyone else. Rahul reading Priya's user record proves the masking, not an authorization failure — the request succeeds, the data just isn't the real data:
+### Step 2: Hit Payment HTTP endpoint with Priya's valid token
 ```bash
-curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $RAHUL"   # Rahul sees p***@tadka.test, +91••••••••01
+curl -s -o /dev/null -w "Payment GET (with token): %{http_code}\n" http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN"   # 200 or 404
 ```
-**Outcome interpretation:** notice this is a `200`, not a `403` — Rahul is allowed to *look up* a user record he doesn't own (a real product need: seeing a delivery contact's masked name, say), but what comes back has had the email and phone run through a redactor before the response ever left the server. Compare this to the ownership checks in Demo 2 — those blocked the request outright; masking instead lets the request through but changes what data is in the response. Two different mechanisms, both under the PII umbrella.
 
-Right-to-be-forgotten anonymises the row rather than deleting it — order history has to keep reconciling against a real (if now-scrubbed) user id:
+**What this proves:** Even if an internal service port is directly exposed, it cannot be called anonymously. The Payment service validates the cryptographic signature against the public JWKS endpoint independently. Furthermore, Payment checks that the caller either owns the order or has the `Admin` role (`403` if Rahul attempts to query Priya's payment record).
+
+---
+
+## 5. Demo 4 — PII: Response Masking & Right-To-Be-Forgotten (ADR-032)
+
+Authentication controls access to APIs. **PII Protection** governs how sensitive data is exposed and retained. Even authorized users must not see raw personal data of other users, and customers have a legal right to erasure (GDPR / DPDP).
+
+### Step 1: Inspect response masking for non-owners
+When Rahul queries Priya's user profile, the API redacts email and phone numbers before returning the response:
+
+```bash
+curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $RAHUL"
+# Output: {"id":"c1b2c3d4-0001...","name":"Priya Sharma","email":"p***@tadka.test","phone":"+91••••••••01"}
+```
+
+Notice this is a `200 OK`, not a `403`. Rahul is allowed to query the delivery recipient, but sensitive contact information is masked in transit.
+
+### Step 2: GDPR Right-to-be-Forgotten (Anonymization Tombstone)
+Execute Priya's deletion request:
+
 ```bash
 curl -s -o /dev/null -w "forget: %{http_code}\n" -X POST http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001/forget -H "Authorization: Bearer $TOKEN"   # 204
-docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\",\"Email\" FROM identity.users WHERE \"Id\"='c1b2c3d4-0001-4000-8000-000000000001';"   # [deleted], deleted+…@tadka.invalid
 ```
-> GDPR right-to-be-forgotten → **anonymise** (not hard-delete — order history must reconcile). **This burns Priya** (`c1b2c3d4-0001…`) for the rest of the day — reset volumes after, or forget a throwaway user.
 
-**Outcome interpretation:** `[deleted]` and a `deleted+…@tadka.invalid` placeholder email are the tombstone values — the row still exists (so every prior order Priya placed still has a valid, joinable customer id), but nothing personally identifying remains in it. **Honest limit, worth saying out loud:** events already published to Kafka or sitting in the outbox from Priya's earlier orders (Day 9) are **not** retro-scrubbed by this endpoint — they're immutable once published. The mitigation is upstream discipline, not retroactive cleanup: Tadka's events carry ids and amounts, never phone numbers or addresses, specifically so there's nothing sensitive left stranded in an old Kafka log after a `/forget` call. Anything that genuinely can't be avoided relies on crypto-shredding (deleting the encryption key, see §6) rather than trying to edit history.
+Verify the database row in PostgreSQL:
 
-## 6. Field-level encryption at rest + payment tokenization — **weekday lab** (later numbered ADR-052 / ADR-053)
-
-> Not in the 120-minute class. ADR-030/031/032 are the day's core. On this branch the encrypt/tokenize tests still count toward **44/44**. Later branches reuse **045** for restaurant-reject; encrypt/tokenize become **052/053**. Do not teach "ADR-045" as encryption after Day 11.
-
-**The story (say this before any command):** masking (§5) hides PII in API responses, but it does nothing for someone reading the database directly — a DBA, a leaked credential, a `pg_dump` backup. This beat closes that specific gap for one representative field, `Phone`, using AES-GCM at the column level, and separately shows why card numbers get a stricter, one-way treatment than a phone number does.
-
-Query the phone column directly — with encryption on by default, this should be unreadable ciphertext, not a phone number:
 ```bash
-docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\", \"Phone\" FROM identity.users;"   # ciphertext blobs, not plaintext
-curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $TOKEN" | grep -o '"phone":"[^"]*"'   # +919876500001 — decrypts correctly for the owner
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\",\"Email\" FROM identity.users WHERE \"Id\"='c1b2c3d4-0001-4000-8000-000000000001';"
+# Name: [deleted]
+# Email: deleted+c1b2c3d4000140008000000000000001@tadka.invalid
 ```
-**Outcome interpretation:** the same field is opaque at the database layer and legible through the API — that split is the entire point. Encryption-at-rest (this beat) and masking-in-transit (§5) are two independent, composable layers: the API path decrypts transparently via an EF Core value converter before the masking logic ever runs, so a request from the actual owner sees the real number, while a non-owner would see it masked *after* decryption, not because the ciphertext itself is somehow different per caller.
 
-BREAK — turn encryption off on a fresh volume and confirm the same query now shows plaintext:
+**Why Anonymize instead of Hard Delete?** A hard `DELETE FROM users` would cascade-delete or orphan foreign keys in `orders`, destroying financial audit trails and historical reporting. Anonymization overwrites PII with placeholder tombstones while preserving referential integrity.
+
+> **Production Reality (Event Sourcing / Kafka):** Past Kafka events already published to topics like `order-placed` cannot be retroactively edited. Architectural mitigations include:
+> 1. **PII Minimization:** Do not include raw phone numbers or physical addresses in Kafka event schemas (publish IDs only).
+> 2. **Crypto-Shredding:** Encrypt PII in event payloads with a per-user key; deleting the user's key renders historical event payloads unreadable.
+
+---
+
+## 6. Deep-Dive: Column-Level Encryption & Card Tokenization (ADR-052 / ADR-053)
+
+Masking protects data in transit. Column-level encryption protects data **at rest** against compromised database backups, read-replica leaks, or rogue DBA access.
+
+### Step 1: Direct database inspection shows ciphertext
+Query PostgreSQL directly to observe how `Phone` is stored on disk:
+
 ```bash
-docker compose down -v && docker compose up -d
-Demo__EncryptPiiAtRest=false dotnet run --project src/Tadka.Api
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\", \"Phone\" FROM identity.users;"
 ```
-> **A gotcha worth knowing:** flipping the flag back without resetting the volume throws `FormatException` on startup — `AuthSeeder` tries to read the OLD state's values under the NEW converter. Always reset volumes when switching this lever, same discipline as any other Demo config toggle in this cohort.
 
-**A real, permanent limitation, not just a demo caveat:** with encryption on, `Phone` is no longer queryable at the database level at all — `WHERE "Phone" = '...'` can't be pushed down to Postgres, because AES-GCM uses a fresh random nonce on every write, so the same phone number produces different ciphertext each time it's saved. Tadka doesn't query by phone today, so this cost is real but currently unrealized — worth knowing before reaching for encryption on a field you *do* need to filter by.
+The database stores random AES-GCM ciphertext blobs (e.g. `4yIKUWKg4386lm9PVjfcsx...`).
 
-Card numbers get a stricter, **one-way** treatment — tokenized the instant they arrive, never logged, never persisted in recoverable form. `POST /payments/charge` is **Admin-only** now (a fix landed after the initial cut of this branch: the real charge flow runs off the `order-placed` Kafka event, in-process, never over HTTP — a customer's own token calling this directly could otherwise charge *any* orderId for *any* amount, an authorization gap this endpoint's RBAC now closes), so log in as `admin@tadka.test` for this one:
+Now read the profile via the API as the authenticated owner:
+
+```bash
+curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $TOKEN"
+# Decrypted transparently: "phone":"+919876500001"
+```
+
+**How it works:** An EF Core Value Converter (`FieldCipher`) encrypts on `SaveChanges()` and decrypts on materialization using an AES-256-GCM authenticated cipher with a unique initialization vector (nonce) per write.
+
+**The Architectural Trade-Off:** Because every write uses a fresh random nonce, the same phone number produces different ciphertext every time. **Encrypted columns cannot be queried with `WHERE Phone = '...'` in SQL.** Database indexes on encrypted columns become useless for exact matching unless deterministic encryption or blind indexing is used.
+
+### Step 2: One-Way Card Tokenization (PCI-DSS Compliance)
+Phone numbers are reversible because customer support needs to contact the user. Credit card numbers (PANs) are strictly **one-way tokenized**:
+
 ```bash
 ADMIN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
-curl -s -X POST http://localhost:5240/payments/charge -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN" -d '{"orderId":"11111111-1111-4111-8111-111111111111","amount":299.00,"currency":"INR","cardNumber":"4111 1111 1111 1111"}'
-docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"OrderId\",\"CardToken\",\"CardLast4\" FROM payment.payments;"   # TOK-9BBE..., 1111 — no PAN column exists
-```
-**Outcome interpretation:** `CardToken` and `CardLast4` are the only card-related columns that exist in `payment.payments` — there is no column anywhere in this schema that *could* hold a raw PAN, so this isn't "we chose not to store it," it's "there is nowhere to put it even by accident." Contrast this with `Phone` above: encryption is reversible by design, because Tadka legitimately needs the real phone number back to show a customer or call them. Tokenization here is deliberately one-way (a keyed HMAC-SHA-256 digest, not a cipher — a fix landed after the initial cut of this branch, when a review pointed out that an *unkeyed* SHA-256 of a card number is brute-forceable once the issuer's BIN and the stored last-4 narrow the search space) — there is no legitimate reason for this codebase to ever recover a raw card number once a charge has gone through.
 
-Break the anti-pattern on purpose, to see what it looks like when someone adds "just one debug log line":
+curl -s -X POST http://localhost:5240/payments/charge -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN" \
+  -d '{"orderId":"11111111-1111-4111-8111-111111111111","amount":299.00,"currency":"INR","cardNumber":"4111 1111 1111 1111"}'
+```
+
+Inspect the `payment.payments` table in PostgreSQL:
+
+```bash
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"OrderId\",\"CardToken\",\"CardLast4\" FROM payment.payments WHERE \"OrderId\"='11111111-1111-4111-8111-111111111111';"
+```
+
+Output:
+```
+               OrderId                |      CardToken       | CardLast4 
+--------------------------------------+----------------------+-----------
+ 11111111-1111-4111-8111-111111111111 | TOK-B98C07776E30E28A | 1111
+```
+
+**Zero PAN Retention:** Notice there is no card number column in `payment.payments`. The raw PAN is processed in memory, hashed to a keyed HMAC-SHA-256 token (`CardToken`), stores the non-sensitive `CardLast4`, and the raw number is discarded immediately.
+
+### Step 3: Demonstrating the Logging Anti-Pattern
+Enable the diagnostic demonstration lever:
+
 ```bash
 Payment__LogRawCardNumber=true dotnet run --project src/Tadka.Payment.Api
 ```
-Charge again with the same request as above and watch the Payment service's own console — the raw card number now appears directly in the log output, which is exactly the PCI-DSS violation this default-off lever exists to make visible and reproducible rather than merely asserted in a document.
 
-## 7. Run the tests
+Triggering a charge now prints the raw card number to standard out. This illustrates the catastrophic defect of accidental debug logging in production (which violates PCI-DSS Requirement 3). The default `false` lever prevents card numbers from ever entering log aggregation pipelines.
+
+---
+
+## 7. Run the Tests
+
+Execute the automated test suite across both services:
 
 ```bash
-dotnet test    # 44/44 — monolith 33 (incl. 4 auth/ownership + 4 FieldCipher) + Payment 11 (incl. per-service 401 + 6 CardTokenizer).
-               # Existing suites pass via a TestAuthHandler (default Admin); X-Test-NoAuth/X-Test-Auth drive 401/403.
+dotnet test
 ```
-The count grew from Day 9's 34/34 to 44/44: 4 new auth/ownership tests on the monolith side exercise exactly the 401-vs-403 distinction from Demo 2, 4 `FieldCipher` tests cover the encryption round-trip from §6, and on the Payment side, 1 new test covers the per-service 401 from Demo 3 plus 6 `CardTokenizer` tests cover the one-way tokenization from §6. Every pre-Day-10 test still passes unmodified because the test harness swaps in a `TestAuthHandler` that defaults to an Admin identity — so existing suites didn't need to be rewritten to carry real tokens, and the two headers (`X-Test-NoAuth`, `X-Test-Auth`) let the *new* auth-specific tests explicitly drive the 401/403 cases without standing up a real login flow in test setup.
 
-*(Note: the counts above predate two later fixes on this branch — a RestaurantOwner ownership check on `PATCH /orders/{id}/status`, and RBAC/ownership on the Payment HTTP endpoints — each of which added its own test. `dotnet test` is the source of truth for the current total; don't hand-recite a fixed number here without re-running it.)*
+### Expected Output: **70/70 passed, 0 failed**
+- **`Tadka.Payment.Api.Tests` (18 passed):** Tests per-service 401 validation, JWKS public key resolution, card tokenization digests (`CardTokenizerTests`), and idempotency gates.
+- **`Tadka.Api.Tests` (52 passed):** Tests JWT issuance, password hashing, RBAC + resource ownership enforcement (`OrderTrackingAuthorizationTests`), AES-GCM encryption round-trips (`FieldCipherTests`), login rate-limiting, and atomic refresh-token CAS rotation (`RefreshTokenServiceConcurrencyTests`).
 
-## 8. Wiring reference + cross-language comparison
+---
 
-**Where the code lives:** monolith `Auth/*` (login/register endpoints, `TokenService`, `PasswordHasher<User>`), `[Authorize(Roles=...)]` + inline `OwnsOrAdmin`/ownership checks in each controller (Demo 2), `Infrastructure/Security/FieldCipher.cs` + `Data/Configurations/UserConfiguration.cs` (§6 encryption), the log-masking redactor + `users/{id}/forget` endpoint (Demo 4). Payment service: its own JWT bearer validation (Demo 3), `Infrastructure/CardTokenizer.cs` + `PaymentService.cs` (§6 tokenization). Full design reasoning: ADR-030 (JWT), ADR-031 (RBAC + ownership + per-service validation), ADR-032 (PII classification/masking/RTBF), ADR-045 (field encryption), ADR-046 (tokenization).
+## 8. Wiring Reference & Cross-Stack Architecture
 
-**If you'd build this same system in Java or Node instead of .NET**, the pattern is identical — a stateless signed token, a role check plus an ownership check, masked logs, an anonymise-not-delete endpoint. What changes is the tooling. Full detail in [`docs/learn/cross-stack-auth-and-pii.md`](../learn/cross-stack-auth-and-pii.md); the shape of it:
+### Where the code lives in Tadka:
+- **JWT Issuance & Verification:** [`src/Tadka.Api/Auth/TokenService.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/TokenService.cs), [`Jwks.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/Jwks.cs), [`SigningKeyStore.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/SigningKeyStore.cs).
+- **Per-Service Validation:** [`src/Tadka.Payment.Api/Auth/JwksClient.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Auth/JwksClient.cs) and `Program.cs` (`AddJwtBearer` with dynamic key resolver).
+- **Ownership Gates:** Inline checks in [`OrdersController.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/OrdersController.cs) and [`RestaurantsController.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/RestaurantsController.cs) (`OwnsOrAdmin`).
+- **PII Masking & RTBF:** [`UsersController.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/UsersController.cs), [`FieldCipher.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Infrastructure/Security/FieldCipher.cs).
+- **Payment Tokenization:** [`CardTokenizer.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Infrastructure/CardTokenizer.cs).
 
-| Concern | .NET (this repo) | Java (Spring Security) | Node |
+### Cross-Stack Implementation Matrix:
+
+| Concern | .NET Core (This Repo) | Java (Spring Boot) | Node.js (TypeScript) |
 |---|---|---|---|
-| Issuing/verifying JWTs | Hand-rolled `TokenService`; RS256 + JWKS as of ADR-049 | `oauth2ResourceServer().jwt()`; `NimbusJwtDecoder.withJwkSetUri(...)` is the closest one-line equivalent of this repo's hand-rolled `JwksClient` — but filter-chain *order* matters, a JWT filter registered after your security rules gives confusing 403s for what should be a 401 | `jsonwebtoken` for pure sign/verify (closest match to `TokenService.cs`); `passport-jwt` wraps it into Express middleware. `NextAuth` is built for OAuth-provider web login, not a pure API's own token issuance — the wrong tool here despite showing up in every search result |
-| RBAC + ownership | Inline `[Authorize(Roles=...)]` + a plain `OwnsOrAdmin(...)` check per controller (this repo's actual, corrected-during-build approach — see ADR-031) | `@PreAuthorize("hasRole(...)")` (declarative RBAC) + a custom `PermissionEvaluator` bean for ownership — more machinery than this repo's inline check; at 4 roles + 1 ownership rule the inline version is arguably the more honest code | No built-in RBAC. **CASL** expresses role *and* ownership as one rule (`can('read','Order', {customerId: user.id})`) rather than two separate checks — a genuinely different shape, not a 1:1 port. Or hand-roll middleware matching this repo's split style directly |
-| PII masking in logs | Hand-rolled redactor | Logback `TurboFilter`/custom `PatternLayout` — first-class, not a bolt-on | `pino`'s built-in `redact` option takes a list of paths (`'user.phone'`) and masks automatically — arguably cleaner out-of-the-box than most .NET setups need to hand-roll |
-| Column-level encryption | EF Core value converter (`FieldCipher`, §6) | Hibernate `@ColumnTransformer` or a JPA `AttributeConverter` — the direct analogue of an EF value converter | No transparent-conversion feature the way Hibernate/EF have — Prisma middleware or a repository-layer wrapper does the encrypt/decrypt by hand |
+| **Stateless AuthN** | `Microsoft.AspNetCore.Authentication.JwtBearer` + `TokenService` | `Spring Security` + `oauth2ResourceServer().jwt()` (`NimbusJwtDecoder`) | `jsonwebtoken` / `passport-jwt` |
+| **RBAC** | `[Authorize(Roles = "...")]` | `@PreAuthorize("hasRole('...')")` | Express middleware / NestJS `@Roles()` |
+| **Resource Ownership** | Inline comparison (`CustomerId == User.UserId()`) | `PermissionEvaluator` bean / ACL | **CASL** ability (`can('read', 'Order', { customerId: user.id })`) |
+| **PII Response Masking** | Custom DTO mapping / Redactor | Jackson custom serializer / `@JsonSerialize` | `class-transformer` / Custom interceptor |
+| **Column Encryption** | EF Core Value Converter (`FieldCipher`) | Hibernate `@ColumnTransformer` / JPA `AttributeConverter` | Prisma Client Extension / TypeORM subscriber |
+| **PAN Tokenization** | Keyed HMAC-SHA256 (`CardTokenizer`) | Spring service with `Mac.getInstance("HmacSHA256")` | Node `crypto.createHmac('sha256', key)` |
 
-**What doesn't change across any of these stacks:** the 401-vs-403 distinction is HTTP semantics, not framework behavior — "who are you" failures are always 401, "you're known but not allowed" failures are always 403, everywhere. The classic failure mode this whole day exists to prevent — validate only at a gateway, forward a plain `X-User-Id` header, get it forged by anything that reaches the internal network — is a network-architecture mistake, not a language bug; Demo 3's per-service validation fix applies identically no matter what the service behind the gateway is written in.
+---
 
-## ✅ Done when
-- [ ] No token → `401`; `GET /restaurants` (public) → `200`; login → a JWT; with the token → `201`.
-- [ ] A different customer reading your order → `403`; an owner editing another restaurant's menu → `403`.
-- [ ] Payment service HTTP endpoint: no token → `401`, with token → `200/404`.
-- [ ] `GET /users/{id}` masks PII for non-owners; `/forget` anonymises the row.
-- [ ] `psql` on `identity.users` shows ciphertext for `Phone`; the API still returns the correct decrypted number to the owner.
-- [ ] `Demo__EncryptPiiAtRest=false` (fresh volume) shows plaintext instead.
-- [ ] A charge with `cardNumber` stores only `CardToken`/`CardLast4`; no PAN column exists in `payment.payments`.
-- [ ] `Payment__LogRawCardNumber=true` makes the raw card number appear in the log (the anti-pattern, on purpose).
-- [ ] `dotnet test` → **44/44**.
+## ✅ Done When
+
+- [ ] `POST /orders` without token returns `401 Unauthorized`.
+- [ ] `GET /restaurants` without token returns `200 OK` (public catalog browse).
+- [ ] Login returns a signed RS256 JWT; placing an order with the token returns `201 Created`.
+- [ ] Reading another customer's order returns `403 Forbidden` (RBAC role passes, resource ownership fails).
+- [ ] Patching another restaurant's menu returns `403 Forbidden`.
+- [ ] Calling `GET http://localhost:5240/payments/{id}` directly without token returns `401 Unauthorized` (defense in depth).
+- [ ] Querying another user's profile returns `200 OK` with masked phone and email.
+- [ ] Calling `/forget` anonymizes the PostgreSQL user row into `[deleted]` and `deleted+...@tadka.invalid`.
+- [ ] Direct database query on `identity.users` shows encrypted ciphertext for `Phone`.
+- [ ] Direct database query on `payment.payments` shows `CardToken` and `CardLast4`; no raw card column exists.
+- [ ] `dotnet test` returns **70/70 passed**.
+
+---
 
 ## Troubleshooting
-- **Login returns 401 for a seeded user:** the startup `AuthSeeder` sets real hashes on first boot; if you migrated before Day 10, `docker compose down -v && docker compose up -d` then `dotnet run` to re-seed.
-- **All calls 401 after adding a token:** as of the ADR-047/048/049 hardening pass there is no shared `Jwt:SigningKey` any more — signing is RS256 (ADR-049). Check that `Tadka.Api` is reachable at the URL `Tadka.Payment.Api`'s `Jwt:JwksBaseUrl` points to (`http://localhost:5224` by default) and that `curl http://localhost:5224/.well-known/jwks.json` returns a non-empty `keys` array; also give `Tadka.Payment.Api`'s JWKS cache (`Jwt:JwksCacheMinutes`, default 5) a moment if a key was *just* rotated.
-- **`FormatException` on startup (`not a valid Base-64 string`):** you switched `Demo:EncryptPiiAtRest` without resetting the volume — the DB has values encoded under the OLD state. `docker compose down -v && docker compose up -d`, then restart the app.
-- **A 403 where you expected a 401 (or vice versa):** re-check which layer is actually failing — a missing/malformed token is always 401 (authentication); a valid token whose owner doesn't match the resource is always 403 (authorization). If you're getting 403 with no token at all, something upstream is misconfigured to treat "no token" as "anonymous role" rather than rejecting the request outright.
 
-➡️ Next (Day 11): extract the **Delivery** service (with real-time location tracking / Redis-geo) and front the services with the **API gateway** (YARP).
+- **Login returns 401 for a seeded account:** `AuthSeeder` runs only on startup. If database was created before Day 10, wipe volumes to trigger re-seeding: `docker compose down -v && docker compose up -d`, then run the monolith.
+- **Payment service returns 401 for all valid tokens:** Payment fetches the public key from the monolith via JWKS. Confirm `Tadka.Api` is running on port `:5224` and verify `curl http://localhost:5224/.well-known/jwks.json` returns a valid keys array.
+- **`FormatException` on startup (`not a valid Base-64 string`):** You toggled `Demo:EncryptPiiAtRest` without resetting the database volume. The database contains data encoded under the previous state. Reset volumes with `docker compose down -v && docker compose up -d`.
+- **Unexpected 403 on order creation:** Non-admin users cannot place orders for other customer IDs. Ensure the token belongs to the user placing the order or use Priya's credentials.
+
+➡️ **Next (Day 11):** Extract the **Delivery** service (with real-time location tracking via Redis-geo) and introduce the **API Gateway** (YARP) for edge rate-limiting and reverse proxying.
