@@ -273,6 +273,14 @@ dotnet test
 
 ---
 
+## 9. Bonus Showcase: Enterprise IdP Integration (Keycloak)
+
+Want to see how an enterprise IAM platform (Keycloak 24+) plugs into Tadka with **zero code changes**?
+- Follow the hands-on showcase guide: [`docs/learn/keycloak-integration-showcase.md`](../learn/keycloak-integration-showcase.md).
+- Starts a pre-seeded Keycloak container (`docker compose --profile auth-prod up -d keycloak`), issues real OIDC tokens for Priya, and verifies payments against `Tadka.Payment.Api --environment Keycloak`.
+
+---
+
 ## ✅ Done When
 
 - [ ] `POST /orders` without token returns `401 Unauthorized`.

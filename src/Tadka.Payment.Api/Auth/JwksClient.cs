@@ -61,7 +61,7 @@ public sealed class JwksClient(IHttpClientFactory httpClientFactory, IOptions<Jw
         try
         {
             var client = httpClientFactory.CreateClient(HttpClientName);
-            doc = await client.GetFromJsonAsync<JwksDocumentDto>("/.well-known/jwks.json", ct);
+            doc = await client.GetFromJsonAsync<JwksDocumentDto>(_o.JwksPath, ct);
         }
         catch (HttpRequestException)
         {

@@ -8,5 +8,6 @@ public sealed class JwksOptions
 {
     public const string SectionName = "Jwt";
     public string JwksBaseUrl { get; set; } = "http://localhost:5224";
+    public string JwksPath { get; set; } = "/.well-known/jwks.json";
     public int JwksCacheMinutes { get; set; } = 5;
 }

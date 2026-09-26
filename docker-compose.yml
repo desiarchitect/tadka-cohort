@@ -140,6 +140,24 @@ services:
       DYNAMIC_CONFIG_ENABLED: "true"
     restart: unless-stopped
 
+  # Keycloak (Day 10 Showcase) — Optional Enterprise Identity Provider (OIDC / OAuth 2.0).
+  # Run only when showcasing production auth: `docker compose --profile auth-prod up -d`
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    container_name: tadka-keycloak
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8080
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./infra/keycloak/tadka-realm.json:/opt/keycloak/data/import/tadka-realm.json:ro
+    profiles: ["auth-prod"]
+    restart: unless-stopped
+
 volumes:
   pgdata:
   pgdata_replica:

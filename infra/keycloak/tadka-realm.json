@@ -1,0 +1,158 @@
+{
+  "id": "tadka",
+  "realm": "tadka",
+  "displayName": "Tadka Food Delivery",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "accessTokenLifespan": 900,
+  "ssoSessionIdleTimeout": 1800,
+  "ssoSessionMaxLifespan": 36000,
+  "clients": [
+    {
+      "id": "tadka-api",
+      "clientId": "tadka-api",
+      "name": "Tadka API Client",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "fullScopeAllowed": true,
+      "defaultClientScopes": [
+        "web-origins",
+        "acr",
+        "profile",
+        "roles",
+        "email"
+      ],
+      "protocolMappers": [
+        {
+          "name": "audience-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "tadka-api",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "role-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "role",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "role",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "restaurant-id-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-attribute-mapper",
+          "consentRequired": false,
+          "config": {
+            "userinfo.token.claim": "true",
+            "user.attribute": "restaurantId",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "restaurantId",
+            "jsonType.label": "String"
+          }
+        }
+      ]
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "Customer",
+        "description": "Standard Tadka customer"
+      },
+      {
+        "name": "RestaurantOwner",
+        "description": "Restaurant owner who manages menu"
+      },
+      {
+        "name": "Admin",
+        "description": "System administrator"
+      }
+    ]
+  },
+  "users": [
+    {
+      "id": "c1b2c3d4-0001-4000-8000-000000000001",
+      "username": "priya@tadka.test",
+      "email": "priya@tadka.test",
+      "firstName": "Priya",
+      "lastName": "Sharma",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Password123!",
+          "temporary": false
+        }
+      ],
+      "attributes": {
+        "role": ["Customer"]
+      },
+      "realmRoles": ["Customer"]
+    },
+    {
+      "id": "c1b2c3d4-0002-4000-8000-000000000002",
+      "username": "owner1@tadka.test",
+      "email": "owner1@tadka.test",
+      "firstName": "Meghana",
+      "lastName": "Owner",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Password123!",
+          "temporary": false
+        }
+      ],
+      "attributes": {
+        "role": ["RestaurantOwner"],
+        "restaurantId": ["a1b2c3d4-0001-4000-8000-000000000001"]
+      },
+      "realmRoles": ["RestaurantOwner"]
+    },
+    {
+      "id": "a1b2c3d4-0000-4000-8000-000000000000",
+      "username": "admin@tadka.test",
+      "email": "admin@tadka.test",
+      "firstName": "Admin",
+      "lastName": "Tadka",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [
+        {
+          "type": "password",
+          "value": "Password123!",
+          "temporary": false
+        }
+      ],
+      "attributes": {
+        "role": ["Admin"]
+      },
+      "realmRoles": ["Admin"]
+    }
+  ]
+}
