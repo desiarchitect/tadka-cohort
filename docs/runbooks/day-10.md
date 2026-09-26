@@ -559,6 +559,55 @@ The rest of the default stack (Postgres, Redis, Payment DB, Kafka, Kafka UI) kee
 
 ---
 
+## 10. How the Access Token Is Actually Generated (RS256 Walkthrough)
+
+`Invoke-RestMethod ... auth/login | ... .accessToken` looks like a black box. It isn't — every step is a few lines of code in this repo. Nothing cryptographic happens on the client side; the call is a plain HTTP POST, and `Invoke-RestMethod` just auto-parses the JSON response, which is why `.accessToken` works directly on the result.
+
+**Step 1 — `AuthController.Login` verifies the password.** [`AuthController.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/AuthController.cs):
+```csharp
+var user = await db.Set<User>().FirstOrDefaultAsync(u => u.Email == email);
+if (hasher.VerifyHashedPassword(user, user.PasswordHash, request.Password) == PasswordVerificationResult.Failed)
+    return Unauthorized(...);
+...
+return Ok(await IssueTokenPairAsync(user));
+```
+It looks the user up, checks the password against the stored hash (never a plaintext comparison), and on success calls `IssueTokenPairAsync`.
+
+**Step 2 — `TokenService.CreateAccessToken` builds and signs the JWT.** [`TokenService.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/TokenService.cs), the actual token-generation code:
+```csharp
+var claims = new List<Claim>
+{
+    new("sub", user.Id.ToString()),      // read later as User.UserId() by every ownership check
+    new("role", user.Role.ToString()),
+    new("email", user.Email),
+    new("jti", Guid.NewGuid().ToString())
+};
+
+var signingKey = keys.Current;
+var rsaKey = new RsaSecurityKey(signingKey.Rsa) { KeyId = signingKey.Kid };
+var descriptor = new SecurityTokenDescriptor
+{
+    Issuer = _o.Issuer,
+    Audience = _o.Audience,
+    Subject = new ClaimsIdentity(claims),
+    Expires = DateTime.UtcNow.AddMinutes(_o.AccessTokenMinutes),
+    SigningCredentials = new SigningCredentials(rsaKey, SecurityAlgorithms.RsaSha256)
+};
+
+return new JsonWebTokenHandler().CreateToken(descriptor);
+```
+A JWT is three base64url chunks joined by dots: `header.payload.signature`. `CreateToken` builds the header (`{"alg":"RS256","kid":"...","typ":"JWT"}`) and the payload (`sub`/`role`/`email`/`jti`/`iss`/`aud`/`exp`) as JSON, base64url-encodes each, computes an RSA-SHA256 signature over `header.payload` using the private key, and appends that as the third chunk. That whole string is the `accessToken` the login response carries.
+
+**Step 3 — where the RSA key comes from.** [`SigningKeyStore.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/SigningKeyStore.cs):
+```csharp
+var next = new SigningKey { Kid = Guid.NewGuid().ToString("N"), Rsa = RSA.Create(2048), CreatedAt = DateTime.UtcNow };
+```
+`Tadka.Api` generates a 2048-bit RSA keypair in memory on startup. The **private half** signs tokens, right there in `TokenService`. The **public half** is published at `Tadka.Api`'s own `/.well-known/jwks.json` endpoint ([`Jwks.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/Jwks.cs)) — that public key is how `Tadka.Payment.Api`, a completely separate process that never signed anything, verifies a token's signature independently. That is the actual mechanism behind Demo 3's "per-service validation."
+
+**Why this matters for this runbook specifically:** the key lives only in process memory (a deliberate, documented trade-off — see the comment on `SigningKeyStore`), so restarting `Tadka.Api` generates a *brand new* keypair, invalidating every token issued before the restart. This is why every demo above logs in fresh after starting the apps rather than reusing a token across sessions — an old token isn't expired, it's signed by a key that no longer exists.
+
+---
+
 ## ✅ Done When
 
 - [ ] `POST /orders` without token returns `401 Unauthorized`.
