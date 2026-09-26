@@ -135,3 +135,28 @@ sequenceDiagram
     DB-->>M: 0 rows claimed (killed by family revocation)
     M-->>LegitimateUser: 401 Unauthorized (Forces full re-login)
 ```
+
+---
+
+## 5. The Edge Gateway "Passport" Pattern (Hyper-scale Auth)
+
+How hyper-scale architectures (Netflix, Swiggy, Uber) decouple authentication from downstream microservices:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client
+    participant GW as API Gateway (YARP / Envoy)
+    participant IdP as Identity Provider (Auth0 / Keycloak)
+    participant SvcA as Order Service
+    participant SvcB as Payment Service
+
+    Client->>GW: Request with External JWT / Session Cookie
+    Note over GW: 1. Gateway validates external token against IdP JWKS<br/>2. Hydrates user metadata & tenant context
+    Note over GW: 3. Mints short-lived internal 'Passport' token<br/>OR injects verified headers (X-User-Id, X-User-Role)
+    
+    GW->>SvcA: Internal Request + Passport / Verified Headers
+    SvcA->>SvcB: Service-to-Service Request (mTLS)
+    Note over SvcA,SvcB: Internal services trust the gateway / internal Passport.<br/>No repeated external token or refresh lookups!
+```
+
