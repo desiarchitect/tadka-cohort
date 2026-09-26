@@ -275,9 +275,117 @@ dotnet test
 
 ## 9. Bonus Showcase: Enterprise IdP Integration (Keycloak)
 
-Want to see how an enterprise IAM platform (Keycloak 24+) plugs into Tadka with **zero code changes**?
-- Follow the hands-on showcase guide: [`docs/learn/keycloak-integration-showcase.md`](../learn/keycloak-integration-showcase.md).
-- Starts a pre-seeded Keycloak container (`docker compose --profile auth-prod up -d keycloak`), issues real OIDC tokens for Priya, and verifies payments against `Tadka.Payment.Api --environment Keycloak`.
+### Architectural Context: How do we change Tadka to use an Enterprise IdP?
+A common question students ask: *"How do we swap our hand-rolled auth for an enterprise IAM platform like Keycloak, Okta, or Auth0 in production?"*
+
+Because `Tadka.Payment.Api` implements **defense-in-depth and dynamic JWKS public key resolution** (ADR-049), **the downstream microservice requires ZERO C# code changes!**
+
+| Concern | Monolith (Issuing Side) | Payment API (Verifying Side) |
+|---|---|---|
+| **What changes?** | In production, delete `TokenService`/`AuthController` and delegate user login to Keycloak's OAuth2 login page | **Pure configuration change**: point `Jwt:Issuer`, `Jwt:JwksBaseUrl`, and `Jwt:JwksPath` to Keycloak |
+| **Code changes needed?** | Switch frontend to OIDC redirect | **0 lines of C# code** (handled by `appsettings.Keycloak.json` / launch profile) |
+
+> 📖 **Full Deep-Dive:** See [`docs/learn/keycloak-integration-showcase.md`](../learn/keycloak-integration-showcase.md) for sequence diagrams and Keycloak admin setup details.
+
+---
+
+### Step 1: Start the Pre-Seeded Keycloak Container
+Start Keycloak 24+ with an embedded database and pre-imported `tadka` realm:
+
+```bash
+docker compose --profile auth-prod up -d keycloak
+```
+Verify Keycloak is ready (~15s):
+```bash
+curl -s http://localhost:8080/realms/tadka/.well-known/openid-configuration | grep "jwks_uri"
+# -> "jwks_uri":"http://localhost:8080/realms/tadka/protocol/openid-connect/certs"
+```
+*(Keycloak Admin Console is available at `http://localhost:8080` with credentials `admin`/`admin`)*
+
+---
+
+### Step 2: Start Tadka.Payment.Api with the Keycloak Profile
+Launch the Payment service configured to validate tokens against Keycloak:
+
+```bash
+dotnet run --project src/Tadka.Payment.Api --launch-profile Keycloak
+```
+
+Notice the startup log:
+```text
+info: Microsoft.Hosting.Lifetime[0]
+      Hosting environment: Keycloak
+```
+
+---
+
+### Step 3: Run the 4-Step Keycloak Demo
+
+Open a new terminal to run the demo commands:
+
+#### 1. Unauthenticated request → 401 Unauthorized
+```bash
+curl -s -o /dev/null -w "Payment (no token): %{http_code}\n" http://localhost:5240/payments/11111111-1111-4111-8111-111111111111
+# Expected output: 401
+```
+
+#### 2. Request real OIDC tokens from Keycloak
+Request OAuth2 tokens using the pre-seeded accounts (`Password123!`):
+
+**Bash / macOS / Linux:**
+```bash
+# Obtain Priya's token (Customer):
+PRIYA_TOKEN=$(curl -s -X POST http://localhost:8080/realms/tadka/protocol/openid-connect/token \
+  -d "client_id=tadka-api" -d "username=priya@tadka.test" -d "password=Password123!" -d "grant_type=password" | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+
+# Obtain Admin's token (Admin):
+ADMIN_TOKEN=$(curl -s -X POST http://localhost:8080/realms/tadka/protocol/openid-connect/token \
+  -d "client_id=tadka-api" -d "username=admin@tadka.test" -d "password=Password123!" -d "grant_type=password" | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+```
+
+**Windows PowerShell:**
+```powershell
+$priyaRes = Invoke-RestMethod -Uri "http://localhost:8080/realms/tadka/protocol/openid-connect/token" -Method Post -Body @{ client_id = "tadka-api"; username = "priya@tadka.test"; password = "Password123!"; grant_type = "password" }; $PRIYA_TOKEN = $priyaRes.access_token
+
+$adminRes = Invoke-RestMethod -Uri "http://localhost:8080/realms/tadka/protocol/openid-connect/token" -Method Post -Body @{ client_id = "tadka-api"; username = "admin@tadka.test"; password = "Password123!"; grant_type = "password" }; $ADMIN_TOKEN = $adminRes.access_token
+```
+
+#### 3. Resource Ownership Defense → 403 Forbidden
+Priya sends a valid Keycloak token, but attempts to read an order belonging to another customer (`11111111-...`):
+
+```bash
+curl -s -o /dev/null -w "Priya reads other order: %{http_code}\n" http://localhost:5240/payments/11111111-1111-4111-8111-111111111111 -H "Authorization: Bearer $PRIYA_TOKEN"
+# Expected output: 403
+```
+**What this proves:** Authentication passed! Keycloak's RS256 signature was verified by `JwksClient`. But Tadka's inline ownership check (`CustomerId == User.UserId()`) barred access. **Identity Providers assert identity, but your application code must protect its own resources.**
+
+#### 4. Admin Bypass & Customer Own Order → 200 OK
+1. Admin reads any order (`200 OK`):
+```bash
+curl -s -o /dev/null -w "Admin reads order: %{http_code}\n" http://localhost:5240/payments/11111111-1111-4111-8111-111111111111 -H "Authorization: Bearer $ADMIN_TOKEN"
+# Expected output: 200
+```
+
+2. Admin charges a new order for Priya:
+```bash
+curl -s -X POST http://localhost:5240/payments/charge -H "Content-Type: application/json" -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{"orderId":"22222222-2222-4222-8222-222222222222","amount":499.00,"currency":"INR","cardNumber":"4111 1111 1111 1111","customerId":"c1b2c3d4-0001-4000-8000-000000000001"}'
+```
+
+3. Priya reads her OWN payment (`200 OK`):
+```bash
+curl -s http://localhost:5240/payments/22222222-2222-4222-8222-222222222222 -H "Authorization: Bearer $PRIYA_TOKEN"
+# Expected output: {"orderId":"22222222-2222-4222-8222-222222222222","status":"Completed",...}
+```
+
+---
+
+### Step 4: Teardown
+When finished demonstrating Keycloak:
+```bash
+docker compose --profile auth-prod down
+```
+Normal `docker compose up -d` continues to run the lightweight default stack without Keycloak.
 
 ---
 
