@@ -89,4 +89,42 @@ public class PaymentServiceTests(PaymentApiFactory factory) : IClassFixture<Paym
         req.Headers.Add("X-Test-NoAuth", "true");
         Assert.Equal(System.Net.HttpStatusCode.Unauthorized, (await client.SendAsync(req)).StatusCode);
     }
+
+    [Fact]
+    public async Task A_customer_cannot_trigger_a_charge_403()  // authenticated is not the same as authorized (ADR-031)
+    {
+        var client = _factory.CreateClient();
+        var req = new HttpRequestMessage(HttpMethod.Post, "/payments/charge")
+        { Content = JsonContent.Create(new { orderId = Guid.NewGuid(), amount = 1.00m, currency = "INR" }) };
+        req.Headers.Add("X-Test-Auth", $"Customer:{Guid.NewGuid()}");  // a real, valid, logged-in customer
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, (await client.SendAsync(req)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_different_customer_cannot_read_someone_elses_payment_403()  // resource ownership (ADR-031)
+    {
+        var client = _factory.CreateClient();
+        var orderId = Guid.NewGuid();
+        var owner = Guid.NewGuid();
+
+        // The order-placed event stamps CustomerId on the payment row (Admin acting as "the system" here).
+        var chargeReq = new HttpRequestMessage(HttpMethod.Post, "/payments/charge")
+        { Content = JsonContent.Create(new { orderId, amount = 299.00m, currency = "INR", customerId = owner }) };
+        (await client.SendAsync(chargeReq)).EnsureSuccessStatusCode();
+
+        // A DIFFERENT customer tries to read it → 403.
+        var asOther = Get($"/payments/{orderId}", $"Customer:{Guid.NewGuid()}");
+        Assert.Equal(System.Net.HttpStatusCode.Forbidden, (await client.SendAsync(asOther)).StatusCode);
+
+        // The owner CAN read it → 200.
+        var asOwner = Get($"/payments/{orderId}", $"Customer:{owner}");
+        Assert.Equal(System.Net.HttpStatusCode.OK, (await client.SendAsync(asOwner)).StatusCode);
+    }
+
+    private static HttpRequestMessage Get(string url, string testAuth)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Get, url);
+        req.Headers.Add("X-Test-Auth", testAuth);
+        return req;
+    }
 }

@@ -7,8 +7,10 @@ public static class Topics
     public const string PaymentResults = "payment-results";
 }
 
-/// <summary>Consumed from Ordering: an order to charge.</summary>
-public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency);
+/// <summary>Consumed from Ordering: an order to charge. <see cref="CustomerId"/> is event metadata, not a
+/// credential (ADR-031) — it lets this service stamp resource ownership onto the <c>Payment</c> row it
+/// creates, since Payment has no copy of the orders table of its own to check ownership against.</summary>
+public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, Guid? CustomerId = null);
 
 /// <summary>Published back to Ordering after settling the charge (the Saga reply).</summary>
 public sealed record PaymentResultMessage(Guid MessageId, Guid OrderId, string Status, string? GatewayReference, string? FailureReason);

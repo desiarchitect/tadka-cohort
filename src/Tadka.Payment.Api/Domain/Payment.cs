@@ -13,6 +13,15 @@ public class Payment
 {
     public Guid Id { get; set; }
     public Guid OrderId { get; set; }
+
+    /// <summary>Who placed the order this payment is for (ADR-031: resource ownership, defense in depth).
+    /// Carried in from the <c>order-placed</c> Kafka event or the caller of <c>POST /payments/charge</c> —
+    /// Payment does not have its own copy of the orders table, so this is the ONLY way it can tell "is the
+    /// caller of GET /payments/{orderId} the person who placed it, or Admin, or neither". Null on a payment
+    /// created before this field existed, or via a caller that genuinely doesn't know the customer (an
+    /// admin/support-triggered charge) — GET treats a null CustomerId as "no non-admin may read this".</summary>
+    public Guid? CustomerId { get; set; }
+
     public Money Amount { get; set; } = null!;
     public string Method { get; set; } = string.Empty;
     public PaymentStatus Status { get; set; }

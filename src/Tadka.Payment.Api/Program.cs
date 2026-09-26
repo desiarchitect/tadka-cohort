@@ -13,6 +13,14 @@ using Tadka.Payment.Api.Resilience;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Card tokenization key (ADR-046, keyed after a live security review found the earlier unkeyed-SHA-256
+// version reversible by brute force — see CardTokenizer's own doc comment). Configured before anything
+// can call Tokenize, same spirit as FieldCipher.Configure in Tadka.Api/Program.cs: a dev-only default,
+// NEVER a real secret — a real deployment supplies Demo:CardTokenizationKey from a KMS/secrets manager,
+// never a config file in source control.
+Tadka.Payment.Api.Infrastructure.CardTokenizer.Configure(
+    builder.Configuration["Demo:CardTokenizationKey"] ?? "owMbZYDfyQY0WCnoguPMpVe7Zb/voograkyID97ppuY=");
+
 builder.Services.AddOpenApi();
 builder.Services.Configure<PaymentOptions>(builder.Configuration.GetSection(PaymentOptions.SectionName));
 
@@ -101,20 +109,35 @@ app.MapGet("/health", () => Results.Ok(new { status = "Healthy", service = "paym
 
 // POST /payments/charge — idempotent by orderId (ADR-025). A decline/timeout is a BUSINESS outcome
 // (HTTP 200 with Status=Failed); only a DOWN service makes the caller's HTTP call throw.
+// Admin-only (ADR-031): the REAL flow charges via the order-placed Kafka consumer, in-process, never
+// over HTTP — this endpoint is a support/ops manual-charge path. Before this fix ANY logged-in customer
+// could POST here with someone else's orderId and an amount of their own choosing; authentication alone
+// (a valid token) was never the same as authorization (permission to trigger THIS action).
 app.MapPost("/payments/charge", async (ChargeRequest request, PaymentService payments, CancellationToken ct) =>
 {
     var outcome = await payments.ChargeAsync(
-        request.OrderId, new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!), ct, request.CardNumber);
+        request.OrderId, new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!),
+        ct, request.CardNumber, request.CustomerId);
     return Results.Ok(new ChargeResponse(request.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason));
-}).RequireAuthorization();
+}).RequireAuthorization(policy => policy.RequireRole("Admin"));
 
 // GET /payments/{orderId} — query a payment's status (request/reply stays HTTP even after Day-9 Kafka).
-app.MapGet("/payments/{orderId:guid}", async (Guid orderId, PaymentDbContext db) =>
+// Resource ownership (ADR-031): the customer who placed the order (carried in via the order-placed event,
+// see OrderPlacedMessage.CustomerId) or Admin may read it; anyone else with an otherwise-valid token gets
+// 403, not the payment status of an order that isn't theirs. A payment with no CustomerId on record (a
+// pre-fix row, or an admin-triggered charge that didn't supply one) is readable by Admin only — there is
+// no owner to compare against, so the safe default is "no non-admin may read this", not "everyone may".
+app.MapGet("/payments/{orderId:guid}", async (Guid orderId, PaymentDbContext db, HttpContext http) =>
 {
     var p = await db.Payments.AsNoTracking().FirstOrDefaultAsync(x => x.OrderId == orderId);
-    return p is null
-        ? Results.NotFound()
-        : Results.Ok(new ChargeResponse(p.OrderId, p.Status.ToString(), p.GatewayReference, p.FailureReason));
+    if (p is null)
+        return Results.NotFound();
+
+    var isSelfOrAdmin = http.User.IsAdmin() || (p.CustomerId is { } ownerId && ownerId == http.User.UserId());
+    if (!isSelfOrAdmin)
+        return Results.Forbid();
+
+    return Results.Ok(new ChargeResponse(p.OrderId, p.Status.ToString(), p.GatewayReference, p.FailureReason));
 }).RequireAuthorization();
 
 app.Run();

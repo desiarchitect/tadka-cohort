@@ -24,7 +24,7 @@ public sealed class PaymentService(
     IOptionsMonitor<PaymentOptions> options,
     ILogger<PaymentService> logger)
 {
-    public async Task<ChargeOutcome> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken = default, string? cardNumber = null)
+    public async Task<ChargeOutcome> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken = default, string? cardNumber = null, Guid? customerId = null)
     {
         // DEMO LEVER (Day 8): a fatal in the charge path. Post-extraction this kills ONLY this service.
         if (options.CurrentValue.CrashOnCharge)
@@ -54,6 +54,7 @@ public sealed class PaymentService(
         var payment = new Domain.Payment
         {
             OrderId = orderId,
+            CustomerId = customerId, // resource ownership (ADR-031) — GET /payments/{orderId} checks this
             Amount = amount,
             Method = "UPI",
             Status = PaymentStatus.Pending,

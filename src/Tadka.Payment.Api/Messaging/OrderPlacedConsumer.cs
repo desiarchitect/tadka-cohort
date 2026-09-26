@@ -69,7 +69,7 @@ public sealed class OrderPlacedConsumer(
 
         // Charge (idempotent on order_id — a redelivery returns the existing outcome, never double-charges).
         var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-        var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct);
+        var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct, customerId: msg.CustomerId);
 
         // Reply on payment-results (the Saga), then record the inbox row, then the loop commits the offset.
         await producer.PublishAsync(Topics.PaymentResults, msg.OrderId.ToString(),

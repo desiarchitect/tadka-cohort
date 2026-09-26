@@ -7,6 +7,12 @@ namespace Tadka.Payment.Api.Tests;
 /// </summary>
 public class CardTokenizerTests
 {
+    // A keyed hash needs a key configured before use (mirrors FieldCipherTests) — any fixed test key
+    // works here, since these tests only assert properties of the tokenization, not this exact value.
+    private const string Key = "owMbZYDfyQY0WCnoguPMpVe7Zb/voograkyID97ppuY=";
+
+    public CardTokenizerTests() => CardTokenizer.Configure(Key);
+
     [Fact]
     public void Tokenizing_the_same_card_number_twice_produces_the_same_token()
     {
