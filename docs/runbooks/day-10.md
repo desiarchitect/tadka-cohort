@@ -156,6 +156,24 @@ Write-Host "POST /orders (with token):" (Get-StatusCode -Uri "http://localhost:5
 
 **Key Architectural Security Property:** Notice the payload contains `"customerId":"c1b2c3d4-0001..."`. Even if a malicious user alters that JSON body field to another customer's ID, `OrdersController` ignores body-supplied customer IDs for non-admins and extracts the authenticated caller's identity strictly from the verified token's `sub` claim (`User.UserId()`). Spoofing identity in the request body is impossible.
 
+### How This Is Actually Implemented
+
+Full walkthrough with code — password verification, JWT construction, and where the RSA signing key lives — is in [section 10](#10-how-the-access-token-is-actually-generated-rs256-walkthrough) at the end of this runbook. The short version: [`AuthController.Login`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/AuthController.cs) verifies the password hash, then `TokenService.CreateAccessToken` signs a JWT with an in-memory RSA key. The identity-spoofing defence itself is in [`OrdersController.Create`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/OrdersController.cs):
+```csharp
+var effectiveCustomerId = User.IsAdmin() ? request.CustomerId : (User.UserId() ?? request.CustomerId);
+```
+`User.UserId()` reads the `sub` claim off the *verified* token ([`Auth.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Auth/Auth.cs)) — a non-admin caller's own identity always wins over whatever `customerId` they typed into the JSON body.
+
+### Option Space: The Same Idea in Other Stacks
+
+| | Java (Spring Security) | Node (Express) | Go |
+|---|---|---|---|
+| **Issue an RS256 JWT** | `Jwts.builder().setClaims(claims).signWith(privateKey, SignatureAlgorithm.RS256).compact()` (jjwt), or Nimbus JOSE+JWT for more control over the header | `jsonwebtoken`: `jwt.sign(payload, privateKey, { algorithm: "RS256" })` | `golang-jwt/jwt`: `jwt.NewWithClaims(jwt.SigningMethodRS256, claims).SignedString(privateKey)` |
+| **Reject anonymous writes** | `@PreAuthorize("isAuthenticated()")` or a global `SecurityFilterChain` rule per path pattern | `express-jwt` / `passport-jwt` middleware mounted on the write routes only | A middleware wrapping `http.Handler`, checking the parsed claims context value before calling the next handler |
+| **Trust the token over the body** | Same principle — pull the principal from `SecurityContextHolder`, never from the request DTO, for anything security-relevant | Same — read `req.user.sub` (set by the JWT middleware), never `req.body.customerId`, for a non-admin | Same — read the claim from the request context set by the auth middleware, never the decoded JSON body |
+
+What doesn't change across any of these: the *rule* — never trust a client-supplied identity field once you have a verified token — is a security principle, not a framework feature. Every stack above has a different one-liner for verifying a signature; none of them has a one-liner for "and also don't let the body lie about who's asking."
+
 ---
 
 ## 3. Demo 2 — RBAC vs. Resource Ownership (ADR-031)
@@ -222,6 +240,30 @@ Write-Host "owner1 edits OTHER restaurant menu:" (Get-StatusCode -Uri "http://lo
 > - **401 Unauthorized:** Authentication failed. "Who are you?" (Missing, expired, or invalid token).
 > - **403 Forbidden:** Authorization failed. "We know who you are, but you cannot touch this resource." (Wrong role or not the owner). `Admin` role bypasses ownership.
 
+### How This Is Actually Implemented
+
+The order-ownership check, [`OrdersController.GetById`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/OrdersController.cs):
+```csharp
+if (!User.IsAdmin() && order.CustomerId != User.UserId())
+    return Forbid();
+```
+The restaurant/menu-ownership check is the same shape, factored into a private helper, [`RestaurantsController.OwnsOrAdmin`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/RestaurantsController.cs):
+```csharp
+private bool OwnsOrAdmin(Guid restaurantId) => User.IsAdmin() || User.OwnedRestaurantId() == restaurantId;
+...
+if (!OwnsOrAdmin(id)) return Forbid();
+```
+Both are plain inline `if` statements, not a policy engine, not a permissions table, not a custom `[Authorize]` attribute. At four roles and one ownership rule per resource type, that's the whole mechanism — no framework machinery sits between the `[Authorize]` on the controller (which only checks the role) and this second, explicit ownership check underneath it.
+
+### Option Space: The Same Idea in Other Stacks
+
+| | Java (Spring Security) | Node | Go |
+|---|---|---|---|
+| **RBAC** | `@PreAuthorize("hasRole('Customer')")` — declarative, evaluated by an AOP proxy before the method runs | Express middleware reading `req.user.role`, or NestJS's `@Roles()` guard | A middleware checking a claim off the request context; no attribute/decorator convention exists, so it's written out explicitly |
+| **Resource ownership** | A `PermissionEvaluator` bean wired into `@PreAuthorize("hasPermission(#id, 'Restaurant', 'edit')")` — real machinery, worth it once the rule count grows past a handful of inline checks | **CASL** expresses role *and* ownership as one declarative rule: `can('edit', 'Restaurant', { ownerId: user.id })` — a genuinely different shape from two separate checks, not a 1:1 port | No ownership-rule library in common use; the idiomatic Go answer is the same inline comparison this repo uses, just written in Go |
+
+**What doesn't change:** the 401-vs-403 distinction is HTTP semantics, not framework behaviour — "who are you" failures are always 401, "you're known but not allowed" failures are always 403, in every one of these stacks. Whether the ownership check is a Spring `PermissionEvaluator`, a CASL ability, or a one-line inline comparison is a *complexity* trade-off (worth it once the rule count grows), not a *correctness* one — this repo's inline check at four roles is arguably the more honest code, per the comment already in `RestaurantsController.cs`.
+
 ---
 
 ## 4. Demo 3 — Defense in Depth: Per-Service Validation (ADR-031)
@@ -247,6 +289,50 @@ Write-Host "Payment GET (with token):" (Get-StatusCode -Uri "http://localhost:52
 ```
 
 **What this proves:** Even if an internal service port is directly exposed, it cannot be called anonymously. The Payment service validates the cryptographic signature against the public JWKS endpoint independently. Furthermore, Payment checks that the caller either owns the order or has the `Admin` role (`403` if Rahul attempts to query Priya's payment record).
+
+### How This Is Actually Implemented
+
+Payment.Api never holds a copy of the monolith's signing key — it fetches the *public* half over HTTP and verifies signatures with that, caching it in memory. [`JwksClient.ResolveAsync`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Auth/JwksClient.cs):
+```csharp
+public async Task<SecurityKey?> ResolveAsync(string kid, CancellationToken ct)
+{
+    await EnsureFreshAsync(force: false, ct);
+    if (TryGet(kid, out var key)) return key;
+    await EnsureFreshAsync(force: true, ct);   // kid not found — maybe just rotated, force one refetch
+    return TryGet(kid, out key) ? key : null;
+}
+```
+This is wired into ASP.NET's own JWT validation pipeline in [`Program.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Program.cs):
+```csharp
+options.TokenValidationParameters.IssuerSigningKeyResolver = (_, _, kid, _) =>
+{
+    var key = jwksClient.ResolveAsync(kid, CancellationToken.None).GetAwaiter().GetResult();
+    return key is null ? [] : new SecurityKey[] { key };
+};
+```
+So the framework calls into `JwksClient` every time it needs to verify a signature — Payment.Api never trusts a header, never shares a secret with the monolith, and would keep working even if it were the *only* thing standing between an attacker and the internal network.
+
+The ownership check itself, right next to the query, in a minimal API endpoint rather than a controller — [`Program.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Program.cs):
+```csharp
+app.MapGet("/payments/{orderId:guid}", async (Guid orderId, PaymentDbContext db, HttpContext http) =>
+{
+    var p = await db.Payments.AsNoTracking().FirstOrDefaultAsync(x => x.OrderId == orderId);
+    if (p is null) return Results.NotFound();
+    var isSelfOrAdmin = http.User.IsAdmin() || (p.CustomerId is { } ownerId && ownerId == http.User.UserId());
+    if (!isSelfOrAdmin) return Results.Forbid();
+    return Results.Ok(...);
+}).RequireAuthorization();
+```
+A payment with no `CustomerId` on record is readable by Admin only — there's no owner to compare against, so the safe default is "no non-admin may read this," not "everyone may."
+
+### Option Space: The Same Idea in Other Stacks
+
+| | Java (Spring Security) | Node | Go |
+|---|---|---|---|
+| **Verify against a remote JWKS, with caching** | `NimbusJwtDecoder.withJwkSetUri(uri).build()` — one line; Spring's own decoder fetches, caches, and refreshes keys automatically, no hand-rolled client needed | `jwks-rsa` + `express-jwt`: `jwksClient({ jwksUri })` supplies a `getKey` callback with the same caching behaviour built in | `MicahParks/keyfunc`: `keyfunc.Get(jwksUri)` returns a ready-made `jwt.Keyfunc`, same idea, less DIY than this repo's hand-rolled `JwksClient` |
+| **Per-service ownership check** | Same shape — a plain comparison inside the controller method, or a `PermissionEvaluator` if the rule count justifies it | Same — an inline comparison inside the route handler | Same — an inline comparison inside the handler function |
+
+**What's genuinely different here, worth naming:** Java's and Node's ecosystems both have a mature, one-line JWKS-fetching-and-caching feature built into their mainstream security libraries; this repo's `JwksClient` (~90 lines) exists because .NET's `Microsoft.IdentityModel` gives you the low-level pieces (`IssuerSigningKeyResolver`, `RsaSecurityKey`) but not a ready-made "fetch and cache a JWKS document" client the way Spring or `jwks-rsa` do. Hand-rolling it here is deliberate — it's the whole point of showing the mechanics — but a real .NET production system would likely reach for a library rather than reimplement this.
 
 ---
 
@@ -297,6 +383,48 @@ Every `psql` command in this runbook needs double-quoted column names, because t
 > **Production Reality (Event Sourcing / Kafka):** Past Kafka events already published to topics like `order-placed` cannot be retroactively edited. Architectural mitigations include:
 > 1. **PII Minimization:** Do not include raw phone numbers or physical addresses in Kafka event schemas (publish IDs only).
 > 2. **Crypto-Shredding:** Encrypt PII in event payloads with a per-user key; deleting the user's key renders historical event payloads unreadable.
+
+### How This Is Actually Implemented
+
+Both masking and RTBF live in [`UsersController.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Controllers/UsersController.cs). Masking is a straight ternary at response-build time, not a database-level transform:
+```csharp
+var isSelfOrAdmin = User.IsAdmin() || User.UserId() == id;
+return Ok(new
+{
+    user.Id, user.Name, user.Role,
+    Email = isSelfOrAdmin ? user.Email : PiiMasker.Email(user.Email),
+    Phone = isSelfOrAdmin ? user.Phone : PiiMasker.Phone(user.Phone)
+});
+```
+The masking functions themselves, [`PiiMasker.cs`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Api/Infrastructure/Pii/PiiMasker.cs):
+```csharp
+public static string Phone(string? phone) =>
+    phone.Length <= 5 ? "••" : phone[..3] + new string('•', phone.Length - 5) + phone[^2..];
+public static string Email(string? email) =>
+    (parts[0].Length <= 1 ? parts[0] : parts[0][..1] + "***") + "@" + parts[1];
+```
+Notice the same owner-or-admin check appears here as in Demo 2 and Demo 3 — this repo never centralizes it into a shared policy class; each controller writes it inline, on purpose, at this rule count.
+
+`/forget` is a straight anonymize-in-place, not a delete:
+```csharp
+if (!User.IsAdmin() && User.UserId() != id) return Forbid();
+user.Name = "[deleted]";
+user.Email = $"deleted+{id:N}@tadka.invalid";
+user.Phone = "";
+user.PasswordHash = "";
+user.SavedAddresses.Clear();
+await db.SaveChangesAsync();
+```
+The row still exists — every foreign key from `orders` to this user id still resolves — but nothing personally identifying remains in it.
+
+### Option Space: The Same Idea in Other Stacks
+
+| | Java (Jackson) | Node | Go |
+|---|---|---|---|
+| **Response masking** | A custom `@JsonSerialize(using = MaskingSerializer.class)` annotation on the DTO field — masking happens automatically at serialization time, the controller code never sees it | `class-transformer`'s `@Transform()` decorator, or a custom Nest.js interceptor — same "automatic at serialization" idea | No annotation/decorator convention for this in idiomatic Go — the common answer is exactly this repo's approach: build the response DTO by hand and mask explicitly per field |
+| **RTBF / anonymize** | Same shape — a service method setting placeholder values and saving, whatever the ORM (JPA/Hibernate) | Same — an async function setting placeholder fields via whatever ORM (Prisma/TypeORM) and calling save | Same — a handler function updating the row's fields directly via `database/sql` or an ORM like GORM |
+
+**Worth naming:** Java's and Node's annotation/decorator-based masking is arguably *less* visible at the call site than this repo's explicit ternary — a reviewer scanning `UsersController.Get` sees exactly when masking applies, where a Jackson annotation buried on a DTO field three files away doesn't announce itself the same way. Neither approach is more "correct"; the explicit version trades a few extra lines for something a new team member can read top-to-bottom without knowing the serialization framework's conventions.
 
 ---
 
@@ -420,6 +548,15 @@ if (!string.IsNullOrWhiteSpace(cardNumber))
 }
 ```
 The raw `cardNumber` parameter only exists in this one method's local scope. The `Payment` entity actually saved to the database never has a `CardNumber` field, only `CardToken`/`CardLast4` — there's no column that *could* leak a PAN even by accident. `LogRawCardNumber` is a deliberately built anti-pattern: the one place in the codebase where the raw number touches a logger, gated behind a flag that defaults to `false`.
+
+### Option Space: The Same Idea in Other Stacks
+
+| | Java (Hibernate) | Node | Go |
+|---|---|---|---|
+| **Transparent column encryption** | A JPA `AttributeConverter<String,String>` — same mechanism as EF Core's value converter, called automatically on persist/load; or Hibernate's `@ColumnTransformer` for a database-side function | No transparent-conversion feature the way EF/Hibernate have — a Prisma middleware or a repository-layer wrapper does the encrypt/decrypt by hand around every read/write | No ORM-level converter convention in idiomatic Go — encrypt/decrypt calls are usually explicit in the repository function, same shape as this repo's own `FieldCipher` calls if it weren't wired through `HasConversion` |
+| **Keyed one-way tokenization** | `Mac.getInstance("HmacSHA256")`, `mac.init(new SecretKeySpec(key, "HmacSHA256"))`, `mac.doFinal(cardBytes)` — same primitive, more ceremony to initialize | `crypto.createHmac('sha256', key).update(cardNumber).digest('hex')` — a one-liner, the simplest of the three | `hmac.New(sha256.New, key)`, `mac.Write(cardBytes)`, `mac.Sum(nil)` — same shape as C#'s `HMACSHA256.HashData` |
+
+**What doesn't change:** the *reason* card tokenization is one-way while phone encryption is reversible is a business requirement (support needs to call the customer back; nobody ever needs the raw PAN again once a charge succeeds), not a language or library constraint — every stack above could implement either direction for either field. The asymmetry is a deliberate choice in this codebase, not something HMAC vs AES-GCM forces on you.
 
 ---
 
