@@ -36,6 +36,18 @@ docker compose up -d                       # postgres 5432 + replica 5433 + redi
 docker compose ps                          # confirm all containers are healthy
 ```
 
+Wait for Kafka specifically before starting either app. Kafka takes longer to start than Postgres or Redis, and `docker compose ps` alone does not block on it:
+```bash
+until docker inspect tadka-kafka --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+```
+
+Pre-create the two Kafka topics this branch uses. On a fresh broker with no topics yet, each app subscribes the moment it starts, and if one starts before the other has ever published anything, you will see `Confluent.Kafka.ConsumeException: Subscribed topic not available` logged once a second. It is harmless (the consumer keeps retrying and picks up the topic once it exists) but looks alarming on a first run:
+```bash
+for t in order-placed payment-results; do
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+done
+```
+
 In two separate terminals, run both applications:
 
 ```bash
@@ -205,11 +217,11 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\", \"Phone\"
 
 The database stores random AES-GCM ciphertext blobs (e.g. `4yIKUWKg4386lm9PVjfcsx...`).
 
-Now read the profile via the API as the authenticated owner:
+Now read the profile via the API as the authenticated owner. Use Rahul, not Priya — Demo 4's `/forget` step already anonymized Priya's row, so her phone is empty by this point in the runbook; Rahul's record is still intact:
 
 ```bash
-curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $TOKEN"
-# Decrypted transparently: "phone":"+919876500001"
+curl -s http://localhost:5224/api/v1/users/c1b2c3d4-0002-4000-8000-000000000002 -H "Authorization: Bearer $RAHUL"
+# Decrypted transparently: "phone":"+919876500002"
 ```
 
 **How it works:** An EF Core Value Converter (`FieldCipher`) encrypts on `SaveChanges()` and decrypts on materialization using an AES-256-GCM authenticated cipher with a unique initialization vector (nonce) per write.
@@ -401,11 +413,11 @@ curl -s http://localhost:5240/payments/22222222-2222-4222-8222-222222222222 -H "
 ---
 
 ### Step 4: Teardown
-When finished demonstrating Keycloak:
+When finished demonstrating Keycloak, stop and remove **only** the Keycloak container. `docker compose down` with no service name tears down the *entire* project regardless of `--profile` — verified live, it took Postgres, Redis, Payment DB, and Kafka down too, not just Keycloak. Name the service explicitly instead:
 ```bash
-docker compose --profile auth-prod down
+docker compose --profile auth-prod down keycloak
 ```
-Normal `docker compose up -d` continues to run the lightweight default stack without Keycloak.
+The rest of the default stack (Postgres, Redis, Payment DB, Kafka, Kafka UI) keeps running untouched. Normal `docker compose up -d` continues to work as before, without Keycloak.
 
 ---
 
