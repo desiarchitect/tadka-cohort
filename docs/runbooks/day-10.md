@@ -8,7 +8,27 @@
 
 ## 1. Run it (infra + BOTH apps)
 
-Start the shared infrastructure, then launch both services. The monolith seeds demo users into PostgreSQL on its first boot:
+### Demo Day Fresh Reset (Clean Slate)
+If you want to remove all existing containers, network overlays, and persistent database volumes to ensure a completely clean environment:
+
+**Bash:**
+```bash
+docker compose --profile auth-prod down -v --remove-orphans && docker compose up -d
+docker compose ps
+```
+
+**PowerShell:**
+```powershell
+docker compose --profile auth-prod down -v --remove-orphans; docker compose up -d
+docker compose ps
+```
+
+*(This stops any running services including optional profiles like Keycloak, wipes volume directories `pgdata`, `pgdata_replica`, `payment_pgdata`, `redisdata`, and starts postgres 5432, replica 5433, redis 6379, payment-db 5434, kafka 9092, and kafka-ui 8090 fresh from scratch).*
+
+---
+
+### Standard Launch
+If starting existing containers without wiping data:
 
 ```bash
 git checkout day-10
