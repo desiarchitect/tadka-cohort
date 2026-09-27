@@ -3,11 +3,16 @@
 # The live Azure deploy (deploy/azure, scripts/cloud-up.ps1) pulls these images; it never builds.
 # Images live in GHCR, OUTSIDE the per-session Azure resource group, so they survive `cloud-down`.
 #
-# Tags: ghcr.io/desiarchitect/tadka-<svc>:<git sha>  and  :latest
+# Tags: ghcr.io/desiarchitect/tadka-cohort-<svc>:<git sha>  and  :latest
 #
-# First push creates each package as PRIVATE. Either make the 5 packages public once (GitHub →
-# Packages → tadka-<svc> → Package settings → Change visibility), or pass ghcr_username/ghcr_token to
-# Terraform so Container Apps can pull private images. See docs/runbooks/cloud-deploy.md.
+# Deliberately a DIFFERENT image name than the internal `tadka` repo's own `tadka-<svc>` packages
+# (same GHCR owner, `desiarchitect`, but that package name is already claimed by the private repo's
+# own workflow runs, and this repo's GITHUB_TOKEN has no write access to a package another repo
+# already owns). Built from this PUBLIC repo, so a first push here should default the 5 new
+# `tadka-cohort-<svc>` packages to PUBLIC visibility automatically — verify in Packages after the
+# first run; flip to Public by hand only if it didn't. Point `cloud-up.ps1` at these with
+# `image_prefix = "ghcr.io/desiarchitect/tadka-cohort"` in a gitignored `deploy/azure/my.auto.tfvars`
+# on the repo actually running the deploy. See docs/runbooks/cloud-deploy.md.
 
 name: images
 
@@ -25,7 +30,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE_PREFIX: ghcr.io/desiarchitect/tadka
+  IMAGE_PREFIX: ghcr.io/desiarchitect/tadka-cohort
   DOTNET_NOLOGO: "true"
   DOTNET_CLI_TELEMETRY_OPTOUT: "true"
 
