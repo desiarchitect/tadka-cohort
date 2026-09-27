@@ -17,6 +17,10 @@ scripts the instructor uses (ADR-064).
 
 ## What you need
 
+Never created an Azure account or installed any of this before? [`azure-getting-started.md`](azure-getting-started.md)
+walks the account-creation and first-run steps in more detail than this page does; come back here once
+you're logged in.
+
 1. Your own Azure account (the free account is enough to start). Log in once: `az login`, then
    `az account set -s <your-subscription-id>`.
 2. Terraform >= 1.6 (`winget install Hashicorp.Terraform`) and the Azure CLI (`winget install Microsoft.AzureCLI`).
