@@ -1,0 +1,108 @@
+# Build + test + push the 5 Tadka images to GHCR (ADR-064).
+#
+# The live Azure deploy (deploy/azure, scripts/cloud-up.ps1) pulls these images; it never builds.
+# Images live in GHCR, OUTSIDE the per-session Azure resource group, so they survive `cloud-down`.
+#
+# Tags: ghcr.io/desiarchitect/tadka-cohort-<svc>:<git sha>  and  :latest
+#
+# Deliberately a DIFFERENT image name than the internal `tadka` repo's own `tadka-<svc>` packages
+# (same GHCR owner, `desiarchitect`, but that package name is already claimed by the private repo's
+# own workflow runs, and this repo's GITHUB_TOKEN has no write access to a package another repo
+# already owns). Built from this PUBLIC repo, so a first push here should default the 5 new
+# `tadka-cohort-<svc>` packages to PUBLIC visibility automatically — verify in Packages after the
+# first run; flip to Public by hand only if it didn't. Point `cloud-up.ps1` at these with
+# `image_prefix = "ghcr.io/desiarchitect/tadka-cohort"` in a gitignored `deploy/azure/my.auto.tfvars`
+# on the repo actually running the deploy. See docs/runbooks/cloud-deploy.md.
+
+name: images
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_PREFIX: ghcr.io/desiarchitect/tadka-cohort
+  DOTNET_NOLOGO: "true"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "true"
+
+jobs:
+  test:
+    # Tests use Testcontainers (Postgres, Redis, Kafka); ubuntu-latest runners ship with Docker.
+    # Run the suite twice: with the Day-14 DB retry flag OFF (the default) and ON (ADR-064),
+    # because the cloud `ha` session runs with it ON.
+    name: dotnet test (db retry ${{ matrix.db_retry }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: true
+      matrix:
+        db_retry: ["false", "true"]
+    env:
+      Database__EnableRetryOnFailure: ${{ matrix.db_retry }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore Tadka.slnx
+
+      - name: Test
+        run: dotnet test Tadka.slnx --no-restore -c Release --logger "console;verbosity=normal"
+
+  images:
+    name: build + push ${{ matrix.svc }}
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - svc: api
+            dockerfile: src/Tadka.Api/Dockerfile
+          - svc: payment
+            dockerfile: src/Tadka.Payment.Api/Dockerfile
+          - svc: delivery
+            dockerfile: src/Tadka.Delivery.Api/Dockerfile
+          - svc: restaurant
+            dockerfile: src/Tadka.Restaurant.Api/Dockerfile
+          - svc: gateway
+            dockerfile: src/Tadka.Gateway/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.svc }}:${{ github.sha }}
+            ${{ env.IMAGE_PREFIX }}-${{ matrix.svc }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.svc }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.svc }}
