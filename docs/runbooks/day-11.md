@@ -357,7 +357,7 @@ $env:ASPNETCORE_URLS = "http://localhost:5226"
 Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
 $env:ASPNETCORE_URLS = "http://localhost:5227"
 Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-Remove-Item Env:ConnectionStrings__TadkaDb, Env:ASPNETCORE_URLS
+$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null
 ```
 > **`--no-launch-profile` matters here.** Without it, `dotnet run` applies `launchSettings.json`'s own `applicationUrl` (`:5224`) *after* your `ASPNETCORE_URLS`, so both instances silently try to bind the same port and crash.
 
@@ -385,7 +385,7 @@ $env:ASPNETCORE_URLS = "http://localhost:5226"
 Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
 $env:ASPNETCORE_URLS = "http://localhost:5227"
 Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-Remove-Item Env:ConnectionStrings__TadkaDb, Env:ASPNETCORE_URLS
+$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null
 .\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "VIA PGBOUNCER :6432" -RequestsPerInstance 150
 docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
 ```
