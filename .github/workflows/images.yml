@@ -17,8 +17,10 @@
 name: images
 
 on:
+  # This repo's default branch is day-01, so the Actions "Run workflow" button (which only lists
+  # workflows present on the default branch) never shows this one. A push to day-12 builds instead.
   push:
-    branches: [main]
+    branches: [day-12]
   workflow_dispatch:
 
 permissions:
