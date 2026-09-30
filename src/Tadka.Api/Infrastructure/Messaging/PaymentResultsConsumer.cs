@@ -85,8 +85,20 @@ public sealed class PaymentResultsConsumer(
         }
 
         logger.LogError(ex, "payment-results at {Offset} failed {Attempts}x — routing to DLQ, partition unblocked.", cr.TopicPartitionOffset, _poison.MaxAttempts);
-        await producer.PublishAsync(Topics.PaymentResultsDlq, cr.Message.Key,
-            new DlqMessage(Topics.PaymentResults, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+        try
+        {
+            await producer.PublishAsync(Topics.PaymentResultsDlq, cr.Message.Key,
+                new DlqMessage(Topics.PaymentResults, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+        }
+        catch (Exception dlqEx) when (!ct.IsCancellationRequested)
+        {
+            // Could not quarantine it (broker down). Do NOT commit past it and do NOT let this escape the loop
+            // (an exception out of a catch block would stop the whole host): rewind and try again later.
+            logger.LogError(dlqEx, "Could not publish payment-results at {Offset} to the DLQ — not committing; will retry.", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch (OperationCanceledException) { }
+            return;
+        }
 
         consumer.Commit(cr); // now genuinely unblock: this offset is quarantined, not silently lost
         _poison.Clear(cr.TopicPartitionOffset);

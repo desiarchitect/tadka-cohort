@@ -1,10 +1,10 @@
-using System.Text;
 using FluentValidation;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
 using Tadka.Restaurant.Api;
+using Tadka.Restaurant.Api.Auth;
 using Tadka.Restaurant.Api.Caching;
 using Tadka.Restaurant.Api.Data;
 using Tadka.Restaurant.Api.Messaging;
@@ -65,21 +65,40 @@ if (kafka?.Enabled == true)
     builder.Services.AddHostedService<OrderConfirmedConsumer>();
 }
 
-// Per-service JWT validation (ADR-031, defense in depth — same key as the monolith).
+// Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token the monolith
+// issued, with no shared secret (ADR-067): it fetches Tadka.Api's PUBLIC keys over HTTP (JWKS) and caches them
+// briefly. The network is not a trust boundary, so a direct call to Restaurant needs a valid token.
+builder.Services.Configure<JwksOptions>(builder.Configuration.GetSection(JwksOptions.SectionName));
+var jwksOptions = builder.Configuration.GetSection(JwksOptions.SectionName).Get<JwksOptions>() ?? new();
+builder.Services.AddHttpClient(JwksClient.HttpClientName, client => client.BaseAddress = new Uri(jwksOptions.JwksBaseUrl));
+builder.Services.AddSingleton<JwksClient>();
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
-    // Keep our own claim names ("role"/"sub") — don't remap them to the long WS-* URIs, or
-    // [Authorize(Roles = …)] would never see the role claim (ADR-031, per-service validation).
+    // Keep our own claim names ("role"/"sub"): don't remap them to the long WS-* URIs, or
+    // [Authorize(Roles = ...)] would never see the role claim for a REAL token (ADR-031, per-service validation).
     options.MapInboundClaims = false;
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true, ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "tadka",
         ValidateAudience = true, ValidAudience = builder.Configuration["Jwt:Audience"] ?? "tadka",
         ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:SigningKey"] ?? "")),
         ValidateLifetime = true, RoleClaimType = "role", NameClaimType = "sub"
+        // IssuerSigningKeyResolver is wired below: it needs DI (IHttpClientFactory) that isn't available yet here.
     };
 });
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<JwksClient>((options, jwksClient) =>
+    {
+        options.TokenValidationParameters.IssuerSigningKeyResolver = (_, _, kid, _) =>
+        {
+            if (string.IsNullOrEmpty(kid)) return [];
+            // Blocking on purpose: IssuerSigningKeyResolver is a synchronous callback. The in-memory cache
+            // means this almost always returns instantly without an actual HTTP call.
+            var key = jwksClient.ResolveAsync(kid, CancellationToken.None).GetAwaiter().GetResult();
+            return key is null ? [] : new SecurityKey[] { key };
+        };
+    });
 builder.Services.AddAuthorization();
 
 var app = builder.Build();

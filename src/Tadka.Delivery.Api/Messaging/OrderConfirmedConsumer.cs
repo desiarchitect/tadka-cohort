@@ -78,8 +78,20 @@ public sealed class OrderConfirmedConsumer(
         }
 
         logger.LogError(ex, "order-confirmed at {Offset} failed {Attempts}x — routing to DLQ, partition unblocked.", cr.TopicPartitionOffset, _poison.MaxAttempts);
-        await producer.PublishAsync(Topics.OrderConfirmedDlq, cr.Message.Key,
-            new DlqMessage(Topics.OrderConfirmed, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+        try
+        {
+            await producer.PublishAsync(Topics.OrderConfirmedDlq, cr.Message.Key,
+                new DlqMessage(Topics.OrderConfirmed, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+        }
+        catch (Exception dlqEx) when (!ct.IsCancellationRequested)
+        {
+            // Could not quarantine it (broker down). Do NOT commit past it and do NOT let this escape the loop
+            // (an exception out of a catch block would stop the whole host): rewind and try again later.
+            logger.LogError(dlqEx, "Could not publish order-confirmed at {Offset} to the DLQ — not committing; will retry.", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch (OperationCanceledException) { }
+            return;
+        }
 
         consumer.Commit(cr);
         _poison.Clear(cr.TopicPartitionOffset);
@@ -99,7 +111,10 @@ public sealed class OrderConfirmedConsumer(
             return;
         }
 
-        var result = await scope.ServiceProvider.GetRequiredService<DeliveryService>().AssignAsync(msg.OrderId, ct);
+        // No rider free: AssignAsync parks the order in pending_assignments (durable) and returns null; the
+        // PendingAssignmentSweeper assigns it later. So stamping the Inbox below no longer drops the order.
+        var result = await scope.ServiceProvider.GetRequiredService<DeliveryService>()
+            .AssignAsync(msg.OrderId, ct, msg.CustomerId, msg.Latitude, msg.Longitude);
         if (result is not null)
             await producer.PublishAsync(Topics.DeliveryAssigned, msg.OrderId.ToString(),
                 new DeliveryAssignedMessage(Guid.NewGuid(), msg.OrderId, result.AgentId, result.AgentName), ct);

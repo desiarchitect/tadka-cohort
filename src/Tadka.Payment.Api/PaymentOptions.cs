@@ -40,7 +40,7 @@ public sealed class PaymentOptions
     public bool CrashOnCharge { get; set; }
 
     /// <summary>
-    /// DEMO LEVER (Day 10, ADR-046): when true, deliberately logs the raw card number as a developer
+    /// DEMO LEVER (Day 10, ADR-053): when true, deliberately logs the raw card number as a developer
     /// "just for debugging" mistake would — the exact anti-pattern tokenization exists to prevent.
     /// Default false (the correct behaviour ships by default; flip this on only to show the break).
     /// </summary>

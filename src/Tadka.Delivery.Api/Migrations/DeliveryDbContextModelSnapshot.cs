@@ -46,7 +46,13 @@ namespace Tadka.Delivery.Api.Migrations
                         .HasColumnType("character varying(20)")
                         .HasDefaultValue("Available");
 
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid");
+
                     b.HasKey("Id");
+
+                    b.HasIndex("UserId")
+                        .IsUnique();
 
                     b.ToTable("agents", "delivery");
 
@@ -56,21 +62,24 @@ namespace Tadka.Delivery.Api.Migrations
                             Id = new Guid("f0000000-0000-4000-8000-000000000001"),
                             Name = "Suresh",
                             Phone = "+919876600001",
-                            Status = "Available"
+                            Status = "Available",
+                            UserId = new Guid("f1000000-0000-4000-8000-000000000001")
                         },
                         new
                         {
                             Id = new Guid("f0000000-0000-4000-8000-000000000002"),
                             Name = "Lakshmi",
                             Phone = "+919876600002",
-                            Status = "Available"
+                            Status = "Available",
+                            UserId = new Guid("f1000000-0000-4000-8000-000000000002")
                         },
                         new
                         {
                             Id = new Guid("f0000000-0000-4000-8000-000000000003"),
                             Name = "Imran",
                             Phone = "+919876600003",
-                            Status = "Available"
+                            Status = "Available",
+                            UserId = new Guid("f1000000-0000-4000-8000-000000000003")
                         });
                 });
 
@@ -86,6 +95,9 @@ namespace Tadka.Delivery.Api.Migrations
 
                     b.Property<DateTime>("AssignedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CustomerId")
+                        .HasColumnType("uuid");
 
                     b.Property<DateTime?>("DeliveredAt")
                         .HasColumnType("timestamp with time zone");
@@ -125,6 +137,39 @@ namespace Tadka.Delivery.Api.Migrations
                     b.HasKey("MessageId");
 
                     b.ToTable("inbox_messages", "delivery");
+                });
+
+            modelBuilder.Entity("Tadka.Delivery.Api.Domain.PendingAssignment", b =>
+                {
+                    b.Property<Guid>("OrderId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Attempts")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("timestamp with time zone")
+                        .HasDefaultValueSql("NOW()");
+
+                    b.Property<Guid?>("CustomerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<double>("Latitude")
+                        .HasColumnType("double precision");
+
+                    b.Property<double>("Longitude")
+                        .HasColumnType("double precision");
+
+                    b.HasKey("OrderId");
+
+                    b.HasIndex("CreatedAt");
+
+                    b.ToTable("pending_assignments", "delivery");
                 });
 #pragma warning restore 612, 618
         }

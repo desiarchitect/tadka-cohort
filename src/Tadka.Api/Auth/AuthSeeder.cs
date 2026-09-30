@@ -19,6 +19,11 @@ public static class AuthSeeder
     private static readonly Guid Admin     = new("d0000000-0000-4000-8000-000000000001");
     private static readonly Guid Owner1     = new("e0000000-0000-4000-8000-000000000001");
     private static readonly Guid Owner2     = new("e0000000-0000-4000-8000-000000000002");
+    // Rider logins (role DeliveryAgent). The Delivery service links each of its rider records to one of these
+    // ids (DeliveryAgent.UserId), so a rider can post locations and status for THEIR deliveries only.
+    private static readonly Guid RiderSuresh  = new("f1000000-0000-4000-8000-000000000001");
+    private static readonly Guid RiderLakshmi = new("f1000000-0000-4000-8000-000000000002");
+    private static readonly Guid RiderImran   = new("f1000000-0000-4000-8000-000000000003");
     private static readonly Guid Restaurant1 = new("a1b2c3d4-0001-4000-8000-000000000001"); // Meghana
     private static readonly Guid Restaurant2 = new("a1b2c3d4-0002-4000-8000-000000000002");
 
@@ -29,6 +34,9 @@ public static class AuthSeeder
         await Upsert(db, hasher, Admin,     "Tadka Admin",   "admin@tadka.test",  "+919876500009", UserRole.Admin);
         await Upsert(db, hasher, Owner1,    "Meghana Owner", "owner1@tadka.test", "+919876500011", UserRole.RestaurantOwner, Restaurant1);
         await Upsert(db, hasher, Owner2,    "Owner Two",     "owner2@tadka.test", "+919876500012", UserRole.RestaurantOwner, Restaurant2);
+        await Upsert(db, hasher, RiderSuresh,  "Suresh (rider)",  "suresh.rider@tadka.test",  "+919876600001", UserRole.DeliveryAgent);
+        await Upsert(db, hasher, RiderLakshmi, "Lakshmi (rider)", "lakshmi.rider@tadka.test", "+919876600002", UserRole.DeliveryAgent);
+        await Upsert(db, hasher, RiderImran,   "Imran (rider)",   "imran.rider@tadka.test",   "+919876600003", UserRole.DeliveryAgent);
         await db.SaveChangesAsync();
     }
 

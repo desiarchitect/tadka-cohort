@@ -12,7 +12,10 @@ public class AuthorizationTests(TadkaApiFactory factory) : IClassFixture<TadkaAp
 {
     private readonly TadkaApiFactory _factory = factory;
 
+    private static readonly Guid Meghana = new("a1b2c3d4-0001-4000-8000-000000000001");
+    private static readonly Guid OtherRestaurant = new("a1b2c3d4-0002-4000-8000-000000000002");
     private static readonly Guid Priya = new("c1b2c3d4-0001-4000-8000-000000000001");
+    private static readonly Guid Owner1 = new("e0000000-0000-4000-8000-000000000001");
     // NOTE: the "owner cannot edit another restaurant's menu" RBAC+ownership test moved to
     // Tadka.Restaurant.Api.Tests on Day 12 — that endpoint now lives in the Restaurant service (ADR-036).
 
@@ -50,6 +53,28 @@ public class AuthorizationTests(TadkaApiFactory factory) : IClassFixture<TadkaAp
         // The owner (Priya) can read it → 200.
         var asOwner = Get($"/api/v1/orders/{order.Id}", $"Customer:{Priya}");
         Assert.Equal(HttpStatusCode.OK, (await client.SendAsync(asOwner)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Owner_cannot_advance_status_of_another_restaurants_order_403()  // Demo 2 — RBAC role passes, ownership fails
+    {
+        var client = _factory.CreateClient();
+        // Admin places an order at Meghana (OrderBody.restaurantId = Meghana).
+        var created = await client.PostAsJsonAsync("/api/v1/orders", OrderBody);
+        created.EnsureSuccessStatusCode();
+        var order = await created.Content.ReadFromJsonAsync<OrderResponse>();
+
+        // An owner of a DIFFERENT restaurant tries to advance Meghana's order → 403 (role is fine, ownership isn't).
+        var asOtherOwner = new HttpRequestMessage(HttpMethod.Patch, $"/api/v1/orders/{order!.Id}/status")
+        { Content = JsonContent.Create(new { status = "Confirmed" }) };
+        asOtherOwner.Headers.Add("X-Test-Auth", $"RestaurantOwner:{Guid.NewGuid()}:{OtherRestaurant}");
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(asOtherOwner)).StatusCode);
+
+        // Meghana's own owner CAN advance it → 204.
+        var asOwner = new HttpRequestMessage(HttpMethod.Patch, $"/api/v1/orders/{order.Id}/status")
+        { Content = JsonContent.Create(new { status = "Confirmed" }) };
+        asOwner.Headers.Add("X-Test-Auth", $"RestaurantOwner:{Owner1}:{Meghana}");
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(asOwner)).StatusCode);
     }
 
     [Fact]

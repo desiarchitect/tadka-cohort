@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 namespace Tadka.Api.Infrastructure.Security;
 
 /// <summary>
-/// AES-GCM field-level encryption for at-rest PII columns (ADR-045). Configured once at startup from
+/// AES-GCM field-level encryption for at-rest PII columns (ADR-052). Configured once at startup from
 /// <c>Demo:EncryptPiiAtRest</c> / <c>Demo:EncryptionKey</c> and read by <see cref="Data.Configurations.UserConfiguration"/>
 /// while building the EF model — a static configuration point because <c>IEntityTypeConfiguration&lt;T&gt;</c>
 /// instances created by <c>ApplyConfigurationsFromAssembly</c> have no constructor injection. Each ciphertext

@@ -20,7 +20,7 @@ public static class Topics
 /// <summary>Consumed from Ordering when payment settled and order confirmed.
 /// <see cref="RestaurantId"/> is additive (ADR-050) — use for per-restaurant decisions when present.</summary>
 public sealed record OrderConfirmedMessage(
-    Guid MessageId, Guid OrderId, double Latitude, double Longitude, Guid RestaurantId = default);
+    Guid MessageId, Guid OrderId, double Latitude, double Longitude, Guid RestaurantId = default, Guid? CustomerId = null);
 
 /// <summary>Restaurant accept/reject decision for the order saga (ADR-062).</summary>
 public sealed record RestaurantResponseMessage(

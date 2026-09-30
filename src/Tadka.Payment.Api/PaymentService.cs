@@ -29,7 +29,7 @@ public sealed class PaymentService(
     IOptionsMonitor<PaymentOptions> options,
     ILogger<PaymentService> logger)
 {
-    public async Task<ChargeOutcome> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken = default, string? cardNumber = null)
+    public async Task<ChargeOutcome> ChargeAsync(Guid orderId, Money amount, CancellationToken cancellationToken = default, string? cardNumber = null, Guid? customerId = null)
     {
         // Custom business span (ADR-040): auto-instrumentation gives HTTP/DB spans, but "how long does the
         // charge take?" is a business question only a custom span answers. order.id + amount go on the SPAN
@@ -53,7 +53,7 @@ public sealed class PaymentService(
             return new ChargeOutcome(existing.Status, existing.GatewayReference, existing.FailureReason);
         }
 
-        // Tokenize (ADR-046) the moment the card arrives — cardNumber itself is never logged or stored
+        // Tokenize (ADR-053) the moment the card arrives — cardNumber itself is never logged or stored
         // beyond this point; only the token and last 4 digits survive past this line.
         string? cardToken = null, cardLast4 = null;
         if (!string.IsNullOrWhiteSpace(cardNumber))
@@ -66,6 +66,7 @@ public sealed class PaymentService(
         var payment = new Domain.Payment
         {
             OrderId = orderId,
+            CustomerId = customerId, // resource ownership (ADR-031) — GET /payments/{orderId} checks this
             Amount = amount,
             Method = "UPI",
             Status = PaymentStatus.Pending,

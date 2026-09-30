@@ -16,7 +16,7 @@ public static class Topics
 /// <summary>Consumed from Ordering (via the Outbox) when an order is confirmed — carries what Delivery needs (no back-call).</summary>
 /// <summary><see cref="RestaurantId"/> optional/additive for older messages (ADR-050).</summary>
 public sealed record OrderConfirmedMessage(
-    Guid MessageId, Guid OrderId, double Latitude, double Longitude, Guid RestaurantId = default);
+    Guid MessageId, Guid OrderId, double Latitude, double Longitude, Guid RestaurantId = default, Guid? CustomerId = null);
 
 /// <summary>Published when a rider is assigned (the 3rd participant's Saga reply).</summary>
 public sealed record DeliveryAssignedMessage(Guid MessageId, Guid OrderId, Guid AgentId, string AgentName);

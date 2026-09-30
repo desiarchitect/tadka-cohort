@@ -1,9 +1,9 @@
-using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Scalar.AspNetCore;
 using Tadka.Payment.Api;
+using Tadka.Payment.Api.Auth;
 using Tadka.Payment.Api.Contracts;
 using Tadka.Payment.Api.Data;
 using Tadka.Payment.Api.Domain;
@@ -16,6 +16,13 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Observability (ADR-040): same one-liner as the monolith; gated on OTEL_EXPORTER_OTLP_ENDPOINT.
 builder.AddTadkaTelemetry("Tadka.Payment.Api");
+
+// Card tokenization key (ADR-053, keyed HMAC: an unkeyed hash of a card number is reversible by brute force
+// because the real entropy is tiny). Configured before anything can call Tokenize, same spirit as
+// FieldCipher.Configure in Tadka.Api/Program.cs: a dev-only default, NEVER a real secret; a real deployment
+// supplies Demo:CardTokenizationKey from a KMS / secrets manager, never a config file in source control.
+Tadka.Payment.Api.Infrastructure.CardTokenizer.Configure(
+    builder.Configuration["Demo:CardTokenizationKey"] ?? "owMbZYDfyQY0WCnoguPMpVe7Zb/voograkyID97ppuY=");
 
 builder.Services.AddOpenApi();
 builder.Services.Configure<PaymentOptions>(builder.Configuration.GetSection(PaymentOptions.SectionName));
@@ -51,24 +58,43 @@ if (kafkaOptions?.Enabled == true)
     builder.Services.AddHostedService<RefundRequestedConsumer>();
 }
 
-// Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token with the
-// SAME signing key as the monolith. The network is not a trust boundary — even with no gateway, a direct
-// call to the Payment service's HTTP endpoints needs a valid token.
+// Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token the monolith
+// issued, but with no shared secret (ADR-067): it fetches Tadka.Api's PUBLIC keys over HTTP (JWKS) and caches
+// them briefly. The network is not a trust boundary, so a direct call to Payment needs a valid token.
+builder.Services.Configure<JwksOptions>(builder.Configuration.GetSection(JwksOptions.SectionName));
+var jwksOptions = builder.Configuration.GetSection(JwksOptions.SectionName).Get<JwksOptions>() ?? new();
+builder.Services.AddHttpClient(JwksClient.HttpClientName, client => client.BaseAddress = new Uri(jwksOptions.JwksBaseUrl));
+builder.Services.AddSingleton<JwksClient>();
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
-    // Keep claim names ("role"/"sub") — same as Ordering/Restaurant (ADR-031).
+    // Keep claim names ("role"/"sub") as the monolith writes them. Without this the handler remaps them to
+    // legacy long-form URIs, RoleClaimType below matches nothing against a REAL token, and every role check
+    // silently fails (the test suite's synthetic identity never goes through the remap; see JwksValidationTests).
     options.MapInboundClaims = false;
     options.TokenValidationParameters = new TokenValidationParameters
     {
         ValidateIssuer = true, ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "tadka",
         ValidateAudience = true, ValidAudience = builder.Configuration["Jwt:Audience"] ?? "tadka",
         ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:SigningKey"] ?? "")),
         ValidateLifetime = true,
         RoleClaimType = "role",
         NameClaimType = "sub"
+        // IssuerSigningKeyResolver is wired below: it needs DI (IHttpClientFactory) that isn't available yet here.
     };
 });
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<JwksClient>((options, jwksClient) =>
+    {
+        options.TokenValidationParameters.IssuerSigningKeyResolver = (_, _, kid, _) =>
+        {
+            if (string.IsNullOrEmpty(kid)) return [];
+            // Blocking on purpose: IssuerSigningKeyResolver is a synchronous callback. The in-memory cache
+            // means this almost always returns instantly without an actual HTTP call.
+            var key = jwksClient.ResolveAsync(kid, CancellationToken.None).GetAwaiter().GetResult();
+            return key is null ? [] : new SecurityKey[] { key };
+        };
+    });
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
@@ -110,26 +136,40 @@ app.MapGet("/health/ready", async (PaymentDbContext db) =>
 });
 
 // Canonical public path (ADR-010): /api/v1/payments/** — same grammar as Ordering/Restaurant/Delivery.
+// Charge is Admin-only (ADR-031): the REAL flow charges via the order-placed Kafka consumer, in-process, never
+// over HTTP. This endpoint is a support/ops manual-charge path. Before this, ANY logged-in customer could POST
+// here with someone else's orderId and an amount of their own choosing: a valid token (authentication) is not
+// permission to trigger THIS action (authorization).
 async Task<IResult> Charge(ChargeRequest request, PaymentService payments, CancellationToken ct)
 {
     var outcome = await payments.ChargeAsync(
         request.OrderId,
         new Money(request.Amount, string.IsNullOrWhiteSpace(request.Currency) ? "INR" : request.Currency!),
         ct,
-        request.CardNumber);
+        request.CardNumber,
+        request.CustomerId);
     // Decline/timeout is a BUSINESS outcome (HTTP 200 + Status=Failed); only a DOWN service throws.
     return Results.Ok(new ChargeResponse(request.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason));
 }
 
-async Task<IResult> GetPayment(Guid orderId, PaymentDbContext db)
+// Resource ownership (ADR-031): the customer who placed the order (carried in on the order-placed event as
+// OrderPlacedMessage.CustomerId) or Admin may read it; anyone else with an otherwise-valid token gets 403.
+// A payment with no CustomerId on record (a pre-fix row, or an admin charge that supplied none) is readable
+// by Admin only: there is no owner to compare against, so the safe default is "no non-admin may read this".
+async Task<IResult> GetPayment(Guid orderId, PaymentDbContext db, HttpContext http)
 {
     var p = await db.Payments.AsNoTracking().FirstOrDefaultAsync(x => x.OrderId == orderId);
-    return p is null
-        ? ProblemDetailsExtensions.NotFoundProblem("Payment", orderId)
-        : Results.Ok(new ChargeResponse(p.OrderId, p.Status.ToString(), p.GatewayReference, p.FailureReason));
+    if (p is null)
+        return ProblemDetailsExtensions.NotFoundProblem("Payment", orderId);
+
+    var isSelfOrAdmin = http.User.IsAdmin() || (p.CustomerId is { } ownerId && ownerId == http.User.UserId());
+    if (!isSelfOrAdmin)
+        return Results.Forbid();
+
+    return Results.Ok(new ChargeResponse(p.OrderId, p.Status.ToString(), p.GatewayReference, p.FailureReason));
 }
 
-app.MapPost("/api/v1/payments/charge", Charge).RequireAuthorization();
+app.MapPost("/api/v1/payments/charge", Charge).RequireAuthorization(policy => policy.RequireRole("Admin"));
 app.MapGet("/api/v1/payments/{orderId:guid}", GetPayment).RequireAuthorization();
 
 app.Run();

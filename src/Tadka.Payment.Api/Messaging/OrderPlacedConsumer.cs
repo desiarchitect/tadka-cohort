@@ -94,8 +94,20 @@ public sealed class OrderPlacedConsumer(
         }
 
         logger.LogError(ex, "order-placed at {Offset} failed {Attempts}x — routing to DLQ, partition unblocked.", cr.TopicPartitionOffset, _poison.MaxAttempts);
-        await producer.PublishAsync(Topics.OrderPlacedDlq, cr.Message.Key,
-            new DlqMessage(Topics.OrderPlaced, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+        try
+        {
+            await producer.PublishAsync(Topics.OrderPlacedDlq, cr.Message.Key,
+                new DlqMessage(Topics.OrderPlaced, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+        }
+        catch (Exception dlqEx) when (!ct.IsCancellationRequested)
+        {
+            // Could not quarantine it (broker down). Do NOT commit past it and do NOT let this escape the loop
+            // (an exception out of a catch block would stop the whole host): rewind and try again later.
+            logger.LogError(dlqEx, "Could not publish order-placed at {Offset} to the DLQ — not committing; will retry.", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch (OperationCanceledException) { }
+            return;
+        }
 
         consumer.Commit(cr); // now genuinely unblock: this offset is quarantined, not silently lost
         _poison.Clear(cr.TopicPartitionOffset);
@@ -129,7 +141,7 @@ public sealed class OrderPlacedConsumer(
             try
             {
                 var payments = scope.ServiceProvider.GetRequiredService<PaymentService>();
-                var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct);
+                var outcome = await payments.ChargeAsync(msg.OrderId, new Money(msg.Amount, msg.Currency), ct, customerId: msg.CustomerId);
 
                 var result = new PaymentResultMessage(
                     Guid.NewGuid(), msg.OrderId, outcome.Status.ToString(), outcome.GatewayReference, outcome.FailureReason);

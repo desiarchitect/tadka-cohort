@@ -182,27 +182,65 @@ if (kafkaOptions?.Enabled == true)
 // validates the SAME key). Authorization is RBAC (the `role` claim) + resource-ownership checks done in
 // the controllers (the `sub` / `restaurantId` claims).
 builder.Services.Configure<Tadka.Api.Auth.JwtOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName));
+builder.Services.Configure<Tadka.Api.Auth.AuthRateLimitOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.AuthRateLimitOptions.SectionName));
+builder.Services.Configure<Tadka.Api.Auth.AccountLockoutOptions>(builder.Configuration.GetSection(Tadka.Api.Auth.AccountLockoutOptions.SectionName));
 builder.Services.Configure<Tadka.Api.Middleware.LoadSheddingOptions>(
     builder.Configuration.GetSection(Tadka.Api.Middleware.LoadSheddingOptions.SectionName));
 builder.Services.Configure<Tadka.Api.Middleware.BackpressureOptions>(
     builder.Configuration.GetSection(Tadka.Api.Middleware.BackpressureOptions.SectionName));
+
+// Owns the RSA signing key(s) (ADR-067). Created directly (not resolved from the container) so the exact same
+// instance backs both DI (TokenService, AuthController, the JWKS endpoint) and the closure the AddJwtBearer
+// resolver below captures. Keys live in this process only: with several replicas each would hold its OWN key, so
+// a real deployment loads the key from a KMS / secret store that every replica shares (ADR-067 Trade-off).
+// With Jwt:SigningKeyPem set (PEM, or base64 PKCS#8) every replica signs with and publishes the SAME key, which
+// is what scale-out behind a load balancer needs; Jwt:PreviousSigningKeyPem keeps the last key verifying during a
+// rollover. Unset, the store generates its own key (one instance, tests, local dev).
+var sharedSigningKey = builder.Configuration["Jwt:SigningKeyPem"];
+var signingKeys = string.IsNullOrWhiteSpace(sharedSigningKey)
+    ? new Tadka.Api.Auth.SigningKeyStore()
+    : new Tadka.Api.Auth.SigningKeyStore(sharedSigningKey, builder.Configuration["Jwt:PreviousSigningKeyPem"]);
+builder.Services.AddSingleton(signingKeys);
 builder.Services.AddSingleton<Tadka.Api.Auth.TokenService>();
+builder.Services.AddScoped<Tadka.Api.Auth.RefreshTokenService>();
 builder.Services.AddSingleton<Microsoft.AspNetCore.Identity.IPasswordHasher<Tadka.Api.Domain.Users.User>,
     Microsoft.AspNetCore.Identity.PasswordHasher<Tadka.Api.Domain.Users.User>>();
+
+// Tight limit on the credential endpoints (ADR-065): 5 per 10 s per IP. Redis-backed (shared by every replica)
+// when Redis is configured, in-process otherwise; see AuthThrottle.
+var authRateLimit = builder.Configuration.GetSection(Tadka.Api.Auth.AuthRateLimitOptions.SectionName)
+    .Get<Tadka.Api.Auth.AuthRateLimitOptions>() ?? new();
+builder.Services.AddSingleton<Tadka.Api.Auth.IAuthThrottle>(sp =>
+{
+    var window = TimeSpan.FromSeconds(authRateLimit.WindowSeconds);
+    var mux = sp.GetService<StackExchange.Redis.IConnectionMultiplexer>();
+    Tadka.Api.Infrastructure.RateLimiting.IRateLimiter limiter = mux is not null
+        ? new Tadka.Api.Infrastructure.RateLimiting.RedisFixedWindowRateLimiter(mux, authRateLimit.PermitLimit, window)
+        : new Tadka.Api.Auth.InProcessFixedWindowRateLimiter(authRateLimit.PermitLimit, window);
+    return new Tadka.Api.Auth.AuthThrottle(limiter);
+});
+builder.Services.AddScoped<Tadka.Api.Auth.AuthThrottleFilter>();
 
 var jwt = builder.Configuration.GetSection(Tadka.Api.Auth.JwtOptions.SectionName).Get<Tadka.Api.Auth.JwtOptions>() ?? new();
 builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        // Keep our own claim names ("role"/"sub"); don't remap to the long WS-* URIs, or
-        // [Authorize(Roles = â€¦)] would never see the role claim from our JsonWebToken (ADR-030/031).
+        // Keep our own claim names ("role"/"sub"); don't remap them to the long WS-* URIs, or RoleClaimType = "role"
+        // below matches nothing for a REAL token and every [Authorize(Roles = ...)] silently fails, while the test
+        // suite's synthetic TestAuthHandler identity (which never goes through this remap) keeps passing.
         options.MapInboundClaims = false;
         options.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
             ValidateIssuer = true, ValidIssuer = jwt.Issuer,
             ValidateAudience = true, ValidAudience = jwt.Audience,
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(System.Text.Encoding.UTF8.GetBytes(jwt.SigningKey)),
+            // Resolve by the token's `kid` against the SAME key store the JWKS endpoint publishes from (ADR-067):
+            // this process does not need an HTTP hop to reach its own store, but it still goes through the same
+            // kid-keyed public-key lookup every other verifier uses.
+            IssuerSigningKeyResolver = (_, _, kid, _) =>
+                signingKeys.Find(kid) is { } key
+                    ? [new Microsoft.IdentityModel.Tokens.RsaSecurityKey(key.Rsa) { KeyId = key.Kid }]
+                    : [],
             ValidateLifetime = true,
             NameClaimType = "sub",
             RoleClaimType = "role"
@@ -297,6 +335,11 @@ if (!string.IsNullOrWhiteSpace(instanceName))
 
 app.UseAuthorization();
 app.MapControllers();
+
+// Standard OIDC/JWKS discovery shape (ADR-067): anonymous, publishes only PUBLIC keys (the current one plus any
+// still in the grace window). Payment, Delivery and Restaurant fetch this instead of holding a signing secret.
+app.MapGet("/.well-known/jwks.json", (Tadka.Api.Auth.SigningKeyStore keys) =>
+    Results.Ok(Tadka.Api.Auth.JwkConverter.ToDocument(keys.AllForVerification))).AllowAnonymous();
 
 app.Run();
 

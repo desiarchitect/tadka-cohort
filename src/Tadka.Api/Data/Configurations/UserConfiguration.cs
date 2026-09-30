@@ -17,7 +17,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(u => u.Name).IsRequired().HasMaxLength(100);
         builder.Property(u => u.Email).IsRequired().HasMaxLength(200);
 
-        // Field-level PII encryption at rest (ADR-045). FieldCipher is configured once at startup from
+        // Field-level PII encryption at rest (ADR-052). FieldCipher is configured once at startup from
         // Demo:EncryptPiiAtRest (default true — the correct behaviour ships by default; the break demo
         // flips it off). 250 chars accommodates AES-GCM's nonce+tag+ciphertext, base64-encoded, comfortably
         // wider than any plaintext phone number ever needs, and stays fixed regardless of the flag so a
@@ -38,11 +38,15 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.HasIndex(u => u.Email).IsUnique();
         builder.Property(u => u.OwnedRestaurantId); // RestaurantOwner → their restaurant (ADR-031)
 
+        // Brute-force lockout counters (ADR-065).
+        builder.Property(u => u.FailedLoginAttempts).HasDefaultValue(0);
+        builder.Property(u => u.LockedUntil);
+
         builder.HasMany(u => u.SavedAddresses).WithOne().HasForeignKey(ua => ua.UserId).OnDelete(DeleteBehavior.Cascade);
 
         // The Day-1 seed customer (Priya, GUID matches docs + cohort-prep/day-03 sample payloads) used to
         // be seeded here via HasData. Moved to AuthSeeder.SeedAsync (runtime, idempotent upsert) because
-        // HasData is incompatible with a non-deterministic value converter (ADR-045's AES-GCM encryption
+        // HasData is incompatible with a non-deterministic value converter (ADR-052's AES-GCM encryption
         // uses a fresh random nonce per write, so the encrypted seed value can never match a value frozen
         // into a migration snapshot — EF detects "model changes every time it's built" and refuses to
         // start). AuthSeeder already creates every other demo user this way; Priya is no longer a special case.

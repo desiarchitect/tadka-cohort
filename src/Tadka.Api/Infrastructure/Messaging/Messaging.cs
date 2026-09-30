@@ -30,14 +30,16 @@ public sealed record RestaurantSnapshotMessage(
     Guid MessageId, Guid RestaurantId, string Name, bool IsActive, AddressSnapshot Address, List<MenuItemSnapshot> Menu);
 
 /// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.
-/// <see cref="Version"/> is the envelope version (ADR-050): schema evolution is additive-only.</summary>
-public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, int Version = 1);
+/// <see cref="Version"/> is the envelope version (ADR-050): schema evolution is additive-only.
+/// <see cref="CustomerId"/> is additive too: Payment stores it so it can answer "is this YOUR payment?" (ADR-031).</summary>
+public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, int Version = 1, Guid? CustomerId = null);
 
 /// <summary>Published by Ordering (via the Outbox) when an order auto-confirms after payment — carries what
 /// consumers need without a back-call (ADR-008). Consumed by Delivery (rider) and Restaurant (accept/reject, ADR-062).
-/// <see cref="RestaurantId"/> is additive (ADR-050): older producers omit it; consumers treat default as unknown.</summary>
+/// <see cref="RestaurantId"/> and <see cref="CustomerId"/> are additive (ADR-050): older producers omit them; consumers
+/// treat default/null as unknown. Delivery keeps CustomerId so it can tell the customer who placed an order from everyone else (ADR-031).</summary>
 public sealed record OrderConfirmedMessage(
-    Guid MessageId, Guid OrderId, double Latitude, double Longitude, Guid RestaurantId = default);
+    Guid MessageId, Guid OrderId, double Latitude, double Longitude, Guid RestaurantId = default, Guid? CustomerId = null);
 
 /// <summary>Published by the Payment service after it settles a charge. Consumed by Ordering (the Saga reaction).</summary>
 public sealed record PaymentResultMessage(Guid MessageId, Guid OrderId, string Status, string? GatewayReference, string? FailureReason);

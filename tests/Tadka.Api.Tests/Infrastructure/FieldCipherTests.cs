@@ -3,7 +3,7 @@ using Tadka.Api.Infrastructure.Security;
 namespace Tadka.Api.Tests.Infrastructure;
 
 /// <summary>
-/// Pure unit tests for AES-GCM field-level encryption (ADR-045) — no database needed.
+/// Pure unit tests for AES-GCM field-level encryption (ADR-052) — no database needed.
 /// </summary>
 public class FieldCipherTests
 {

@@ -39,6 +39,7 @@ public class TadkaDbContext : DbContext
     // Identity domain
     public DbSet<User> Users => Set<User>();
     public DbSet<UserAddress> UserAddresses => Set<UserAddress>();
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>(); // rotation + reuse detection (ADR-061)
 
     // Messaging (Outbox/Inbox/Saga) — configuration applied via ApplyConfigurationsFromAssembly
     public DbSet<SagaInstance> SagaInstances => Set<SagaInstance>();

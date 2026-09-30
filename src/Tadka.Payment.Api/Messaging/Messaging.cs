@@ -15,7 +15,7 @@ public static class Topics
 
 /// <summary>Consumed from Ordering: an order to charge. <see cref="Version"/> is the envelope version
 /// (ADR-050) — schema evolution here is additive-only, never a rename/removal of an existing field.</summary>
-public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, int Version = 1);
+public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, int Version = 1, Guid? CustomerId = null);
 
 /// <summary>Published back to Ordering after settling the charge (the Saga reply).</summary>
 public sealed record PaymentResultMessage(Guid MessageId, Guid OrderId, string Status, string? GatewayReference, string? FailureReason);

@@ -65,7 +65,7 @@ public sealed class ConfirmOrderOnPaymentCompleted(
         // the SAME transaction as the confirm — the Delivery service consumes it and assigns a rider. The
         // event carries the delivery lat/long so Delivery needs no back-call (ADR-008).
         var confirmed = new OrderConfirmedMessage(
-            Guid.NewGuid(), order.Id, order.DeliveryAddress.Latitude, order.DeliveryAddress.Longitude, order.RestaurantId);
+            Guid.NewGuid(), order.Id, order.DeliveryAddress.Latitude, order.DeliveryAddress.Longitude, order.RestaurantId, order.CustomerId);
         db.Set<OutboxMessage>().Add(new OutboxMessage
         {
             Topic = Topics.OrderConfirmed,
