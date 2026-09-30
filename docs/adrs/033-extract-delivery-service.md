@@ -35,3 +35,10 @@ We will extract the Delivery domain into its own independent service (`Tadka.Del
 
 ## Revisit When
 We will re-evaluate the overall system architecture once the final core domain (Restaurant/Catalog) is extracted. If the distributed workflow (Ordering -> Payment -> Delivery) becomes too complex to trace or manage via choreography, we will evaluate introducing Saga Orchestration.
+
+## Addendum (Day 11 fixes): ownership, riders as users, parked orders
+
+- **Ownership (ADR-031) in this service too.** `/track` is readable by the customer who placed the order, the rider on it, or Admin; `/location` and the new `PATCH /status` only by the rider on it or Admin. Delivery has no orders table, so `order-confirmed` now carries `CustomerId` (event metadata, not a credential) and the assignment stores it. Each rider record links to its login (`DeliveryAgent.UserId`); the monolith seeds matching `DeliveryAgent` users. Delivery's JWT setup sets `MapInboundClaims = false`, without which `IsInRole(...)` is false for every real token (`RealJwtAuthorizationTests`).
+- **No rider free no longer drops the order.** It is parked in `pending_assignments` and `PendingAssignmentSweeper` retries it every `Delivery:PendingRetrySeconds` (5). `Delivered`/`Cancelled` release the rider, so riders are reused.
+- **Atomic rider claim.** The sweeper and the consumer now assign concurrently, so claiming a rider is `UPDATE ... WHERE Status = 'Available'` inside the assignment's transaction (run inside the execution strategy, ADR-064); the order's unique index never protected the rider.
+- **Still open:** `delivery-assigned` has no Outbox and no consumer; assignment is first-available, not nearest.

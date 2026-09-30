@@ -24,7 +24,7 @@ We will implement a hybrid authorization model utilizing **RBAC combined with Re
 
 ### Negative / Risks
 - **Custom Code:** Resource ownership rules require custom logic in each service. As the number of roles or resource types grows, this can become a maintenance burden.
-- **Distributed Configuration:** All services must have access to the JWT signing keys (pushing the urgency for asymmetric RS256 keys).
+- **Distributed Configuration:** Every service needs a way to verify the token. Originally that meant a shared signing secret in every service; ADR-067 replaced it with RS256 + a JWKS endpoint, so no service except the issuer holds a signing secret any more.
 
 ## Alternatives Considered
 - **Gateway-Only Authorization:** Terminating auth at a gateway and forwarding an `X-User-Id` header was rejected. This creates a critical vulnerability where internal network access allows full system compromise via header forgery.
@@ -33,3 +33,7 @@ We will implement a hybrid authorization model utilizing **RBAC combined with Re
 
 ## Revisit When
 We will adopt a centralized Policy Engine (e.g., OPA/Rego) or ABAC when authorization rules become highly contextual (e.g., time-of-day restrictions, transaction amount limits) or when compliance requires policies to be audited and managed outside of application code.
+
+## Update (Day 10 hardening, carried onto this branch)
+- **2026-09-21:** ADR-067 changes HOW Payment, Delivery and Restaurant verify (a JWKS-fetched public key instead of a shared symmetric secret). The per-service, defense-in-depth DECISION on this page is unchanged; only the verification mechanism it relies on moved.
+- **Ownership is now enforced on every service's own endpoints:** `PATCH /orders/{id}/status` for a `RestaurantOwner` requires the order to belong to their restaurant; `POST /payments/charge` is Admin-only and `GET /payments/{orderId}` is owner-or-Admin (Payment keeps the `CustomerId` from the `order-placed` event); Delivery's `/track`, `/location` and `/status` are customer/rider/Admin scoped (ADR-033 addendum). Each rule lives where the data lives, because each service has its own database.

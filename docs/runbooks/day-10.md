@@ -111,7 +111,7 @@ dotnet test    # 44/44 — monolith 33 (incl. 4 auth/ownership + 4 FieldCipher) 
 
 ## Troubleshooting
 - **Login returns 401 for a seeded user:** the startup `AuthSeeder` sets real hashes on first boot; if you migrated before Day 10, `docker compose down -v && docker compose up -d` then `dotnet run` to re-seed.
-- **All calls 401 after adding a token:** check the `Jwt:SigningKey` matches in both services' `appsettings.json` (it must be identical for the Payment service to validate the monolith's token).
+- **All calls 401 after adding a token:** check that the monolith is reachable at each service's `Jwt:JwksBaseUrl` (default `http://localhost:5224`): Payment, Delivery (and Restaurant) fetch its public keys from `/.well-known/jwks.json` and hold no signing secret. A monolith restart issues new keys, so log in again.
 - **`FormatException` on startup (`not a valid Base-64 string`):** you switched `Demo:EncryptPiiAtRest` without resetting the volume — the DB has values encoded under the OLD state. `docker compose down -v && docker compose up -d`, then restart the app.
 
 ➡️ Next (Day 11): extract the **Delivery** service (with real-time location tracking / Redis-geo) and front the services with the **API gateway** (YARP).

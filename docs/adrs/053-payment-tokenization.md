@@ -11,13 +11,21 @@ A genuine checkout flow has a raw Primary Account Number (PAN) arrive at the Pay
 ## Decision
 
 `ChargeRequest.CardNumber` carries the raw PAN as a client would send it at checkout. The **very first thing** `PaymentService.ChargeAsync` does with
-it is call `CardTokenizer.Tokenize`, which returns an opaque token (a SHA-256 digest, prefixed
+it is call `CardTokenizer.Tokenize`, which returns an opaque token (a **keyed HMAC-SHA-256** digest, prefixed
 `TOK-`) and the last 4 digits — already public on the physical card and every receipt. Only the
 token and last 4 are ever assigned to the `Payment` entity; the raw `cardNumber` parameter is
 never referenced again after that line, is never logged (except via a restricted debug flag that must strictly never be enabled in production), and there is no PAN column anywhere in the `payment` schema.
 
-Tokenization here is **one-way** (a hash, not encryption) — there is no legitimate reason for
+Tokenization here is **one-way** (a keyed hash, not encryption) — there is no legitimate reason for
 Tadka's Payment service to ever recover a raw card number once it has been charged.
+
+**Why keyed.** A card number has far less entropy than its 16 digits suggest: the issuer's BIN (the first 6 to 8
+digits) is public, the last 4 digits are stored right next to the token, and the final digit is a Luhn check digit.
+That leaves roughly a million candidates per BIN, and the Luhn check discards 90% of them, so an *unkeyed* SHA-256 of a
+card number can be brute-forced from a leaked table in well under a second. An HMAC keyed with a secret that is never
+stored beside the tokens (`Demo:CardTokenizationKey`, configured once at startup by `CardTokenizer.Configure`, a dev-only
+default in this repo and a KMS / secrets-manager value in production) removes that attack: without the key an attacker
+cannot compute a single candidate digest to compare against a stolen token.
 
 ## Consequences
 
@@ -29,7 +37,7 @@ Tadka's Payment service to ever recover a raw card number once it has been charg
 ### Negative
 - A one-way token cannot be un-tokenized to retry a charge with the "same card" through a
   *different* payment gateway.
-- `CardTokenizer` currently uses an unsalted hash of the digits — two different customers with the same physical card number would produce the same token. This is an accepted limitation before migrating to a true production tokenization vault.
+- The token is deterministic per card under ONE key, so two customers with the same physical card number get the same token (by design: it is how a saved card keeps a stable identifier). It also means **rotating the key changes every token**: a tokenization key needs key versioning (keep retired keys for lookup) or a re-tokenization migration, unlike a signing key whose old tokens simply expire. Tokens minted before the key existed would not match either.
 
 ### Risks
 - If raw card data is accidentally logged during debugging, it instantly breaches PCI compliance. The raw PAN must strictly be scrubbed from all diagnostic output.
@@ -56,5 +64,5 @@ Tadka's Payment service to ever recover a raw card number once it has been charg
 
 ## References
 - ADR-024/026 (Payment extraction, database-per-service)
-- ADR-045 (field-level PII encryption)
+- ADR-052 (field-level PII encryption)
 - `src/Tadka.Payment.Api/Infrastructure/CardTokenizer.cs`, `PaymentService.cs`.

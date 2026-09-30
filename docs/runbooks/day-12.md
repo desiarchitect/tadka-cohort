@@ -429,6 +429,120 @@ curl -s -o /dev/null -w "menu via gateway: %{http_code}\n" http://localhost:8080
 
 ---
 
+## 9.1. Identity and ownership hardening behind the four services (ADR-030, 031, 052, 053, 065 to 067)
+
+**What you're proving:** with four services each verifying tokens and each holding its own data, *how* they verify and *who may touch what* matters more than it did with one. Nothing in this section shares a secret, and every ownership rule lives in the service that owns the data.
+
+Set up once (a fresh order that flows through payment, confirmation and rider assignment, plus Rahul and the rider on that order):
+```bash
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
+until [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN")" = "200" ]; do sleep 2; done   # rider assigned
+RAHUL=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"rahul@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+TRACK=$(curl -s http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN")
+RIDER_EMAIL="$(echo "$TRACK" | sed -E 's/.*"agentName":"([^"]+)".*/\1/' | tr 'A-Z' 'a-z').rider@tadka.test"
+RIDER=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d "{\"email\":\"$RIDER_EMAIL\",\"password\":\"Password123!\"}" | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+```
+```powershell
+$ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
+do { Start-Sleep -Seconds 2 } until ((Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers $H) -eq 200)   # rider assigned
+$RAHUL = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"rahul@tadka.test","password":"Password123!"}').accessToken
+$track = Invoke-RestMethod -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers $H
+$riderEmail = "$($track.agentName.ToLower()).rider@tadka.test"
+$RIDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body (@{ email = $riderEmail; password = "Password123!" } | ConvertTo-Json)).accessToken
+$HR = @{ Authorization = "Bearer $RIDER" }
+```
+
+### RS256 + JWKS: no service holds a signing secret (ADR-067)
+`Tadka.Api` signs access tokens with an RSA private key that never leaves its process and publishes the public keys. Payment, Delivery and Restaurant each fetch them (cached 5 minutes, `Jwt:JwksCacheMinutes`) and verify by `kid`, so a compromised Delivery can verify tokens but cannot mint one. There is no `Jwt:SigningKey` in any `appsettings.json`.
+```bash
+curl -s http://localhost:5224/.well-known/jwks.json           # the public keys (kty, kid, n, e)
+ADMIN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+curl -s -X POST http://localhost:5224/api/v1/auth/rotate-signing-key -H "Authorization: Bearer $ADMIN"   # Admin only; a fresh key becomes current
+curl -s -o /dev/null -w "old token after one rotation: %{http_code}\n" http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"
+```
+```powershell
+Invoke-RestMethod -Uri http://localhost:5224/.well-known/jwks.json
+$ADMIN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"admin@tadka.test","password":"Password123!"}').accessToken
+Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/rotate-signing-key -Method Post -Headers @{ Authorization = "Bearer $ADMIN" }
+"old token after one rotation: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers $H)
+```
+The monolith keeps the current key plus one previous, so a token signed before ONE rotation still verifies (the `track` call returns 200, not 401); after a second rotation that token is 401. A monolith restart generates new keys, so every token signed before the restart is rejected until the client refreshes.
+
+**More than one monolith replica (the `scale-out` profile) needs the same key everywhere.** A key generated in one process is unknown to its siblings, so a token signed by `api-1` would be rejected by `api-2`. The compose `scale-out` profile therefore sets `Jwt__SigningKeyPem` (a dev-only key) on all three replicas: every replica signs with, and publishes, the same key, and the `kid` is derived from the public key so it matches everywhere. In that mode `rotate-signing-key` answers **409**, because rotation means deploying a new key (new key in the secret, old one as `Jwt:PreviousSigningKeyPem`), not calling one replica. The Terraform and Azure stacks generate an RSA key and give it to the monolith only.
+> Pinned by `SharedSigningKeyTests` (two replicas, one key: same `kid`, cross-verify, 409 on rotate); the multi-replica compose run itself was not exercised here.
+
+### Access and refresh tokens, and a rate-limited login (ADR-066, ADR-065)
+Login returns a 15-minute access token and a 7-day refresh token. `POST /api/v1/auth/refresh` consumes the presented refresh token and returns a new pair; presenting an already-used one revokes the whole family (a theft signal). `POST /api/v1/auth/logout` revokes the caller's family (the current access token still works until it expires). The credential endpoints allow **5 requests per 10 seconds per IP** (`Auth:RateLimit`, counted in Redis so every replica shares one budget) and lock an account for 60 seconds after 5 wrong passwords (`Auth:Lockout`). **A script that logs several users in back to back can hit 429**: space the logins out, or raise `Auth:RateLimit:PermitLimit` for a demo run.
+
+### Ownership, enforced where the data lives (ADR-031)
+Payment, Delivery and the order-status endpoint each refuse a valid token that is not the right person's:
+```bash
+curl -s -o /dev/null -w "Rahul reads Priya's payment: %{http_code}\n" http://localhost:5240/api/v1/payments/$ORDER -H "Authorization: Bearer $RAHUL"   # 403
+curl -s -o /dev/null -w "Priya reads her payment: %{http_code}\n" http://localhost:5240/api/v1/payments/$ORDER -H "Authorization: Bearer $TOKEN"            # 200
+curl -s -o /dev/null -w "Priya triggers a charge: %{http_code}\n" -X POST http://localhost:5240/api/v1/payments/charge -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "{\"orderId\":\"$ORDER\",\"amount\":1}"   # 403 (Admin only)
+curl -s -o /dev/null -w "Rahul tracks Priya's order: %{http_code}\n" http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $RAHUL"   # 403
+curl -s -o /dev/null -w "Rahul moves Priya's rider: %{http_code}\n" -X PUT http://localhost:5250/api/v1/deliveries/$ORDER/location -H "Authorization: Bearer $RAHUL" -H "Content-Type: application/json" -d '{"latitude":12.0,"longitude":75.0}'   # 403
+curl -s -o /dev/null -w "the rider moves their own dot: %{http_code}\n" -X PUT http://localhost:5250/api/v1/deliveries/$ORDER/location -H "Authorization: Bearer $RIDER" -H "Content-Type: application/json" -d '{"latitude":12.95,"longitude":77.64}'   # 204 (needs Redis)
+```
+```powershell
+"Rahul reads Priya's payment: " + (Get-StatusCode -Uri "http://localhost:5240/api/v1/payments/$ORDER" -Headers @{ Authorization = "Bearer $RAHUL" })   # 403
+"Priya reads her payment: " + (Get-StatusCode -Uri "http://localhost:5240/api/v1/payments/$ORDER" -Headers $H)   # 200
+"Priya triggers a charge: " + (Get-StatusCode -Uri http://localhost:5240/api/v1/payments/charge -Method Post -Headers $H -Body "{`"orderId`":`"$ORDER`",`"amount`":1}")   # 403 (Admin only)
+"Rahul tracks Priya's order: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers @{ Authorization = "Bearer $RAHUL" })   # 403
+"Rahul moves Priya's rider: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/location" -Method Put -Headers @{ Authorization = "Bearer $RAHUL" } -Body '{"latitude":12.0,"longitude":75.0}')   # 403
+"the rider moves their own dot: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/location" -Method Put -Headers $HR -Body '{"latitude":12.95,"longitude":77.64}')   # 204 (needs Redis)
+```
+Payment keeps the customer from the `order-placed` event (`OrderPlacedMessage.CustomerId`) and Delivery keeps it from `order-confirmed`, because neither service has an orders table to look it up in. A `RestaurantOwner` may only advance the status of orders at their own restaurant. Each rider record links to a login (`DeliveryAgent.UserId`), which is how Delivery answers "is the caller the rider on this order?".
+> Pinned by `AuthorizationTests`, `PaymentServiceTests`, `DeliveryOwnershipTests`, and by `RealJwtAuthorizationTests` / `JwksValidationTests` (real RS256 tokens through each service's real JWT handler: the synthetic test identity never goes through the handler's claim renaming, so only these catch a missing `MapInboundClaims = false`). An order placed before this change has no `CustomerId` on its payment or assignment, so its owner gets 403 too: the safe default when there is no owner to compare against.
+
+### A busy dinner rush no longer drops orders; riders are released
+Delivery used to log "left unassigned" when every rider was busy, and the consumer still stamped the Inbox and committed the offset, so nothing retried that order; and nothing ever set a rider back to `Available`, so a fresh database could assign exactly three orders. Now an order that finds nobody free is **parked** in `delivery.pending_assignments`, `PendingAssignmentSweeper` retries it every `Delivery:PendingRetrySeconds` (5), and `Delivered`/`Cancelled` release the rider.
+```bash
+curl -s -o /dev/null -w "picked up: %{http_code}\n" -X PATCH http://localhost:5250/api/v1/deliveries/$ORDER/status -H "Authorization: Bearer $RIDER" -H "Content-Type: application/json" -d '{"status":"PickedUp"}'    # 204 (skipping this step gives 422)
+curl -s -o /dev/null -w "delivered: %{http_code}\n" -X PATCH http://localhost:5250/api/v1/deliveries/$ORDER/status -H "Authorization: Bearer $RIDER" -H "Content-Type: application/json" -d '{"status":"Delivered"}'   # 204, rider Available again
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"Name\",\"Status\" FROM delivery.agents;"
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"OrderId\",\"Attempts\",\"CreatedAt\" FROM delivery.pending_assignments;"
+```
+```powershell
+"picked up: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/status" -Method Patch -Headers $HR -Body '{"status":"PickedUp"}')    # 204
+"delivered: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/status" -Method Patch -Headers $HR -Body '{"status":"Delivered"}')   # 204
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"Name\",\"Status\" FROM delivery.agents;"
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"OrderId\",\"Attempts\",\"CreatedAt\" FROM delivery.pending_assignments;"
+```
+To see the parking itself: place four orders on a fresh stack (the three riders take the first three); the fourth appears in `pending_assignments` with the log line `No available rider for order ... parked`. Deliver one of the first three as above, and within `PendingRetrySeconds` the log shows `Waiting order ... finally got rider ...` and the row is gone. The rider claim is atomic (`UPDATE ... WHERE Status = 'Available'`, run inside the execution strategy so the failover demo's retrying DB strategy can replay it), because a sweeper now assigns at the same time as the Kafka consumer. Assignment is still **first-available**, not nearest.
+> Pinned by `PendingAssignmentTests`, `DeliveryServiceTests` and the concurrent-assignment test; not re-run against a live stack.
+
+### PII at rest and card tokens (ADR-052, ADR-053)
+`identity.users.Phone` is AES-GCM encrypted in the database (random nonce, so it is not searchable) and decrypted transparently for the owner; the card number becomes a **keyed HMAC** token the instant it reaches Payment (`payment.payments` has `CardToken` and `CardLast4`, no PAN column). The key (`Demo:CardTokenizationKey`) is a secret held only by the Payment service: an unkeyed hash of a card number can be brute-forced from a leaked table, because the BIN and last four digits are already known. `Demo:EncryptPiiAtRest=false` turns field encryption off; flipping it on an existing volume fails with `FormatException`, so reset volumes when you change it.
+```bash
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\", \"Phone\" FROM identity.users LIMIT 3;"     # ciphertext, not phone numbers
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"CardToken\",\"CardLast4\" FROM payment.payments WHERE \"CardToken\" IS NOT NULL;"
+```
+
+### Swap the issuer for a real identity provider (Keycloak, optional)
+Because Payment, Delivery and Restaurant verify through the JWKS contract, pointing them at Keycloak is configuration only. Keycloak listens on **host port 8081** here, because the gateway owns 8080.
+```bash
+docker compose --profile auth-prod up -d keycloak
+curl -s http://localhost:8081/realms/tadka/.well-known/openid-configuration | grep jwks_uri
+KC=$(curl -s -X POST http://localhost:8081/realms/tadka/protocol/openid-connect/token -d "client_id=tadka-api" -d "username=priya@tadka.test" -d "password=Password123!" -d "grant_type=password" | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+dotnet run --project src/Tadka.Payment.Api --launch-profile Keycloak     # Delivery and Restaurant have the same profile name
+curl -s -o /dev/null -w "Payment with a Keycloak token: %{http_code}\n" http://localhost:5240/api/v1/payments/$ORDER -H "Authorization: Bearer $KC"
+docker compose --profile auth-prod down
+```
+```powershell
+docker compose --profile auth-prod up -d keycloak
+curl.exe -s http://localhost:8081/realms/tadka/.well-known/openid-configuration
+$KC = (Invoke-RestMethod -Uri http://localhost:8081/realms/tadka/protocol/openid-connect/token -Method Post -Body @{ client_id = "tadka-api"; username = "priya@tadka.test"; password = "Password123!"; grant_type = "password" }).access_token
+dotnet run --project src/Tadka.Payment.Api --launch-profile Keycloak
+"Payment with a Keycloak token: " + (Get-StatusCode -Uri "http://localhost:5240/api/v1/payments/$ORDER" -Headers @{ Authorization = "Bearer $KC" })
+docker compose --profile auth-prod down
+```
+The realm (`infra/keycloak/tadka-realm.json`) also defines the three riders (`suresh.rider@`, `lakshmi.rider@`, `imran.rider@tadka.test`) with role `DeliveryAgent`. Full walkthrough: [`docs/learn/keycloak-integration-showcase.md`](../learn/keycloak-integration-showcase.md); the token lifecycle: [`docs/learn/token-and-refresh-flow.md`](../learn/token-and-refresh-flow.md).
+
+> **Not re-run against a live stack on this branch:** the commands in this section were adapted from the ones run live on the earlier branches (new ports, the gateway, the four-service topology). The behaviour itself is pinned by the test suites: `JwksTests`, `SharedSigningKeyTests`, `RefreshTokenTests`, `RateLimitingTests`, `AuthorizationTests`, `FieldCipherTests` (monolith); `JwksValidationTests`, `PaymentServiceTests`, `CardTokenizerTests` (Payment); `DeliveryOwnershipTests`, `PendingAssignmentTests`, `RealJwtAuthorizationTests` (Delivery); `JwksValidationTests` (Restaurant).
+
+---
+
 ## 10. Deferred, not run here: the live Azure cloud walk (ADR-064)
 
 The teaching script's Segment 7 walks a *real*, currently deployed Azure Container Apps stack (a Front Door CDN cache hit, a private Postgres, counting the hops through the platform's own Envoy sidecars, the SSE-bypasses-the-CDN pattern). That is real cloud infrastructure that costs real money and needs the instructor's own Azure credentials and a pre-class `cloud-up.ps1 -Mode basic` run, so it is **not** part of running this runbook, and **nothing in this section was executed live**. If you have that stack up, see `deploy/README.md`, `docs/adrs/064-live-cloud-deployment-azure-container-apps.md`, and `docs/runbooks/azure-getting-started.md` for the one-time setup. Run `cloud-down.ps1` afterwards.
@@ -439,7 +553,7 @@ The teaching script's Segment 7 walks a *real*, currently deployed Azure Contain
 ```
 dotnet test
 ```
-**133/133** on this branch at the time of writing: monolith 73, Payment 24, Delivery 9, Restaurant 12, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. That includes 16 Kafka authentication tests (4 per service, no broker needed), and the real-Kafka integration tests (Testcontainers) that run against an unauthenticated broker: their fixtures blank `Kafka:SaslUsername`, because the test host runs in the `Development` environment and would otherwise inherit the compose broker's credentials. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
+**174/174** on this branch at the time of writing: monolith 93, Payment 31, Delivery 17, Restaurant 18, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. That includes 16 Kafka authentication tests (4 per service, no broker needed), and the real-Kafka integration tests (Testcontainers) that run against an unauthenticated broker: their fixtures blank `Kafka:SaslUsername`, because the test host runs in the `Development` environment and would otherwise inherit the compose broker's credentials. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
 
 ---
 
@@ -490,13 +604,19 @@ monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway
 - [ ] SSE: a non-owner gets **403**; a 4th concurrent stream for one user gets **429**.
 - [ ] The replica-lag tests pass (**5/5**).
 - [ ] The gateway routes `/api/v1/restaurants/**` (**200**).
-- [ ] `dotnet test` is green (**133/133** at the time of writing).
+- [ ] Rahul reading Priya's payment or tracking her order gets **403**; Priya gets **200**; a customer POSTing `/api/v1/payments/charge` gets **403**.
+- [ ] `/.well-known/jwks.json` lists the public key; `rotate-signing-key` (Admin) adds a new one and the old token still verifies once (**200**).
+- [ ] The rider on an order can `PATCH` it `PickedUp` then `Delivered` (**204**, **204**) and is `Available` again; a fourth order on a fresh stack is parked in `pending_assignments` and assigned once a rider frees up.
+- [ ] `dotnet test` is green (**174/174** at the time of writing).
 - [ ] A Kafka command with no credentials hangs; with `--command-config /etc/kafka/docker/client.properties` it answers.
 
 ## Troubleshooting
 - **Baseline order is not ₹598:** a prior run already did Demo 2's PATCH and the restaurant-db volume kept ₹349. Run `docker compose down -v` and restart.
 - **`Cannot open ...Tadka.Telemetry.dll for writing` when starting the apps:** you started several `dotnet run` at once on a fresh checkout. Run `dotnet build Tadka.slnx` once first, then start them.
 - **Menu PATCH returns 401 or 403:** you are using a customer token. Log in as `admin@tadka.test`.
+- **Login returns 429 during a demo:** the credential endpoints allow 5 requests per 10 seconds per IP. Space the logins out, or start the monolith with `Auth__RateLimit__PermitLimit=1000`.
+- **Every call to Payment, Delivery or Restaurant is 401 with a fresh token:** they fetch the monolith's public keys from `Jwt:JwksBaseUrl` (default `http://localhost:5224`). Check the monolith is up and that URL is reachable; a monolith restart issues new keys, so log in again.
+- **Tokens work on one monolith replica but not another (scale-out profile):** the replicas are not sharing a signing key. Set the same `Jwt__SigningKeyPem` on all of them.
 - **`GET /payments/{id}` returns a bare `404`:** wrong path on this branch. Use `/api/v1/payments/{orderId}`.
 - **`expand-contract-demo.ps1` throws parser errors, or never stops:** you have the pre-fix version. Both bugs are fixed on this branch; pull it.
 - **Stuck `Confirmed` in Demo 4:** Restaurant.Api or Kafka is down or not consuming; see `decision-mode-matrix.md`. Fallback: flip `Restaurant__DecisionMode` back to `Inline` for the next order.

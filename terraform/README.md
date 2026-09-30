@@ -17,7 +17,7 @@ terraform/
 │   ├── edge/       # ALB; HTTPS:443 if certificate_arn is set, else HTTP:80 behind CloudFront
 │   ├── cdn/        # CloudFront in front of the ALB; 30 s cache for GET /api/v1/restaurants*
 │   ├── platform/   # ECS cluster, task execution role, log group, Cloud Map (tadka.local), internal SG,
-│   │               # shared secrets (JWT key, PII key) as SSM SecureStrings from random_password
+│   │               # shared secrets (RSA JWT signing key for the monolith, PII key) as SSM SecureStrings from tls_private_key / random_bytes
 │   ├── registry/   # 5 ECR repositories (api, payment, delivery, restaurant, gateway)
 │   ├── service/    # ONE ECS Fargate service: task definition + service + optional ALB target group/rule
 │   │               # + optional own RDS (generated password, connection string in SSM) + CPU autoscaling

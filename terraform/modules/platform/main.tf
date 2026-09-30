@@ -1,5 +1,5 @@
 # Shared platform pieces every ECS service uses: cluster, task execution role, logs, service discovery,
-# one internal security group, and the shared secrets (JWT key, PII key) in SSM Parameter Store.
+# one internal security group, and the shared secrets (JWT signing key pair, PII key) in SSM Parameter Store.
 
 variable "name_prefix" { type = string }
 variable "vpc_id" { type = string }
@@ -79,20 +79,21 @@ resource "aws_iam_role_policy" "execution_ssm" {
   })
 }
 
-# Shared secrets. random_password, never a literal in HCL (the old "CHANGE_ME" is gone).
-resource "random_password" "jwt" {
-  length  = 64
-  special = false
+# Shared secrets, generated, never a literal in HCL. The JWT key is an RSA keypair (ADR-067): the private half
+# goes to the monolith only; every other service verifies with the public half it fetches over JWKS.
+resource "tls_private_key" "jwt" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
 }
 
 resource "random_bytes" "pii_key" {
   length = 32
 }
 
-resource "aws_ssm_parameter" "jwt" {
-  name  = "/${var.name_prefix}/jwt-signing-key"
+resource "aws_ssm_parameter" "jwt_signing_key" {
+  name  = "/${var.name_prefix}/jwt-signing-key-pem"
   type  = "SecureString"
-  value = random_password.jwt.result
+  value = tls_private_key.jwt.private_key_pem
 }
 
 resource "aws_ssm_parameter" "pii_key" {
@@ -125,8 +126,8 @@ output "internal_sg_id" {
   value = aws_security_group.internal.id
 }
 
-output "jwt_param_arn" {
-  value = aws_ssm_parameter.jwt.arn
+output "jwt_signing_key_param_arn" {
+  value = aws_ssm_parameter.jwt_signing_key.arn
 }
 
 output "pii_key_param_arn" {

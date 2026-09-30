@@ -296,6 +296,10 @@ services:
     profiles: ["scale-out"]
     environment:
       INSTANCE_NAME: api-1
+      # Shared RS256 signing key (ADR-067): all replicas must sign with, and publish, the SAME key, or a token
+      # issued by one replica fails on another. DEV-ONLY key, committed on purpose; real deployments inject it
+      # from a secret store (see terraform/ and deploy/azure/).
+      Jwt__SigningKeyPem: "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCXkxKE6VV2U2gAWtWqzKwz+4lGlstepQJ07sUTPz4qY7x17mBE70vNU64FztqqcGUzZ52fN/FpdhPQE59vuxQTYwU+pTs1IXb0z7dK+i02Ow7kA1UMWBj5EtcscsRvVS+eqO4kjluhKsC+fX5EGdtZl53civUqe8mxdBlksZTtonbKcs4JH/v4cM+F08+Fg0AzQ/k5766J383yF1qVz5WLrGzEGmiDluwu5jFdy5IplrhTmji3beE6CdIsXkzTx6U4S8H4ASfVeMVqtJFOEMYWcHTdD65WyQLfvC5IiED2hx7c7tD5H8XvxOAOHmNWYAmf+s44IYx2crmzY/qiTXXPAgMBAAECggEABHZqiao6/2hWPAhwmP48pa0mrgLbivZNu7aZ68alZGcaUdiKUg0/jJSFn5sm+fSkLh7DV8A0Zdf5nlstiwMVhLqaGW2Q8DADihKhgV4bPakAd7sXYm0nkxG4bxET8nkuFTxBAqeEUBrroNAeCxA90oXxumAG9tC9L/HMm5fU3CgsPvFmP2G2k5f5VIXlJ6k+JehUWLHTQqU3sreDBcjE9djyhCeQuBdjrEnG2SK/sXWGF7wpVR+s3RVnga9kELelQ5bOY0TSFez1SBXlwEp9qpkWsuSY5oRexmKciJEmMO0h5j7hPav7tmUWAq06Z5fmC3pFks0fjYaT410kgBg9hQKBgQDMBZArkSGjbVA8fvVoDC5ocbvLUQqSBCCSkHKIDo56n/YmlNe/W8t+e0a3zFEJhn6RGwD+82dDUQsmP8AU+cD6vJgTx2hYYqAisbIXRYui/2R+UtPTzjYKGF4TxzLeN9Ncut20wORefBzw340mCkznOrt8Sxs5UK5wsv86RJoNHQKBgQC+MN1vWdCT8SYoJ/EWiJpTDyagzgFPrFvgtJr49yDmCJTbkLNi8teZhx3U3I+V8Ys+Vr+xZwSx1/oEE4GG2KvZ4lFvsGdGXFoIz85sNbsTbCAGMsKuRUViKBql7McOOEHx2LnPhoxJN7Z5mGls86v1sycqgttsVhwx7GvvGmbW2wKBgQDGvFiOh8YLquzwsP8eRldid/9lcuDoEUslWb2nGP7jJjShqnVquuFDqJPfcBA0RiW99V8H+lPJeAVzUcAq7opz9AfzpFfZWOECSrPfBWia80qR3t7mwEVVmhzyCSVc32ZtOr3CV+9ctmt+m1SkDH6S81w0G/k94IC72TDTMoYZZQKBgC8aXQ0h2lV5iPCzC7N/+3CMtQ1oV8zKrCqXsDXuxpgSEgPa74KXECx22T2Jron9O3Yh9/HQyMne6o2t4wtpiA47Td3ye3Fil+3MwZvtJrrlsXy3f523jDqGIitr29S6vCJQgZxS/1V21duBksKoCrOcPhv6Mqu/G9aFbinWiRe3AoGAWSFnhdynZ3xqRj36FmYyg2uWwIRutcspixFqAiqpi/nQBJ33uviAehduyzFY2QWlCtcYWqMDDNElYUeOAZcK3Xs/hWKbkJdnvzX/8McbCOBojG7htLeZBKVfpUu4IFooECQypitP9ceMxDGB5EFnW7Z4QuzI3/QPZLLVqv9DO3c="
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__TadkaDb: "Host=postgres;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=50"
       ConnectionStrings__TadkaDbReplica: "Host=postgres-replica;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Maximum Pool Size=50"
@@ -314,6 +318,10 @@ services:
     profiles: ["scale-out"]
     environment:
       INSTANCE_NAME: api-2
+      # Shared RS256 signing key (ADR-067): all replicas must sign with, and publish, the SAME key, or a token
+      # issued by one replica fails on another. DEV-ONLY key, committed on purpose; real deployments inject it
+      # from a secret store (see terraform/ and deploy/azure/).
+      Jwt__SigningKeyPem: "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCXkxKE6VV2U2gAWtWqzKwz+4lGlstepQJ07sUTPz4qY7x17mBE70vNU64FztqqcGUzZ52fN/FpdhPQE59vuxQTYwU+pTs1IXb0z7dK+i02Ow7kA1UMWBj5EtcscsRvVS+eqO4kjluhKsC+fX5EGdtZl53civUqe8mxdBlksZTtonbKcs4JH/v4cM+F08+Fg0AzQ/k5766J383yF1qVz5WLrGzEGmiDluwu5jFdy5IplrhTmji3beE6CdIsXkzTx6U4S8H4ASfVeMVqtJFOEMYWcHTdD65WyQLfvC5IiED2hx7c7tD5H8XvxOAOHmNWYAmf+s44IYx2crmzY/qiTXXPAgMBAAECggEABHZqiao6/2hWPAhwmP48pa0mrgLbivZNu7aZ68alZGcaUdiKUg0/jJSFn5sm+fSkLh7DV8A0Zdf5nlstiwMVhLqaGW2Q8DADihKhgV4bPakAd7sXYm0nkxG4bxET8nkuFTxBAqeEUBrroNAeCxA90oXxumAG9tC9L/HMm5fU3CgsPvFmP2G2k5f5VIXlJ6k+JehUWLHTQqU3sreDBcjE9djyhCeQuBdjrEnG2SK/sXWGF7wpVR+s3RVnga9kELelQ5bOY0TSFez1SBXlwEp9qpkWsuSY5oRexmKciJEmMO0h5j7hPav7tmUWAq06Z5fmC3pFks0fjYaT410kgBg9hQKBgQDMBZArkSGjbVA8fvVoDC5ocbvLUQqSBCCSkHKIDo56n/YmlNe/W8t+e0a3zFEJhn6RGwD+82dDUQsmP8AU+cD6vJgTx2hYYqAisbIXRYui/2R+UtPTzjYKGF4TxzLeN9Ncut20wORefBzw340mCkznOrt8Sxs5UK5wsv86RJoNHQKBgQC+MN1vWdCT8SYoJ/EWiJpTDyagzgFPrFvgtJr49yDmCJTbkLNi8teZhx3U3I+V8Ys+Vr+xZwSx1/oEE4GG2KvZ4lFvsGdGXFoIz85sNbsTbCAGMsKuRUViKBql7McOOEHx2LnPhoxJN7Z5mGls86v1sycqgttsVhwx7GvvGmbW2wKBgQDGvFiOh8YLquzwsP8eRldid/9lcuDoEUslWb2nGP7jJjShqnVquuFDqJPfcBA0RiW99V8H+lPJeAVzUcAq7opz9AfzpFfZWOECSrPfBWia80qR3t7mwEVVmhzyCSVc32ZtOr3CV+9ctmt+m1SkDH6S81w0G/k94IC72TDTMoYZZQKBgC8aXQ0h2lV5iPCzC7N/+3CMtQ1oV8zKrCqXsDXuxpgSEgPa74KXECx22T2Jron9O3Yh9/HQyMne6o2t4wtpiA47Td3ye3Fil+3MwZvtJrrlsXy3f523jDqGIitr29S6vCJQgZxS/1V21duBksKoCrOcPhv6Mqu/G9aFbinWiRe3AoGAWSFnhdynZ3xqRj36FmYyg2uWwIRutcspixFqAiqpi/nQBJ33uviAehduyzFY2QWlCtcYWqMDDNElYUeOAZcK3Xs/hWKbkJdnvzX/8McbCOBojG7htLeZBKVfpUu4IFooECQypitP9ceMxDGB5EFnW7Z4QuzI3/QPZLLVqv9DO3c="
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__TadkaDb: "Host=postgres;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=50"
       ConnectionStrings__TadkaDbReplica: "Host=postgres-replica;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Maximum Pool Size=50"
@@ -332,6 +340,10 @@ services:
     profiles: ["scale-out"]
     environment:
       INSTANCE_NAME: api-3
+      # Shared RS256 signing key (ADR-067): all replicas must sign with, and publish, the SAME key, or a token
+      # issued by one replica fails on another. DEV-ONLY key, committed on purpose; real deployments inject it
+      # from a secret store (see terraform/ and deploy/azure/).
+      Jwt__SigningKeyPem: "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCXkxKE6VV2U2gAWtWqzKwz+4lGlstepQJ07sUTPz4qY7x17mBE70vNU64FztqqcGUzZ52fN/FpdhPQE59vuxQTYwU+pTs1IXb0z7dK+i02Ow7kA1UMWBj5EtcscsRvVS+eqO4kjluhKsC+fX5EGdtZl53civUqe8mxdBlksZTtonbKcs4JH/v4cM+F08+Fg0AzQ/k5766J383yF1qVz5WLrGzEGmiDluwu5jFdy5IplrhTmji3beE6CdIsXkzTx6U4S8H4ASfVeMVqtJFOEMYWcHTdD65WyQLfvC5IiED2hx7c7tD5H8XvxOAOHmNWYAmf+s44IYx2crmzY/qiTXXPAgMBAAECggEABHZqiao6/2hWPAhwmP48pa0mrgLbivZNu7aZ68alZGcaUdiKUg0/jJSFn5sm+fSkLh7DV8A0Zdf5nlstiwMVhLqaGW2Q8DADihKhgV4bPakAd7sXYm0nkxG4bxET8nkuFTxBAqeEUBrroNAeCxA90oXxumAG9tC9L/HMm5fU3CgsPvFmP2G2k5f5VIXlJ6k+JehUWLHTQqU3sreDBcjE9djyhCeQuBdjrEnG2SK/sXWGF7wpVR+s3RVnga9kELelQ5bOY0TSFez1SBXlwEp9qpkWsuSY5oRexmKciJEmMO0h5j7hPav7tmUWAq06Z5fmC3pFks0fjYaT410kgBg9hQKBgQDMBZArkSGjbVA8fvVoDC5ocbvLUQqSBCCSkHKIDo56n/YmlNe/W8t+e0a3zFEJhn6RGwD+82dDUQsmP8AU+cD6vJgTx2hYYqAisbIXRYui/2R+UtPTzjYKGF4TxzLeN9Ncut20wORefBzw340mCkznOrt8Sxs5UK5wsv86RJoNHQKBgQC+MN1vWdCT8SYoJ/EWiJpTDyagzgFPrFvgtJr49yDmCJTbkLNi8teZhx3U3I+V8Ys+Vr+xZwSx1/oEE4GG2KvZ4lFvsGdGXFoIz85sNbsTbCAGMsKuRUViKBql7McOOEHx2LnPhoxJN7Z5mGls86v1sycqgttsVhwx7GvvGmbW2wKBgQDGvFiOh8YLquzwsP8eRldid/9lcuDoEUslWb2nGP7jJjShqnVquuFDqJPfcBA0RiW99V8H+lPJeAVzUcAq7opz9AfzpFfZWOECSrPfBWia80qR3t7mwEVVmhzyCSVc32ZtOr3CV+9ctmt+m1SkDH6S81w0G/k94IC72TDTMoYZZQKBgC8aXQ0h2lV5iPCzC7N/+3CMtQ1oV8zKrCqXsDXuxpgSEgPa74KXECx22T2Jron9O3Yh9/HQyMne6o2t4wtpiA47Td3ye3Fil+3MwZvtJrrlsXy3f523jDqGIitr29S6vCJQgZxS/1V21duBksKoCrOcPhv6Mqu/G9aFbinWiRe3AoGAWSFnhdynZ3xqRj36FmYyg2uWwIRutcspixFqAiqpi/nQBJ33uviAehduyzFY2QWlCtcYWqMDDNElYUeOAZcK3Xs/hWKbkJdnvzX/8McbCOBojG7htLeZBKVfpUu4IFooECQypitP9ceMxDGB5EFnW7Z4QuzI3/QPZLLVqv9DO3c="
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__TadkaDb: "Host=postgres;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=50"
       ConnectionStrings__TadkaDbReplica: "Host=postgres-replica;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Maximum Pool Size=50"
@@ -355,6 +367,25 @@ services:
       - api-1
       - api-2
       - api-3
+    restart: unless-stopped
+
+  # Keycloak (Day 10 Showcase) - Optional Enterprise Identity Provider (OIDC / OAuth 2.0).
+  # Run only when showcasing production auth: `docker compose --profile auth-prod up -d keycloak`
+  # Reachable at http://localhost:8081 (the YARP gateway owns host 8080).
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    container_name: tadka-keycloak
+    command: start-dev --import-realm
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+      KC_HTTP_PORT: 8080
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8081:8080"   # host 8081: the YARP gateway owns host 8080
+    volumes:
+      - ./infra/keycloak/tadka-realm.json:/opt/keycloak/data/import/tadka-realm.json:ro
+    profiles: ["auth-prod"]
     restart: unless-stopped
 
 volumes:

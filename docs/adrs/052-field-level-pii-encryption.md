@@ -79,5 +79,5 @@ masking-in-transit are two independent, composable layers.
 
 ## References
 - ADR-032 (PII & data protection)
-- ADR-046 (payment tokenization)
+- ADR-053 (payment tokenization)
 - `src/Tadka.Api/Infrastructure/Security/FieldCipher.cs`, `Data/Configurations/UserConfiguration.cs`.

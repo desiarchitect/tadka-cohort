@@ -1,15 +1,18 @@
 # The 4 services + the gateway. Same images as CI builds; config comes ONLY from env vars, which is how
 # every setting in appsettings.json is overridden (ConnectionStrings__X, Kafka__BootstrapServers,
-# Jwt__SigningKey, ReverseProxy__Clusters__...__Address). No app code knows it is in Azure.
+# Jwt__SigningKeyPem, ReverseProxy__Clusters__...__Address). No app code knows it is in Azure.
 #
 # Only the gateway has external ingress. The other four are internal-only: reachable as http://<name>
 # inside the environment, unreachable from the internet. Each service still validates the JWT itself
 # (ADR-031): the gateway is an edge, not a trust boundary.
 
 # ── Secrets (Container App secrets, generated here; Key Vault is the production upgrade) ────────────
-resource "random_password" "jwt" {
-  length  = 64
-  special = false
+# RS256 signing key (ADR-067). ONLY the monolith holds the private key (Jwt__SigningKeyPem); it is one key shared
+# by every replica, so a token signed by replica A verifies on replica B. Payment, Delivery and Restaurant hold no
+# signing secret at all: they fetch the PUBLIC key from the monolith's JWKS endpoint (Jwt__JwksBaseUrl).
+resource "tls_private_key" "jwt" {
+  algorithm = "RSA"
+  rsa_bits  = 2048
 }
 
 # 32 random bytes, base64: the AES key for field-level PII encryption (ADR-052). Without it the monolith
@@ -20,7 +23,7 @@ resource "random_bytes" "pii_key" {
 
 locals {
   secret_values = {
-    "jwt-signing-key" = random_password.jwt.result
+    "jwt-signing-key" = tls_private_key.jwt.private_key_pem
     "pii-key"         = random_bytes.pii_key.base64
     "cs-tadka"        = local.connection_strings.tadka
     "cs-tadka-read"   = local.connection_strings.tadka_read
@@ -31,6 +34,9 @@ locals {
   }
 
   use_registry_credentials = var.ghcr_token != ""
+
+  # Where the other services fetch the monolith's PUBLIC signing keys (internal ingress, ADR-067).
+  jwks_base_url = "http://api"
 
   # Settings every .NET app gets.
   common_env = {
@@ -60,7 +66,7 @@ locals {
         "ConnectionStrings__TadkaDb"        = "cs-tadka"
         "ConnectionStrings__TadkaDbReplica" = "cs-tadka-read"
         "ConnectionStrings__Redis"          = "cs-redis"
-        "Jwt__SigningKey"                   = "jwt-signing-key"
+        "Jwt__SigningKeyPem"                = "jwt-signing-key"
         "Demo__EncryptionKey"               = "pii-key"
       }
     }
@@ -70,10 +76,9 @@ locals {
       ready_path  = "/health/ready"
       scale_http  = false
       scale_kafka = var.kafka_consumer_scaling # optional KEDA lag rule, see below
-      env         = {}
+      env         = { "Jwt__JwksBaseUrl" = local.jwks_base_url }
       secret_env = {
         "ConnectionStrings__PaymentDb" = "cs-payment"
-        "Jwt__SigningKey"              = "jwt-signing-key"
       }
     }
     delivery = {
@@ -81,11 +86,10 @@ locals {
       external   = false
       ready_path = "/health/ready"
       scale_http = false
-      env        = {}
+      env        = { "Jwt__JwksBaseUrl" = local.jwks_base_url }
       secret_env = {
         "ConnectionStrings__DeliveryDb" = "cs-delivery"
         "ConnectionStrings__Redis"      = "cs-redis"
-        "Jwt__SigningKey"               = "jwt-signing-key"
       }
     }
     restaurant = {
@@ -93,11 +97,10 @@ locals {
       external   = false
       ready_path = "/health/ready"
       scale_http = false
-      env        = {}
+      env        = { "Jwt__JwksBaseUrl" = local.jwks_base_url }
       secret_env = {
         "ConnectionStrings__RestaurantDb" = "cs-restaurant"
         "ConnectionStrings__Redis"        = "cs-redis"
-        "Jwt__SigningKey"                 = "jwt-signing-key"
       }
     }
   }

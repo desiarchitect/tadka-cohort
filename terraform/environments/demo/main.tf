@@ -20,6 +20,10 @@ terraform {
       source  = "hashicorp/random"
       version = "~> 3.6"
     }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
   }
 }
 
@@ -39,7 +43,10 @@ locals {
     Kafka__BootstrapServers = local.kafka_bootstrap
   }
 
-  jwt_secret = { Jwt__SigningKey = module.platform.jwt_param_arn }
+  # RS256 (ADR-067): only the monolith gets the private key (one key shared by every task, so a token signed by
+  # one replica verifies on another). The other services hold no signing secret; they fetch the PUBLIC key
+  # from the monolith's JWKS endpoint.
+  jwks_env = { Jwt__JwksBaseUrl = "http://ordering.tadka.local:8080" }
 
   # Shared service-module inputs.
   svc = {
@@ -170,7 +177,10 @@ module "monolith" {
     RateLimit__PerMinute          = "100000" # per-IP limit lives at the edge; behind the ALB every IP is a proxy
     Services__Restaurant__BaseUrl = "http://restaurant.tadka.local:8080"
   })
-  secrets = merge(local.jwt_secret, { Demo__EncryptionKey = module.platform.pii_key_param_arn })
+  secrets = {
+    Jwt__SigningKeyPem  = module.platform.jwt_signing_key_param_arn
+    Demo__EncryptionKey = module.platform.pii_key_param_arn
+  }
 }
 
 module "payment" {
@@ -193,8 +203,7 @@ module "payment" {
   namespace_id       = local.svc.namespace_id
   security_group_id  = local.svc.security_group_id
   listener_arn       = local.svc.listener_arn
-  environment        = local.common_env
-  secrets            = local.jwt_secret
+  environment        = merge(local.common_env, local.jwks_env)
 }
 
 module "delivery" {
@@ -217,8 +226,7 @@ module "delivery" {
   namespace_id       = local.svc.namespace_id
   security_group_id  = local.svc.security_group_id
   listener_arn       = local.svc.listener_arn
-  environment        = merge(local.common_env, { ConnectionStrings__Redis = local.redis })
-  secrets            = local.jwt_secret
+  environment        = merge(local.common_env, local.jwks_env, { ConnectionStrings__Redis = local.redis })
 }
 
 module "restaurant" {
@@ -241,8 +249,7 @@ module "restaurant" {
   namespace_id       = local.svc.namespace_id
   security_group_id  = local.svc.security_group_id
   listener_arn       = local.svc.listener_arn
-  environment        = merge(local.common_env, { ConnectionStrings__Redis = local.redis })
-  secrets            = local.jwt_secret
+  environment        = merge(local.common_env, local.jwks_env, { ConnectionStrings__Redis = local.redis })
 }
 
 # ── The gateway: catch-all ALB rule (lowest precedence) ─────────────────────────────────────────
