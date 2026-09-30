@@ -35,6 +35,8 @@ do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.St
 docker compose ps
 ```
 
+**Kafka requires a login on this branch.** The broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. Payment, Delivery and the monolith already carry the demo credentials (`appsettings.Development.json`), and so does Kafka UI (`docker-compose.yml`). Nothing in this runbook talks to Kafka through its command-line tools, but if you do (for example `docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh ...`), add `--command-config /etc/kafka/docker/client.properties`; the console producer and consumer take `--producer.config` and `--consumer.config` instead. Without credentials a Kafka command hangs and prints nothing. Details are in the Day 9 runbook and ADR-027's security addendum.
+
 Four processes, four terminals (identical command in either shell). The gateway goes last, since it only has something to route to once the other three are listening:
 
 ```
@@ -411,7 +413,7 @@ Two pieces. In [`docker-compose.yml`](../../docker-compose.yml) a `pgbouncer` se
 
 ## 7. Run the tests
 ```bash
-dotnet test    # 47/47: monolith 35 + Payment 6 + Delivery 6
+dotnet test    # 59/59: monolith 39 + Payment 10 + Delivery 10
 ```
 ```powershell
 dotnet test
@@ -451,6 +453,8 @@ dotnet test
 - **The refund saga is choreographed and in-process on Day 11, both temporary by design.** ADR-045 names its own revisit triggers: once Restaurant is extracted (Day 12) the `AcceptMode` decision belongs in `Restaurant.Api` reacting to `order-confirmed`; and a refund that fails at the gateway needs its own failure path and a reconciliation job, not yet modelled.
 - **PgBouncer transaction mode has real limits.** No reliable session state across statements, so anything using advisory locks across calls, `LISTEN/NOTIFY` or long-lived prepared statements needs session mode or a direct connection.
 
+- **Kafka is authenticated, not encrypted or isolated.** The broker requires SASL/SCRAM-SHA-256, which stops anonymous access to every topic. It is `SASL_PLAINTEXT` (production uses `SASL_SSL`), every service and tool shares one `tadka` user with no ACLs (real isolation is a user per service plus topic ACLs), and the password is a demo default committed to `appsettings.Development.json`. The Azure/cloud Kafka is a separate plain container reachable only inside the private network and is not covered. See ADR-027's security addendum.
+
 ## ✅ Done when
 - [ ] Order paid → Confirmed → `track` shows an assigned rider (3-service saga).
 - [ ] PUT location → `track` returns it (Redis-geo); `GEOPOS` shows the raw entry.
@@ -460,7 +464,7 @@ dotnet test
 - [ ] Live-tracking SSE stream: the order's owner gets events; a different customer's token on the same order id gets **403**.
 - [ ] All services reachable via **one host** `:8080`; payment-no-token via gateway still **401**; a dead route's target returns **502**.
 - [ ] PgBouncer: direct-to-Postgres leaves the instances holding **100 of 100** connections; via `:6432` the same load runs on about **13**.
-- [ ] `dotnet test` → **47/47**.
+- [ ] `dotnet test` → **59/59**.
 
 ## Troubleshooting
 - **First order stays `Created` for a long time after a restart:** cold JIT plus Kafka consumers joining their group. Wait up to a minute; later orders confirm in about a second.
@@ -473,5 +477,7 @@ dotnet test
 - **The demo script says every request failed with "Invalid URI":** `-Urls` was passed as one comma-joined string. Pass a real array (`@("http://…","http://…")`).
 - **`pwsh: command not found`:** `pwsh` (PowerShell 7) is not installed by default. The demo script runs fine under Windows PowerShell 5.1: use `powershell.exe` as shown above.
 - **PgBouncer `SHOW POOLS` fails with "not allowed":** connect as the `tadka` user (set via `ADMIN_USERS` in `docker-compose.yml`), not `postgres`; or just count `pg_stat_activity` as this runbook does.
+- **An app logs `Disconnected: connection closed by peer` and `1/1 brokers are down` repeatedly, and orders never confirm or no rider is assigned:** that service is connecting to Kafka without credentials. Check `Kafka:SaslUsername` and `Kafka:SaslPassword` in its `appsettings.Development.json` (Payment, Delivery and the monolith each have their own).
+- **A Kafka command run through `docker exec` hangs and prints nothing:** add the credentials flag (`--command-config /etc/kafka/docker/client.properties`, or `--producer.config` / `--consumer.config` for the console tools).
 
 ➡️ Next (Day 12): extract **Restaurant** → the canonical **4 services + gateway**; **zero-downtime migrations (Expand & Contract)**; and **deploy**: Terraform/ECS plus a cloud **ALB / API Gateway** as a black-box (results, not HCL).

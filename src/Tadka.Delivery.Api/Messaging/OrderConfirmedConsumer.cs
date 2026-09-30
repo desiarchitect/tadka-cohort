@@ -27,7 +27,7 @@ public sealed class OrderConfirmedConsumer(
             GroupId = options.Value.ConsumerGroup,
             AutoOffsetReset = AutoOffsetReset.Earliest,
             EnableAutoCommit = false
-        };
+        }.ApplySasl(options.Value);
 
         using var consumer = new ConsumerBuilder<string, string>(config).Build();
         consumer.Subscribe(Topics.OrderConfirmed);

@@ -26,7 +26,7 @@ public sealed class RefundRequestedConsumer(
             GroupId = options.Value.ConsumerGroup + "-refunds",
             AutoOffsetReset = AutoOffsetReset.Earliest,
             EnableAutoCommit = false
-        };
+        }.ApplySasl(options.Value);
 
         using var consumer = new ConsumerBuilder<string, string>(config).Build();
         consumer.Subscribe(Topics.RefundRequested);
