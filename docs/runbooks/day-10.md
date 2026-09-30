@@ -46,16 +46,18 @@ until docker inspect tadka-kafka --format "{{.State.Health.Status}}" | grep -q h
 do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.State.Health.Status}}") -eq "healthy")
 ```
 
+**Kafka requires a login on this branch.** The broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. Both apps and Kafka UI already carry the demo credentials (`appsettings.Development.json`, `docker-compose.yml`). The Kafka command-line tools you run through `docker exec` are clients too, so each one takes the credentials file the broker writes inside its container, `/etc/kafka/docker/client.properties`. The flag depends on the tool: `--command-config` for `kafka-topics.sh` and `kafka-consumer-groups.sh`, `--producer.config` for `kafka-console-producer.sh`, `--consumer.config` for `kafka-console-consumer.sh`. A Kafka command with no credentials does not print an error, it hangs. Details and the honest limits of this setup are in the Day 9 runbook and ADR-027's security addendum.
+
 Pre-create the two Kafka topics this branch uses. On a fresh broker with no topics yet, each app subscribes the moment it starts, and if one starts before the other has ever published anything, you will see `Confluent.Kafka.ConsumeException: Subscribed topic not available` logged once a second. It is harmless (the consumer keeps retrying and picks up the topic once it exists) but looks alarming on a first run:
 ```bash
 for t in order-placed payment-results; do
-  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
 done
 docker compose ps                          # confirm all containers are healthy
 ```
 ```powershell
 foreach ($t in "order-placed","payment-results") {
-  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
 }
 docker compose ps
 ```
@@ -568,9 +570,9 @@ Execute the automated test suite across both services (identical either shell):
 dotnet test
 ```
 
-### Expected Output: **70/70 passed, 0 failed**
-- **`Tadka.Payment.Api.Tests` (18 passed):** Tests per-service 401 validation, JWKS public key resolution, card tokenization digests (`CardTokenizerTests`), and idempotency gates.
-- **`Tadka.Api.Tests` (52 passed):** Tests JWT issuance, password hashing, RBAC + resource ownership enforcement (`OrderTrackingAuthorizationTests`), AES-GCM encryption round-trips (`FieldCipherTests`), login rate-limiting, and atomic refresh-token CAS rotation (`RefreshTokenServiceConcurrencyTests`).
+### Expected Output: **78/78 passed, 0 failed**
+- **`Tadka.Payment.Api.Tests` (22 passed):** Tests per-service 401 validation, JWKS public key resolution, card tokenization digests (`CardTokenizerTests`), and idempotency gates.
+- **`Tadka.Api.Tests` (56 passed):** Tests JWT issuance, password hashing, RBAC + resource ownership enforcement (`OrderTrackingAuthorizationTests`), AES-GCM encryption round-trips (`FieldCipherTests`), login rate-limiting, and atomic refresh-token CAS rotation (`RefreshTokenServiceConcurrencyTests`).
 
 ---
 
@@ -826,6 +828,10 @@ Every mechanism in this runbook is real, working code — but "runs correctly in
 
 ---
 
+### Kafka on this branch: authenticated, not encrypted, not isolated
+
+The broker requires SASL/SCRAM-SHA-256, which stops anonymous access to every topic. That is real, but it is authentication for a teaching stack, not a production posture: the listener is `SASL_PLAINTEXT` (the login is checked, the traffic is not encrypted; production uses `SASL_SSL`), there is one shared user for every service and tool with no ACLs (real isolation is a user per service plus topic ACLs), and the password is a demo default committed to `appsettings.Development.json`. The Azure/cloud Kafka is a separate, plain container reachable only inside the private network and is not covered. See ADR-027's security addendum.
+
 ## ✅ Done When
 
 - [ ] `POST /orders` without token returns `401 Unauthorized`.
@@ -838,7 +844,8 @@ Every mechanism in this runbook is real, working code — but "runs correctly in
 - [ ] Calling `/forget` anonymizes the PostgreSQL user row into `[deleted]` and `deleted+...@tadka.invalid`.
 - [ ] Direct database query on `identity.users` shows encrypted ciphertext for `Phone`.
 - [ ] Direct database query on `payment.payments` shows `CardToken` and `CardLast4`; no raw card column exists.
-- [ ] `dotnet test` returns **70/70 passed**.
+- [ ] `dotnet test` returns **78/78 passed**.
+- [ ] A Kafka command with no credentials hangs; with `--command-config /etc/kafka/docker/client.properties` it answers.
 
 ---
 
@@ -850,5 +857,8 @@ Every mechanism in this runbook is real, working code — but "runs correctly in
 - **Unexpected 403 on order creation:** Non-admin users cannot place orders for other customer IDs. Ensure the token belongs to the user placing the order or use Priya's credentials.
 - **PowerShell: a `psql` query says "column does not exist":** you're using plain `\"` instead of the `` \`" `` escape sequence described in Demo 4 — plain `\"` gets silently stripped before it reaches `docker.exe` in PowerShell.
 - **PowerShell: `Get-StatusCode` isn't recognized:** the function is defined once in section 1 and only lives for the current terminal session. Re-paste its definition if you opened a new PowerShell window.
+- **Every Kafka command hangs and prints nothing:** you left off the credentials flag. Add `--command-config /etc/kafka/docker/client.properties` (or `--producer.config` / `--consumer.config` for the console producer and consumer).
+- **An app logs `Disconnected: connection closed by peer` and `1/1 brokers are down` repeatedly:** it is connecting to Kafka without credentials. Check `Kafka:SaslUsername` and `Kafka:SaslPassword` in its `appsettings.Development.json`.
+- **Git Bash prints `exec: "C:/Program Files/Git/opt/kafka/bin/...": no such file or directory`:** Git Bash rewrote the container path. Prefix the command with `MSYS_NO_PATHCONV=1`, or use the PowerShell version.
 
 ➡️ **Next (Day 11):** Extract the **Delivery** service (with real-time location tracking via Redis-geo) and introduce the **API Gateway** (YARP) for edge rate-limiting and reverse proxying.

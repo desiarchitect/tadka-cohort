@@ -43,14 +43,14 @@ ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Content-Type: ap
 sleep 3
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Created (pending) — NOT lost
 # The message is WAITING in Kafka — consumer-group lag > 0:
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-payment
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
 # → order-placed  LAG 1   (CURRENT-OFFSET < LOG-END-OFFSET)
 ```
 Now **restart the Payment service** (`dotnet run --project src/Tadka.Payment.Api`). It resumes from its committed offset, consumes the waiting message, charges, and the order converges:
 ```bash
 sleep 4
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Confirmed — caught up
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-payment   # LAG 0
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment   # LAG 0
 ```
 > Captured: pending + **LAG 1** while down → restart → **Confirmed**, **LAG 0**. On **Day 8** the same outage **lost** the charge and stranded the order forever. That's the whole point of Kafka + Outbox.
 
@@ -94,9 +94,9 @@ live, not assumed. The fix: bounded retry via explicit `Seek()`, then a Dead Let
 
 ```bash
 pwsh scripts/inject-poison.ps1 -Mode Malformed             # syntactically invalid JSON
-LAG() { docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group "$1"; }
+LAG() { docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group "$1"; }
 LAG tadka-payment | grep order-placed                       # LAG 1 while retrying, then 0 once it's DLQ'd
-docker exec tadka-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic order-placed.dlq --from-beginning --timeout-ms 5000
+docker exec tadka-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --consumer.config /etc/kafka/docker/client.properties --topic order-placed.dlq --from-beginning --timeout-ms 5000
 ```
 Payment log shows `will retry` x2 (real redelivery via `Seek`), then `failed 3x — routing to DLQ, partition unblocked`. Place a healthy order right after — it settles normally, proving the partition is genuinely unblocked, not just skipped past.
 
@@ -119,7 +119,7 @@ can catch it for you.
 
 ```bash
 # stop the Payment service, wait ~10s for the consumer group to go inactive, then:
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute
 docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT count(*) FROM payment.payments;"   # note this BEFORE restarting
 dotnet run --project src/Tadka.Payment.Api    # reprocesses every message from offset 0
 docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"OrderId\", count(*) FROM payment.payments GROUP BY \"OrderId\" HAVING count(*) > 1;"   # 0 rows
