@@ -6,7 +6,7 @@ Day 8 used a synchronous HTTP call from the monolith to Payment. Today that call
 
 If the Payment service is down, the `order-placed` message just waits in Kafka. Nothing is lost. Consumers are idempotent, so a message delivered twice never charges twice.
 
-New infrastructure: Kafka (port 9092) and Kafka UI (port 8090).
+New infrastructure: Kafka (port 9092, now protected by a username and password, see section 1) and Kafka UI (port 8090).
 
 New here? Read [`README.md`](README.md) first. You will run two apps plus Kafka. Kafka is off when `Kafka:BootstrapServers` is unset, so `dotnet test` does not need a broker running.
 
@@ -36,16 +36,27 @@ until docker inspect tadka-kafka --format "{{.State.Health.Status}}" | grep -q h
 do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.State.Health.Status}}") -eq "healthy")
 ```
 
+**Kafka now requires a login.** The broker only accepts clients that authenticate with SASL/SCRAM-SHA-256 (a username and password) on port 9092. Both apps and Kafka UI already carry the demo credentials, in `appsettings.Development.json` and `docker-compose.yml`. The Kafka command-line tools you run with `docker exec` are clients too, so they need the credentials as well. The broker writes them to `/etc/kafka/docker/client.properties` inside its container, and every Kafka command in this runbook passes that file. The flag that takes it depends on the tool, and they are not interchangeable: `--command-config` for `kafka-topics.sh` and `kafka-consumer-groups.sh`, `--producer.config` for `kafka-console-producer.sh`, and `--consumer.config` for `kafka-console-consumer.sh`. Using the wrong one fails with `not a recognized option`.
+
+To see that the protection is real, run this with no credentials. It does not list the topics: it hangs, and you can stop it with Ctrl+C:
+```bash
+docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+```
+```powershell
+docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+```
+The same command with `--command-config /etc/kafka/docker/client.properties` added answers immediately. (A wrong password does not hang; it fails at once with `failed authentication ... Authentication failed during authentication due to invalid credentials`.)
+
 Create the three Kafka topics before starting either app. On a fresh broker, no topics exist yet. Each app subscribes to its topic the moment it starts. If one app starts before the other has published anything, you will see this printed once a second: `Confluent.Kafka.ConsumeException: Subscribed topic not available: <topic>: Broker: Unknown topic or partition`. This is not a crash. The app keeps retrying and picks up the topic as soon as it exists. It looks alarming on a first run, so create the topics up front instead:
 
 ```bash
 for t in order-placed payment-results order-placed.dlq; do
-  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
 done
 ```
 ```powershell
 foreach ($t in "order-placed","payment-results","order-placed.dlq") {
-  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
 }
 ```
 
@@ -152,7 +163,7 @@ The order stays `Created`. Not an error, not a dropped request, and never a 500.
 Check the consumer group lag directly. The message is sitting in Kafka, unconsumed. This command has no bash-specific syntax, so it is the same in either shell:
 
 ```
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-payment
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
 # order-placed  LAG 1
 ```
 
@@ -168,11 +179,11 @@ Wait 15 to 20 seconds after "Application started" before checking anything. A co
 
 ```bash
 curl -s http://localhost:5224/api/v1/orders/$ORDER | sed -E 's/.*"status":"([^"]+)".*/order: \1/'   # Confirmed
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-payment   # LAG 0
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment   # LAG 0
 ```
 ```powershell
 (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$order").status   # Confirmed
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-payment   # LAG 0
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment   # LAG 0
 ```
 
 If you still see `Created`, or the describe output says the group is rebalancing, wait another 5 to 10 seconds and check again. That is not a failure. It settled within 20 seconds every time this was tested live.
@@ -262,10 +273,10 @@ No hits means Ordering has zero compile-time knowledge of Payment's gateway, dat
 Run the full test suite:
 
 ```
-dotnet test    # 34/34: monolith 25 (3 of those architecture/boundary), Payment 9 (5 of those PoisonMessageTracker). Kafka is off in tests.
+dotnet test    # 42/42: monolith 29 (3 of those architecture/boundary, 4 Kafka authentication), Payment 13 (5 PoisonMessageTracker, 4 Kafka authentication). Kafka is off in tests.
 ```
 
-The count grew from Day 8's 25/25 to 34/34. The architecture/boundary tests now assert against Kafka-based messaging instead of `IPaymentClient`, and the new `PoisonMessageTracker` tests (section 7) are unit tests with no live Kafka dependency. `dotnet test` must stay green with no broker running, which is why Kafka is off by default in the test environment.
+The count grew from Day 8's 25/25 to 42/42. The 4 + 4 Kafka authentication tests (`KafkaSecurityTests`) check that the SASL settings are applied to producer and consumer configs when credentials are set, and left untouched when they are not, with no broker needed. The architecture/boundary tests now assert against Kafka-based messaging instead of `IPaymentClient`, and the new `PoisonMessageTracker` tests (section 7) are unit tests with no live Kafka dependency. `dotnet test` must stay green with no broker running, which is why Kafka is off by default in the test environment.
 
 ## 7. A message that cannot be processed at all
 
@@ -287,11 +298,11 @@ powershell.exe -File scripts/inject-poison.ps1 -Mode Malformed
 Watch the lag while the consumer retries. A small function saves retyping the describe command:
 
 ```bash
-LAG() { docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group "$1"; }
+LAG() { docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group "$1"; }
 LAG tadka-payment | grep order-placed
 ```
 ```powershell
-function LAG($group) { docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group $group }
+function LAG($group) { docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group $group }
 LAG tadka-payment | Select-String order-placed
 ```
 
@@ -302,7 +313,7 @@ The fix is `PoisonMessageTracker` (ADR-051). On a handler exception, the consume
 Read the DLQ to confirm the poisoned payload landed there intact:
 
 ```
-docker exec tadka-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic order-placed.dlq --from-beginning --timeout-ms 5000
+docker exec tadka-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --consumer.config /etc/kafka/docker/client.properties --topic order-placed.dlq --from-beginning --timeout-ms 5000
 ```
 
 Payment's log is the other half of the proof. It should show "will retry" twice, then "failed 3x, routing to DLQ, partition unblocked". Place a healthy order right after, using the same order-placement pattern from section 2, and confirm it settles normally. This is what proves the partition itself is unblocked, not just that the poison message stopped erroring.
@@ -342,13 +353,13 @@ Stop Payment, then reset the group's offset back to the beginning of the topic. 
 One more thing worth knowing, also checked live: `kafka-consumer-groups.sh --reset-offsets` always exits 0, even when it prints an error and does nothing. A loop that only checks the exit code reports success on the first try, wrongly. Check the actual output text instead:
 
 ```bash
-until docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute 2>&1 | grep -q "^tadka-payment"; do
+until docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute 2>&1 | grep -q "^tadka-payment"; do
   echo "group still active, retrying in 5s..."; sleep 5
 done
 ```
 ```powershell
 do {
-  $out = docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute 2>&1 | Out-String
+  $out = docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute 2>&1 | Out-String
   $ok = ($out -match "tadka-payment\s+order-placed")
   if (-not $ok) { Write-Host "group still active, retrying in 5s..."; Start-Sleep -Seconds 5 }
 } until ($ok)
@@ -379,7 +390,7 @@ The payment count is unchanged after a full replay, and zero orders show more th
 
 ## 9. Where the code lives, and how other stacks would do this
 
-Monolith: `Infrastructure/Messaging/*` for the `order-placed` producer and the `payment-results` consumer, `Data/Outbox/*` and `OutboxRelay` for the claim-and-publish loop with `FOR UPDATE SKIP LOCKED`. Payment service: `Messaging/*` for the `order-placed` consumer and `payment-results` producer, `PoisonMessageTracker.cs` and `OrderPlacedConsumer.cs` for the retry and DLQ logic from section 7. Both services' `inbox_messages` tables are what sections 4 and 8 exercise. Full reasoning: ADR-027 (Kafka as the backbone), ADR-028 (Outbox and Inbox), ADR-029 (Saga choreography), ADR-050 (envelope versioning), ADR-051 (DLQ).
+Kafka authentication is one small extension per service, `KafkaSecurity.ApplySasl(...)` in each service's `Messaging.cs`, called at every producer and consumer config; it does nothing unless `Kafka:SaslUsername` is set. Broker setup is `docker/kafka-scram-entrypoint.sh`. Monolith: `Infrastructure/Messaging/*` for the `order-placed` producer and the `payment-results` consumer, `Data/Outbox/*` and `OutboxRelay` for the claim-and-publish loop with `FOR UPDATE SKIP LOCKED`. Payment service: `Messaging/*` for the `order-placed` consumer and `payment-results` producer, `PoisonMessageTracker.cs` and `OrderPlacedConsumer.cs` for the retry and DLQ logic from section 7. Both services' `inbox_messages` tables are what sections 4 and 8 exercise. Full reasoning: ADR-027 (Kafka as the backbone), ADR-028 (Outbox and Inbox), ADR-029 (Saga choreography), ADR-050 (envelope versioning), ADR-051 (DLQ).
 
 If you built this in Java or Node instead of .NET, the pattern is identical: at-least-once delivery, an idempotent consumer, a durable outbox, choreographed compensation. Only the tooling changes. Full detail in [`docs/learn/cross-stack-async-messaging.md`](../learn/cross-stack-async-messaging.md).
 
@@ -392,14 +403,25 @@ If you built this in Java or Node instead of .NET, the pattern is identical: at-
 
 What does not change across any stack: the partition key discipline, using `orderId` so one order's events stay ordered, is a Kafka protocol decision, not a library one. The multi-instance danger for an outbox relay, where several pods claim the same unclaimed rows, is the same in every language. The fix is `SKIP LOCKED`, leader election, or CDC, an architectural choice independent of the runtime.
 
+## What this security does and does not give you
+
+This is authentication for a teaching stack, not a production security setup. Say so out loud if a student asks.
+
+- **It stops anonymous access.** Anything that connects to port 9092 without the username and password gets nothing, including a stray script or another container on the network.
+- **It is not encrypted.** The listener is `SASL_PLAINTEXT`: the login is checked, but the messages and the SCRAM exchange still cross the wire unencrypted. Production uses `SASL_SSL` (TLS on top).
+- **One shared user, no ACLs.** Both apps, Kafka UI and the CLI tools are the same `tadka` user, so any of them can read or write any topic. Real isolation is a user per service plus ACLs (payment may only read `order-placed` and write `payment-results`).
+- **The password is a demo default** (`tadka_kafka_local`), committed in `appsettings.Development.json` and as the `${KAFKA_SASL_PASSWORD:-...}` fallback in `docker-compose.yml`. A real deployment injects it from a secrets manager. Set `KAFKA_SASL_PASSWORD` before `docker compose up` to change the broker's, and change `Kafka:SaslPassword` in both apps to match.
+- **The controller listener stays plaintext.** That is KRaft's internal quorum traffic on a single-voter broker with no published port, so it is not reachable from outside the container.
+
 ## Done when
 
 - [ ] `docker compose ps` shows `tadka-kafka` healthy. Kafka UI at :8090 shows `order-placed` and `payment-results`.
+- [ ] `kafka-topics.sh --list` with no credentials hangs; with `--command-config /etc/kafka/docker/client.properties` it lists the topics.
 - [ ] Happy path: `POST /orders` returns Created in milliseconds, then settles to Confirmed. Payment shows Completed. The outbox row shows `sent=true`.
 - [ ] Catch-up: Payment down, order stays pending with lag above 0. Restart, order confirms with lag 0.
 - [ ] No order has more than one payment row. A Failing gateway cancels the order.
 - [ ] The boundary check over the monolith finds no payment internals and no `IPaymentClient`.
-- [ ] `dotnet test` passes 34/34.
+- [ ] `dotnet test` passes 42/42.
 - [ ] `inject-poison.ps1 -Mode Malformed`: two retries, then routed to `order-placed.dlq`. A healthy order right after settles normally.
 - [ ] `inject-poison.ps1 -Mode MissingRequiredField`: no error, no DLQ entry, the payment's currency silently defaults to INR.
 - [ ] Full offset reset and replay: payment count unchanged, zero duplicate order ids.
@@ -415,6 +437,12 @@ What does not change across any stack: the partition key discipline, using `orde
 - **The section 6 boundary check shows hits you were told to expect none of:** make sure your command excludes `Migrations/` and comment-only lines. Old EF migration snapshots from before Payment was extracted still mention `Domain.Payments.Payment`, and one source comment mentions `PaymentDbContext` by name. Neither is a real dependency.
 - **`--reset-offsets` fails with "group is still active":** this is normal. The consumer group registration takes a genuinely long time to expire after you stop the process. `Confluent.Kafka`'s default session timeout is 45 seconds, and a live run on this branch needed 60 to 70 seconds total. Use the polling loop in section 8 instead of a single fixed sleep.
 - **Outbox row stuck at `sent=false` for more than a few seconds:** check the monolith log for `OutboxRelay` errors. Either the relay is not running, or the row's claim lock is being held open by a slow Kafka publish. Confirm `tadka-kafka` is actually healthy, not just running.
+- **Every Kafka command hangs and never prints anything:** you left off the credentials flag. Add `--command-config /etc/kafka/docker/client.properties` (or `--producer.config` / `--consumer.config` for the console tools).
+- **`failed authentication due to: Authentication failed during authentication due to invalid credentials`:** the password does not match. The broker's comes from `KAFKA_SASL_PASSWORD` when you ran `docker compose up` (default `tadka_kafka_local`); the apps' comes from `Kafka:SaslPassword`. They must be the same. Run `docker compose down -v` and start again if you changed one.
+- **An app logs `Disconnected: connection closed by peer` and `1/1 brokers are down` over and over, and orders never confirm:** the app is connecting without credentials, so the broker hangs up on it. Check `Kafka:SaslUsername` and `Kafka:SaslPassword` in its `appsettings.Development.json` (an environment variable such as `Kafka__SaslUsername` can override them, and blanking it produces exactly this).
+- **`--command-config` fails with `not a recognized option` on `kafka-console-producer.sh` or `kafka-console-consumer.sh`:** those two take `--producer.config` and `--consumer.config` instead.
+- **Git Bash prints `exec: "C:/Program Files/Git/opt/kafka/bin/...": no such file or directory`:** Git Bash rewrote the container path `/opt/...` into a Windows path. Prefix the command with `MSYS_NO_PATHCONV=1`, or use the PowerShell version of the command.
+- **Kafka UI shows the cluster as offline:** it authenticates with the `KAFKA_CLUSTERS_0_PROPERTIES_SASL_*` settings on the `kafka-ui` service in `docker-compose.yml`, which must match the broker's password. Recreate it with `docker compose up -d --force-recreate kafka-ui`.
 - **Reset everything:** the fresh-start block at the top of section 1 does exactly this. Run it any time you want a clean slate, not just at the start of the day.
 
 Next, Day 10: authentication and role-based access across services, the data-privacy and PII thread, and extracting the Delivery service.

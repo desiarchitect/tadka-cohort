@@ -6,7 +6,7 @@
 #   pwsh scripts/inject-poison.ps1 -Mode SafeExtraField       # one EXTRA unknown field -> processes fine (proves additive-only is safe)
 #
 # Watch the effect with:
-#   docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-payment
+#   docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
 
 param(
     [ValidateSet("Malformed", "MissingRequiredField", "SafeExtraField")]
@@ -38,7 +38,7 @@ Write-Output $payload
 $key = "$orderId="
 $line = "$key$payload"
 $line | docker exec -i tadka-kafka /opt/kafka/bin/kafka-console-producer.sh `
-    --bootstrap-server localhost:9092 --topic order-placed `
+    --bootstrap-server localhost:9092 --producer.config /etc/kafka/docker/client.properties --topic order-placed `
     --property "parse.key=true" --property "key.separator==" 2>$null
 
 Write-Output ""

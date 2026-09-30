@@ -26,7 +26,7 @@ public sealed class KafkaProducer : IDisposable
                 // when Kafka is unreachable. Kept short and paired with the outbox retry loop.
                 MessageTimeoutMs = 10_000,
                 RequestTimeoutMs = 10_000
-            }).Build();
+            }.ApplySasl(options.Value)).Build();
     }
 
     public Task PublishRawAsync(string topic, string key, string value, CancellationToken cancellationToken = default)

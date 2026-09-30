@@ -100,6 +100,10 @@ services:
   # Kafka (Day 9) — the async event backbone (ADR-027). Single-node KRaft (no Zookeeper).
   # Two listeners: HOST (localhost:9092) for the apps you run via `dotnet run`, and DOCKER
   # (kafka:29092) for in-network containers like the UI. Topics auto-create for cohort convenience.
+  # SASL/SCRAM-SHA-256 auth on HOST and DOCKER (day-09 security fix) — CONTROLLER stays PLAINTEXT,
+  # it's KRaft-internal quorum traffic, single-voter, never reachable outside the container.
+  # The vanilla image can't seed SCRAM credentials on its own, so `command:` overrides its default
+  # entrypoint with a script that formats storage with --add-scram before starting the broker.
   kafka:
     image: apache/kafka:3.8.0
     container_name: tadka-kafka
@@ -107,26 +111,36 @@ services:
       - "9092:9092"
     environment:
       KAFKA_NODE_ID: 1
+      CLUSTER_ID: "Nk3n3ZQoDvCMFvVeoTt5wQ"
+      KAFKA_SASL_PASSWORD: ${KAFKA_SASL_PASSWORD:-tadka_kafka_local}
       KAFKA_PROCESS_ROLES: broker,controller
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
       KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,HOST://0.0.0.0:9092,DOCKER://0.0.0.0:29092
       KAFKA_ADVERTISED_LISTENERS: HOST://localhost:9092,DOCKER://kafka:29092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,HOST:PLAINTEXT,DOCKER:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,HOST:SASL_PLAINTEXT,DOCKER:SASL_PLAINTEXT
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_INTER_BROKER_LISTENER_NAME: DOCKER
+      KAFKA_SASL_ENABLED_MECHANISMS: SCRAM-SHA-256
+      KAFKA_SASL_MECHANISM_INTER_BROKER_PROTOCOL: SCRAM-SHA-256
+      KAFKA_LISTENER_NAME_HOST_SCRAM___SHA___256_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="tadka" password="${KAFKA_SASL_PASSWORD:-tadka_kafka_local}";'
+      KAFKA_LISTENER_NAME_DOCKER_SCRAM___SHA___256_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="tadka" password="${KAFKA_SASL_PASSWORD:-tadka_kafka_local}";'
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    command: ["bash", "/etc/kafka/docker/tadka-scram-entrypoint.sh"]
+    volumes:
+      - ./docker/kafka-scram-entrypoint.sh:/etc/kafka/docker/tadka-scram-entrypoint.sh:ro
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list || exit 1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --list || exit 1"]
       interval: 10s
       timeout: 10s
       retries: 15
     restart: unless-stopped
 
   # Kafka UI (Day 9) — watch topics, partitions, consumer-group LAG live (the catch-up demo).
+  # SASL/SCRAM credentials match the broker's (day-09 security fix) — without these the UI can't connect.
   kafka-ui:
     image: kafbat/kafka-ui:latest
     container_name: tadka-kafka-ui
@@ -137,6 +151,9 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: tadka
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL: SASL_PLAINTEXT
+      KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM: SCRAM-SHA-256
+      KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG: 'org.apache.kafka.common.security.scram.ScramLoginModule required username="tadka" password="${KAFKA_SASL_PASSWORD:-tadka_kafka_local}";'
       DYNAMIC_CONFIG_ENABLED: "true"
     restart: unless-stopped
 
