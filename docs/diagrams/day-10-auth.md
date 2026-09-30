@@ -5,11 +5,11 @@ Complete visual flow of JWT authentication, asymmetric RS256/JWKS per-service va
 > **Deep Dive Reading:** [`docs/learn/token-and-refresh-flow.md`](../learn/token-and-refresh-flow.md)
 >
 > **Related Architecture Decision Records:**
-> - [ADR-030: Stateless JWT Authentication](../adrs/030-stateless-jwt-auth.md)
-> - [ADR-031: RBAC and Resource Ownership](../adrs/031-rbac-and-resource-ownership.md)
-> - [ADR-032: PII Encryption and Right-to-be-Forgotten](../adrs/032-pii-masking-and-encryption.md)
-> - [ADR-066: Refresh-Token Rotation & Reuse Detection](../adrs/048-refresh-token-rotation-reuse-detection.md)
-> - [ADR-067: RS256 Asymmetric Signing & JWKS Key Rotation](../adrs/049-rs256-jwks-key-rotation.md)
+> - [ADR-030: Stateless JWT Authentication](../adrs/030-authentication-jwt.md)
+> - [ADR-031: RBAC and Resource Ownership](../adrs/031-authorization-rbac-resource.md)
+> - [ADR-032: PII Encryption and Right-to-be-Forgotten](../adrs/032-pii-data-protection.md)
+> - [ADR-066: Refresh-Token Rotation & Reuse Detection](../adrs/066-refresh-token-rotation-reuse-detection.md)
+> - [ADR-067: RS256 Asymmetric Signing & JWKS Key Rotation](../adrs/067-rs256-jwks-key-rotation.md)
 
 ---
 

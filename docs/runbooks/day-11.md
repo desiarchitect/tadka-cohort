@@ -144,7 +144,7 @@ $track = Invoke-RestMethod -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/
 $track
 docker exec tadka-redis redis-cli GEOPOS delivery:agents $track.agentId
 ```
-**Captured live (before the rider-login change):** `track` returned the exact coordinates just PUT (`12.95…, 77.64…`); `GEOPOS` on the same agent id returned the same pair straight out of Redis. Redis stores geo coordinates in a 52-bit geohash, so you get `12.950000663…` back, not exactly `12.95`; that is normal, and the error is well under a metre. The 403/204 pair above is pinned by `DeliveryOwnershipTests` and `RealJwtAuthorizationTests` (real HS256 tokens through the real JWT handler); the rider-login commands themselves have not yet been re-run against a live stack.
+**Captured live (before the rider-login change):** `track` returned the exact coordinates just PUT (`12.95…, 77.64…`); `GEOPOS` on the same agent id returned the same pair straight out of Redis. Redis stores geo coordinates in a 52-bit geohash, so you get `12.950000663…` back, not exactly `12.95`; that is normal, and the error is well under a metre. The 403/204 pair above is pinned by `DeliveryOwnershipTests` and `RealJwtAuthorizationTests` (real RS256 tokens through the real JWT handler); the rider-login commands themselves have not yet been re-run against a live stack.
 
 ### How this is actually implemented
 [`LocationStore.cs`](../../src/Tadka.Delivery.Api/LocationStore.cs) hides Redis behind `ILocationStore`, so tests run with a no-op `NullLocationStore` and need no Redis. The real one is two calls:

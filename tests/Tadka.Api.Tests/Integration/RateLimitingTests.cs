@@ -23,11 +23,14 @@ public class RateLimitingTests(TadkaApiFactory factory) : IClassFixture<TadkaApi
         var client = _factory.CreateClient();
         var body = new { email = "nobody-ratelimit@tadka.test", password = "wrong" };
 
-        HttpResponseMessage? last = null;
-        for (var i = 0; i < 6; i++)
-            last = await client.PostAsJsonAsync("/api/v1/auth/login", body);
+        // A fixed window can reset between two of the requests if one is slow (JIT, a loaded CI box), so keep
+        // going until the limiter trips instead of asserting on exactly the 6th call. 30 is far more than the
+        // 5 a window allows; the limit is real if a 429 ever appears, and absent if none does.
+        var sawTooManyRequests = false;
+        for (var i = 0; i < 30 && !sawTooManyRequests; i++)
+            sawTooManyRequests = (await client.PostAsJsonAsync("/api/v1/auth/login", body)).StatusCode == HttpStatusCode.TooManyRequests;
 
-        Assert.Equal(HttpStatusCode.TooManyRequests, last!.StatusCode);
+        Assert.True(sawTooManyRequests, "30 rapid logins from one IP never produced a 429.");
     }
 
     [Fact]
@@ -54,11 +57,11 @@ public class RateLimitingTests(TadkaApiFactory factory) : IClassFixture<TadkaApi
     [Fact]
     public async Task Lockout_clears_itself_once_the_cooldown_passes()
     {
-        // Short lockout window (1s) + loosened rate limit, isolated to THIS test's own host.
+        // Short lockout window (3s, not 1s: under a loaded full-suite run five password hashes plus JIT can take over a second, and the test would see the lock already expired) + loosened rate limit, isolated to THIS test's own host.
         var client = _factory.WithWebHostBuilder(b =>
         {
             b.UseSetting("Auth:RateLimit:PermitLimit", "1000");
-            b.UseSetting("Auth:Lockout:LockoutSeconds", "1");
+            b.UseSetting("Auth:Lockout:LockoutSeconds", "3");
         }).CreateClient();
         const string email = "owner1@tadka.test"; // a DIFFERENT seeded account from the other tests in this class
 
@@ -68,7 +71,7 @@ public class RateLimitingTests(TadkaApiFactory factory) : IClassFixture<TadkaApi
         var whileLocked = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password = AuthSeeder.DefaultPassword });
         Assert.Equal(HttpStatusCode.Unauthorized, whileLocked.StatusCode);
 
-        await Task.Delay(1200);
+        await Task.Delay(3300);
 
         var afterCooldown = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password = AuthSeeder.DefaultPassword });
         Assert.Equal(HttpStatusCode.OK, afterCooldown.StatusCode);

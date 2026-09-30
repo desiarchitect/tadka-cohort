@@ -14,7 +14,7 @@ file sealed record JwksDocumentDto([property: JsonPropertyName("keys")] List<Jwk
 
 /// <summary>
 /// Fetches Tadka.Api's <c>/.well-known/jwks.json</c> over HTTP and caches the public keys in memory for a
-/// short TTL (ADR-049) — this service never holds a signing secret, only public keys, and only refetches
+/// short TTL (ADR-067) — this service never holds a signing secret, only public keys, and only refetches
 /// them a handful of times an hour even under real traffic. A <c>kid</c> that isn't in the cache triggers
 /// ONE forced refetch (it may just have been rotated in) before giving up.
 /// </summary>
@@ -66,7 +66,7 @@ public sealed class JwksClient(IHttpClientFactory httpClientFactory, IOptions<Jw
         catch (HttpRequestException)
         {
             // Tadka.Api unreachable — keep serving the last good cache rather than fail every request
-            // (ADR-049's honest failure mode: only bites when BOTH the cache is stale AND the endpoint is down).
+            // (ADR-067's honest failure mode: only bites when BOTH the cache is stale AND the endpoint is down).
             return;
         }
         if (doc?.Keys is null) return;
