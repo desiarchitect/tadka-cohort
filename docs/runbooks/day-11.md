@@ -398,6 +398,68 @@ To replay once the cause is fixed: `pwsh scripts/replay-dlq.ps1 -DlqTopic order-
 
 ---
 
+## 4.9. The auth and PII hardening behind the three services (ADR-030/031, 052, 053, 060 to 062)
+
+**What you're proving:** with three services verifying tokens, *how* they verify matters more. Nothing here shares a secret.
+
+**RS256 + JWKS (ADR-062).** `Tadka.Api` signs access tokens with an RSA private key that never leaves its process and publishes the public keys. Payment and Delivery each fetch them (cached 5 minutes by `Jwt:JwksCacheMinutes`) and verify by `kid`, so a compromised Delivery can verify tokens but cannot mint one. There is no `Jwt:SigningKey` in any `appsettings.json`.
+```bash
+curl -s http://localhost:5224/.well-known/jwks.json           # the public keys (kty, kid, n, e)
+ADMIN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+curl -s -X POST http://localhost:5224/api/v1/auth/rotate-signing-key -H "Authorization: Bearer $ADMIN"   # Admin only; a fresh key becomes current
+curl -s -o /dev/null -w "old token after one rotation: %{http_code}\n" http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"
+```
+```powershell
+Invoke-RestMethod -Uri http://localhost:5224/.well-known/jwks.json
+$ADMIN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"admin@tadka.test","password":"Password123!"}').accessToken
+Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/rotate-signing-key -Method Post -Headers @{ Authorization = "Bearer $ADMIN" }
+"old token after one rotation: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers $H)
+```
+The monolith keeps the current key plus one previous, so a token signed before ONE rotation still verifies (the `track` call returns 200, not 401); after a second rotation that token is 401. A monolith restart generates new keys, so every token signed before the restart is rejected until the client refreshes.
+
+**Access and refresh tokens (ADR-061).** Login returns a 15-minute access token and a 7-day refresh token. `POST /api/v1/auth/refresh` consumes the presented refresh token and returns a new pair; presenting an already-used one revokes the whole family (a theft signal). `POST /api/v1/auth/logout` revokes the caller's family (the current access token still works until it expires).
+
+**Login is rate limited (ADR-060).** The auth endpoints allow 5 requests per 10 seconds per IP (`Auth:RateLimit`) and lock an account for 60 seconds after 5 wrong passwords (`Auth:Lockout`). **A script that logs several users in back to back can hit 429**: space the logins out, or raise `Auth:RateLimit:PermitLimit` for a demo run.
+
+**Payment's HTTP surface is authorised, not just authenticated (ADR-031).** `POST /payments/charge` is Admin-only (the real charge flow runs off the `order-placed` Kafka event, in-process). `GET /payments/{orderId}` returns 403 unless the caller is the customer who placed the order (`order-placed` carries `CustomerId`) or Admin. `PATCH /orders/{id}/status` for a `RestaurantOwner` requires that the order belongs to their restaurant.
+```bash
+curl -s -o /dev/null -w "Rahul reads Priya's payment: %{http_code}\n" http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $RAHUL"   # 403
+curl -s -o /dev/null -w "Priya reads her payment: %{http_code}\n" http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN"            # 200
+```
+```powershell
+"Rahul reads Priya's payment: " + (Get-StatusCode -Uri "http://localhost:5240/payments/$ORDER" -Headers @{ Authorization = "Bearer $RAHUL" })   # 403
+"Priya reads her payment: " + (Get-StatusCode -Uri "http://localhost:5240/payments/$ORDER" -Headers $H)                                            # 200
+```
+
+**PII at rest and card tokens (ADR-052, ADR-053).** `identity.users.Phone` is AES-GCM encrypted in the database (random nonce, so it is not searchable) and decrypted transparently for the owner; the card number becomes a keyed HMAC token the instant it reaches Payment (`payment.payments` has `CardToken` and `CardLast4`, no PAN column). `Demo:EncryptPiiAtRest=false` turns field encryption off; flipping it on an existing volume fails with `FormatException`, so reset volumes when you change it.
+```bash
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\", \"Phone\" FROM identity.users LIMIT 3;"     # ciphertext, not phone numbers
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"CardToken\",\"CardLast4\" FROM payment.payments WHERE \"CardToken\" IS NOT NULL;"
+```
+
+**Swap the issuer for a real identity provider (Keycloak, optional).** Because Payment and Delivery verify through the JWKS contract, pointing them at Keycloak is configuration only. Keycloak listens on **host port 8081** here, because the gateway owns 8080.
+```bash
+docker compose --profile auth-prod up -d keycloak
+curl -s http://localhost:8081/realms/tadka/.well-known/openid-configuration | grep jwks_uri
+KC=$(curl -s -X POST http://localhost:8081/realms/tadka/protocol/openid-connect/token -d "client_id=tadka-api" -d "username=priya@tadka.test" -d "password=Password123!" -d "grant_type=password" | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
+dotnet run --project src/Tadka.Payment.Api --launch-profile Keycloak     # src/Tadka.Delivery.Api has the same profile name
+curl -s -o /dev/null -w "Payment with a Keycloak token: %{http_code}\n" http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $KC"
+docker compose --profile auth-prod down
+```
+```powershell
+docker compose --profile auth-prod up -d keycloak
+curl.exe -s http://localhost:8081/realms/tadka/.well-known/openid-configuration
+$KC = (Invoke-RestMethod -Uri http://localhost:8081/realms/tadka/protocol/openid-connect/token -Method Post -Body @{ client_id = "tadka-api"; username = "priya@tadka.test"; password = "Password123!"; grant_type = "password" }).access_token
+dotnet run --project src/Tadka.Payment.Api --launch-profile Keycloak
+"Payment with a Keycloak token: " + (Get-StatusCode -Uri "http://localhost:5240/payments/$ORDER" -Headers @{ Authorization = "Bearer $KC" })
+docker compose --profile auth-prod down
+```
+The realm (`infra/keycloak/tadka-realm.json`) also defines the three riders (`suresh.rider@`, `lakshmi.rider@`, `imran.rider@tadka.test`) with role `DeliveryAgent`. Full walkthrough: [`docs/learn/keycloak-integration-showcase.md`](../learn/keycloak-integration-showcase.md); the token lifecycle: [`docs/learn/token-and-refresh-flow.md`](../learn/token-and-refresh-flow.md).
+
+> **Not re-run against a live stack on this branch:** the commands in this section were carried over from the Day 10 runbook (where they were run live) and adapted for this branch (the Keycloak port, the gateway). The behaviour itself is pinned by the test suite (`JwksTests`, `RefreshTokenTests`, `RateLimitingTests`, `AuthorizationTests`, `JwksValidationTests`, `RealJwtAuthorizationTests`, `FieldCipherTests`, `CardTokenizerTests`, `PaymentServiceTests`).
+
+---
+
 ## 5. API gateway: one entry point (ADR-035)
 
 **What you're proving:** the mobile client should not need to know there are 3 backend hosts. One host, `:8080`, routes by path, and per-service auth still holds underneath, so the gateway is a router, not a trust boundary.
@@ -508,12 +570,12 @@ Two pieces. In [`docker-compose.yml`](../../docker-compose.yml) a `pgbouncer` se
 
 ## 7. Run the tests
 ```bash
-dotnet test    # 82/82: monolith 44 + Payment 15 + Delivery 23
+dotnet test    # 114/114: monolith 63 + Payment 28 + Delivery 23
 ```
 ```powershell
 dotnet test
 ```
-> The count went from 59 to 82 with the Delivery ownership, rider-lifecycle and consumer-retry fixes (sections 4.6 to 4.8): `DeliveryOwnershipTests`, `PendingAssignmentTests`, `DeliveryStatusTests`, `ConcurrentAssignmentTests`, `RealJwtAuthorizationTests`, and a Docker-free `PoisonMessageTrackerTests` in each service. If you last checked this number before `4a5988e`/`d2bb1c5` landed you may remember `40/40`; those two commits added `LocationTrackingTests.cs` (3) and `OrderTrackingAuthorizationTests.cs` (4) to the suites. `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
+> The count went from 59 to 114 with the Delivery ownership, rider-lifecycle and dead-letter fixes (sections 4.6 to 4.8) and the auth and PII hardening (section 4.9): `DeliveryOwnershipTests`, `PendingAssignmentTests`, `DeliveryStatusTests`, `ConcurrentAssignmentTests`, `RealJwtAuthorizationTests`, and a Docker-free `PoisonMessageTrackerTests` in each service. If you last checked this number before `4a5988e`/`d2bb1c5` landed you may remember `40/40`; those two commits added `LocationTrackingTests.cs` (3) and `OrderTrackingAuthorizationTests.cs` (4) to the suites. `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
 
 ---
 
@@ -567,7 +629,9 @@ dotnet test
 - [ ] PgBouncer: direct-to-Postgres leaves the instances holding **100 of 100** connections; via `:6432` the same load runs on about **13**.
 - [ ] Delivery ownership: Rahul on Priya's `track` gets **403**; Priya's token on `PUT location` gets **403**; the rider's own token gets **204**.
 - [ ] Rider lifecycle: `PickedUp` then `Delivered` returns the rider to `Available`; a 4th order on a fresh stack waits in `pending_assignments` and gets that rider on the next sweep.
-- [ ] `dotnet test` → **82/82**.
+- [ ] RS256: `/.well-known/jwks.json` lists the public keys; tokens verify in all three services with no shared secret; one rotation keeps old tokens valid, a second rejects them.
+- [ ] Payment authz: Rahul on Priya's payment gets **403**, Priya **200**; `POST /payments/charge` with a customer token gets **403**.
+- [ ] `dotnet test` → **114/114**.
 
 ## Troubleshooting
 - **First order stays `Created` for a long time after a restart:** cold JIT plus Kafka consumers joining their group. Wait up to a minute; later orders confirm in about a second.

@@ -66,6 +66,28 @@ public class AuthorizationTests(TadkaApiFactory factory) : IClassFixture<TadkaAp
     }
 
     [Fact]
+    public async Task Owner_cannot_advance_status_of_another_restaurants_order_403()  // Demo 2 — RBAC role passes, ownership fails
+    {
+        var client = _factory.CreateClient();
+        // Admin places an order at Meghana (OrderBody.restaurantId = Meghana).
+        var created = await client.PostAsJsonAsync("/api/v1/orders", OrderBody);
+        created.EnsureSuccessStatusCode();
+        var order = await created.Content.ReadFromJsonAsync<OrderResponse>();
+
+        // An owner of a DIFFERENT restaurant tries to advance Meghana's order → 403 (role is fine, ownership isn't).
+        var asOtherOwner = new HttpRequestMessage(HttpMethod.Patch, $"/api/v1/orders/{order!.Id}/status")
+        { Content = JsonContent.Create(new { status = "Confirmed" }) };
+        asOtherOwner.Headers.Add("X-Test-Auth", $"RestaurantOwner:{Guid.NewGuid()}:{OtherRestaurant}");
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.SendAsync(asOtherOwner)).StatusCode);
+
+        // Meghana's own owner CAN advance it → 204.
+        var asOwner = new HttpRequestMessage(HttpMethod.Patch, $"/api/v1/orders/{order.Id}/status")
+        { Content = JsonContent.Create(new { status = "Confirmed" }) };
+        asOwner.Headers.Add("X-Test-Auth", $"RestaurantOwner:{Owner1}:{Meghana}");
+        Assert.Equal(HttpStatusCode.NoContent, (await client.SendAsync(asOwner)).StatusCode);
+    }
+
+    [Fact]
     public async Task Login_with_seeded_credentials_returns_a_token()  // real JWT path (anonymous endpoint)
     {
         var client = _factory.CreateClient();

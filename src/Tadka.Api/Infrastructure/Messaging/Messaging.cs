@@ -14,8 +14,11 @@ public static class Topics
     public const string PaymentRefundedDlq = "payment-refunded.dlq";
 }
 
-/// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.</summary>
-public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency);
+/// <summary>Published by Ordering (via the Outbox) when an order is placed. Consumed by the Payment service.
+/// <see cref="CustomerId"/> is event metadata, not a credential (ADR-031): it lets Payment enforce resource
+/// ownership on its OWN read endpoint without holding a copy of the orders table. Defaulted so older,
+/// already-serialized outbox rows without this field still deserialize.</summary>
+public sealed record OrderPlacedMessage(Guid MessageId, Guid OrderId, decimal Amount, string Currency, Guid? CustomerId = null);
 
 /// <summary>Published by Ordering (via the Outbox) when an order auto-confirms after payment — carries what
 /// the Delivery service needs (no back-call, ADR-008). Consumed by the Delivery service. <see cref="CustomerId"/>

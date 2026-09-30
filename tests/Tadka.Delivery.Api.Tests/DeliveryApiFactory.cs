@@ -61,8 +61,26 @@ public class DeliveryApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     public new async Task DisposeAsync() => await _db.DisposeAsync();
 }
 
-/// <summary>Same real service + Postgres, but with the service's own JWT bearer validation left in place.</summary>
+/// <summary>
+/// Same real service + Postgres, but with the service's own JWT bearer + <see cref="Tadka.Delivery.Api.Auth.JwksClient"/>
+/// pipeline left in place (ADR-060), exactly as Program.cs wires it. The "jwks" HttpClient is redirected to a
+/// <see cref="FakeJwksServer"/> and the cache TTL forced to 0, so a test signs real RS256 tokens with a key the fake
+/// server publishes and every resolution reflects the current key set.
+/// </summary>
 public class RealJwtDeliveryApiFactory : DeliveryApiFactory
 {
     protected override bool UseTestAuth => false;
+
+    public FakeJwksServer Jwks { get; } = new();
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.UseSetting("Jwt:JwksCacheMinutes", "0");
+        builder.ConfigureTestServices(services =>
+        {
+            services.AddHttpClient(Tadka.Delivery.Api.Auth.JwksClient.HttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(() => Jwks.CreateHandler());
+        });
+    }
 }

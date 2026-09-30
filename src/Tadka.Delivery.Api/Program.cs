@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -47,7 +46,14 @@ if (kafka?.Enabled == true)
     builder.Services.AddHostedService<OrderConfirmedConsumer>();
 }
 
-// Per-service JWT validation (ADR-031, defense in depth — same key as the monolith).
+// Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token the monolith
+// issued, with no shared secret (ADR-060): it fetches Tadka.Api's PUBLIC keys over HTTP (JWKS) and caches them
+// briefly. The network is not a trust boundary, so a direct call to Delivery needs a valid token.
+builder.Services.Configure<JwksOptions>(builder.Configuration.GetSection(JwksOptions.SectionName));
+var jwksOptions = builder.Configuration.GetSection(JwksOptions.SectionName).Get<JwksOptions>() ?? new();
+builder.Services.AddHttpClient(JwksClient.HttpClientName, client => client.BaseAddress = new Uri(jwksOptions.JwksBaseUrl));
+builder.Services.AddSingleton<JwksClient>();
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
     // Keep claim types exactly as the monolith's TokenService writes them ("sub", "role"). Without this the
@@ -60,10 +66,22 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJw
         ValidateIssuer = true, ValidIssuer = builder.Configuration["Jwt:Issuer"] ?? "tadka",
         ValidateAudience = true, ValidAudience = builder.Configuration["Jwt:Audience"] ?? "tadka",
         ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:SigningKey"] ?? "")),
         ValidateLifetime = true, RoleClaimType = "role", NameClaimType = "sub"
+        // IssuerSigningKeyResolver is wired below: it needs DI (IHttpClientFactory) that isn't available yet here.
     };
 });
+builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
+    .Configure<JwksClient>((options, jwksClient) =>
+    {
+        options.TokenValidationParameters.IssuerSigningKeyResolver = (_, _, kid, _) =>
+        {
+            if (string.IsNullOrEmpty(kid)) return [];
+            // Blocking on purpose: IssuerSigningKeyResolver is a synchronous callback. The in-memory cache
+            // means this almost always returns instantly without an actual HTTP call.
+            var key = jwksClient.ResolveAsync(kid, CancellationToken.None).GetAwaiter().GetResult();
+            return key is null ? [] : new SecurityKey[] { key };
+        };
+    });
 builder.Services.AddAuthorization();
 
 var app = builder.Build();

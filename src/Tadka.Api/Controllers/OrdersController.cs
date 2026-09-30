@@ -102,7 +102,7 @@ public class OrdersController(
         // DbContext as the order, so it commits in the SAME transaction — the event can never be lost on
         // a crash (no dual-write problem). The OutboxRelay (ADR-027) publishes it to Kafka; the Payment
         // service consumes it and charges OFF the request path. POST /orders still returns in ms.
-        var placed = new OrderPlacedMessage(Guid.NewGuid(), order.Id, order.TotalAmount.Amount, order.TotalAmount.Currency);
+        var placed = new OrderPlacedMessage(Guid.NewGuid(), order.Id, order.TotalAmount.Amount, order.TotalAmount.Currency, order.CustomerId);
         _db.Set<OutboxMessage>().Add(new OutboxMessage
         {
             Topic = Topics.OrderPlaced,
@@ -192,6 +192,14 @@ public class OrdersController(
         var order = await _orderRepository.GetByIdAsync(id);
         if (order is null)
             throw new NotFoundException(nameof(Order), id);
+
+        // Resource ownership for the kitchen side (ADR-031): a RestaurantOwner may only advance orders
+        // placed at THEIR OWN restaurant. RBAC above says "owners can advance status"; this says "but
+        // only for your own restaurant's orders". Admin bypasses, same as everywhere else. A DeliveryAgent
+        // has no per-order check here: a rider's authority over an order is the ASSIGNMENT, which the
+        // Delivery service owns and enforces (PATCH /deliveries/{orderId}/status, ADR-031/033).
+        if (User.IsInRole("RestaurantOwner") && !User.IsAdmin() && order.RestaurantId != User.OwnedRestaurantId())
+            return Forbid();
 
         if (!Enum.TryParse<OrderStatus>(request.Status, ignoreCase: true, out var newStatus))
             throw new DomainException($"Invalid status '{request.Status}'. Valid values: {string.Join(", ", Enum.GetNames<OrderStatus>())}");

@@ -2,7 +2,6 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Security.Claims;
-using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.JsonWebTokens;
@@ -12,26 +11,27 @@ using Tadka.Delivery.Api.Data;
 namespace Tadka.Delivery.Api.Tests;
 
 /// <summary>
-/// The same ownership rules, but through the service's REAL JWT bearer validation with real HS256 tokens shaped
-/// exactly like the monolith's TokenService issues them (<c>sub</c>, <c>role</c>). TestAuthHandler builds claims
+/// The same ownership rules, but through the service's REAL JWT bearer validation with real RS256 tokens, verified
+/// by key id against a JWKS endpoint (ADR-060), shaped exactly like the monolith's TokenService issues them
+/// (<c>sub</c>, <c>role</c>). TestAuthHandler builds claims
 /// directly and never goes through the handler's inbound claim renaming, so without these tests a missing
 /// <c>MapInboundClaims = false</c> would make every real rider's IsInRole("DeliveryAgent") false (403 for the
 /// assigned rider) while the whole suite stayed green.
 /// </summary>
 public class RealJwtAuthorizationTests(RealJwtDeliveryApiFactory factory) : IClassFixture<RealJwtDeliveryApiFactory>
 {
-    private const string SigningKey = "tadka-dev-signing-key-change-in-prod-0123456789abcdef"; // Delivery's appsettings.json (dev only)
     private readonly RealJwtDeliveryApiFactory _factory = factory;
 
-    private static string Token(Guid sub, string role)
+    private string Token(Guid sub, string role)
     {
+        var (kid, rsa) = _factory.Jwks.Keys.Count > 0 ? _factory.Jwks.Keys[0] : _factory.Jwks.AddKey();
         var descriptor = new SecurityTokenDescriptor
         {
             Issuer = "tadka",
             Audience = "tadka",
             Subject = new ClaimsIdentity([new Claim("sub", sub.ToString()), new Claim("role", role)]),
             Expires = DateTime.UtcNow.AddMinutes(15),
-            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SigningKey)), SecurityAlgorithms.HmacSha256)
+            SigningCredentials = new SigningCredentials(new RsaSecurityKey(rsa) { KeyId = kid }, SecurityAlgorithms.RsaSha256)
         };
         return new JsonWebTokenHandler().CreateToken(descriptor);
     }
