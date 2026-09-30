@@ -121,19 +121,30 @@ catch (DbUpdateException) // lost the unique-index race → idempotent
 
 **What you're proving:** live location is a different workload from the assignment history you'd keep in Postgres. It is a latest-wins overwrite, not a growing table, so it lives in Redis, not in the Delivery service's relational DB.
 
+Only **the rider on this order** (or Admin) may post its location, so log in as that rider first. Each seeded rider has a login: the rider's name in lower case plus `.rider@tadka.test` (`suresh.rider@`, `lakshmi.rider@`, `imran.rider@`), same demo password. Priya's own token is refused on this endpoint: she can watch the rider, not move them.
+
 ```bash
-curl -s -o /dev/null -X PUT http://localhost:5250/api/v1/deliveries/$ORDER/location -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"latitude":12.95,"longitude":77.64}'
+TRACK=$(curl -s http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN")
+RIDER_EMAIL="$(echo "$TRACK" | sed -E 's/.*"agentName":"([^"]+)".*/\1/' | tr 'A-Z' 'a-z').rider@tadka.test"
+RIDER=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d "{\"email\":\"$RIDER_EMAIL\",\"password\":\"Password123!\"}" | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+curl -s -o /dev/null -w "Priya moves the rider: %{http_code}\n" -X PUT http://localhost:5250/api/v1/deliveries/$ORDER/location -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"latitude":12.0,"longitude":75.0}'   # 403
+curl -s -o /dev/null -w "rider posts location: %{http_code}\n" -X PUT http://localhost:5250/api/v1/deliveries/$ORDER/location -H "Authorization: Bearer $RIDER" -H "Content-Type: application/json" -d '{"latitude":12.95,"longitude":77.64}'   # 204
 TRACK=$(curl -s http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"); echo "$TRACK"   # location: {latitude:12.95, longitude:77.64}
 AGENT=$(echo "$TRACK" | sed -E 's/.*"agentId":"([^"]+)".*/\1/')
 docker exec tadka-redis redis-cli GEOPOS delivery:agents $AGENT   # raw geo; overwrite-latest, sub-ms
 ```
 ```powershell
-Invoke-RestMethod -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/location" -Method Put -Headers $H -ContentType "application/json" -Body '{"latitude":12.95,"longitude":77.64}'
+$track = Invoke-RestMethod -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers $H
+$riderEmail = "$($track.agentName.ToLower()).rider@tadka.test"
+$RIDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body (@{ email = $riderEmail; password = "Password123!" } | ConvertTo-Json)).accessToken
+$HR = @{ Authorization = "Bearer $RIDER" }
+"Priya moves the rider: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/location" -Method Put -Headers $H -Body '{"latitude":12.0,"longitude":75.0}')   # 403
+"rider posts location: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/location" -Method Put -Headers $HR -Body '{"latitude":12.95,"longitude":77.64}')   # 204
 $track = Invoke-RestMethod -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers $H
 $track
 docker exec tadka-redis redis-cli GEOPOS delivery:agents $track.agentId
 ```
-**Captured live:** `track` returned the exact coordinates just PUT (`12.95…, 77.64…`); `GEOPOS` on the same agent id returned the same pair straight out of Redis. Redis stores geo coordinates in a 52-bit geohash, so you get `12.950000663…` back, not exactly `12.95`; that is normal, and the error is well under a metre.
+**Captured live (before the rider-login change):** `track` returned the exact coordinates just PUT (`12.95…, 77.64…`); `GEOPOS` on the same agent id returned the same pair straight out of Redis. Redis stores geo coordinates in a 52-bit geohash, so you get `12.950000663…` back, not exactly `12.95`; that is normal, and the error is well under a metre. The 403/204 pair above is pinned by `DeliveryOwnershipTests` and `RealJwtAuthorizationTests` (real HS256 tokens through the real JWT handler); the rider-login commands themselves have not yet been re-run against a live stack.
 
 ### How this is actually implemented
 [`LocationStore.cs`](../../src/Tadka.Delivery.Api/LocationStore.cs) hides Redis behind `ILocationStore`, so tests run with a no-op `NullLocationStore` and need no Redis. The real one is two calls:
@@ -303,6 +314,90 @@ if (!User.IsAdmin() && order.CustomerId != User.UserId()) return Forbid();
 
 ---
 
+## 4.6. …and so do Delivery's own endpoints, in a different service (ADR-031)
+
+**What you're proving:** the SSE fix above lives in the monolith. Delivery is a separate service with its own `GET /deliveries/{orderId}/track` and `PUT /deliveries/{orderId}/location`, and it inherited nothing: until this fix both only required *a* valid token, so Rahul could read Priya's rider and live GPS, or move the rider's dot to the middle of the sea on her map. Delivery also had no way to check, because it has no copy of the orders table. So the fix is partly **data**: `order-confirmed` now carries `CustomerId` (event metadata, not a credential), Delivery stores it on the assignment, and each rider record is linked to that rider's login (`DeliveryAgent.UserId`).
+
+```bash
+curl -s -o /dev/null -w "Priya tracks her order: %{http_code}\n" http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"   # 200
+curl -s -o /dev/null -w "Rahul tracks Priya's order: %{http_code}\n" http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $RAHUL"   # 403
+curl -s -o /dev/null -w "Rahul moves Priya's rider: %{http_code}\n" -X PUT http://localhost:5250/api/v1/deliveries/$ORDER/location -H "Authorization: Bearer $RAHUL" -H "Content-Type: application/json" -d '{"latitude":12.0,"longitude":75.0}'   # 403
+```
+```powershell
+"Priya tracks her order: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers $H)   # 200
+"Rahul tracks Priya's order: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers @{ Authorization = "Bearer $RAHUL" })   # 403
+"Rahul moves Priya's rider: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/location" -Method Put -Headers @{ Authorization = "Bearer $RAHUL" } -Body '{"latitude":12.0,"longitude":75.0}')   # 403
+```
+> Pinned by `DeliveryOwnershipTests` and `RealJwtAuthorizationTests`; not yet re-run against a live stack. An order placed **before** this change has no `CustomerId` on its assignment, so its owner gets 403 too (only Admin and the rider can read it): the safe default when there is no owner to compare against. Place a fresh order.
+
+### How this is actually implemented
+[`Tadka.Delivery.Api/Program.cs`](../../src/Tadka.Delivery.Api/Program.cs), per endpoint:
+```csharp
+static bool IsAssignedRider(ClaimsPrincipal user, DeliveryAgent? agent)
+    => user.IsRider() && agent?.UserId is { } riderUser && riderUser == user.UserId();
+
+// GET /track:    Admin, the customer who placed the order, or the rider on it
+var isOwner = a.CustomerId is { } owner && owner == user.UserId();
+if (!user.IsAdmin() && !isOwner && !IsAssignedRider(user, agent)) return Results.Forbid();
+
+// PUT /location and PATCH /status: Admin or the rider on it (not even the owner)
+if (!user.IsAdmin() && !IsAssignedRider(user, agent)) return Results.Forbid();
+```
+One more line matters as much as those: `options.MapInboundClaims = false;` in Delivery's JWT setup. Without it the JWT handler renames the `role` claim to a long legacy URI, `RoleClaimType = "role"` matches nothing, and `IsInRole("DeliveryAgent")` is false for every **real** rider token, so the assigned rider would get 403. The test suite's `TestAuthHandler` never goes through that renaming, which is exactly why `RealJwtAuthorizationTests` signs real tokens: with that one line commented out, it fails with `Expected: NoContent, Actual: Forbidden`.
+
+---
+
+## 4.7. A busy dinner rush no longer drops orders; riders are released
+
+**What you're proving:** Delivery used to have two quiet holes that together meant a fresh database could assign exactly **three** orders, ever. (1) With no rider free it logged "left unassigned", the consumer stamped the Inbox and committed the offset, and nothing ever retried that order. (2) Nothing ever set a rider back to `Available`. Now an order that finds nobody free is **parked** in `delivery.pending_assignments` (durable, one row per order), and a background sweeper retries the oldest waiting orders every few seconds (`Delivery:PendingRetrySeconds`, default 5). A rider finishing a delivery frees themselves through a new endpoint:
+
+```bash
+# The rider on $ORDER: pick up, then deliver. Skipping pickup (Assigned → Delivered) returns 422.
+curl -s -o /dev/null -w "picked up: %{http_code}\n" -X PATCH http://localhost:5250/api/v1/deliveries/$ORDER/status -H "Authorization: Bearer $RIDER" -H "Content-Type: application/json" -d '{"status":"PickedUp"}'    # 204
+curl -s -o /dev/null -w "delivered: %{http_code}\n" -X PATCH http://localhost:5250/api/v1/deliveries/$ORDER/status -H "Authorization: Bearer $RIDER" -H "Content-Type: application/json" -d '{"status":"Delivered"}'   # 204 → rider is Available again
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"Name\",\"Status\" FROM delivery.agents;"
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"OrderId\",\"Attempts\",\"CreatedAt\" FROM delivery.pending_assignments;"
+```
+```powershell
+"picked up: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/status" -Method Patch -Headers $HR -Body '{"status":"PickedUp"}')    # 204
+"delivered: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/status" -Method Patch -Headers $HR -Body '{"status":"Delivered"}')   # 204
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"Name\",\"Status\" FROM delivery.agents;"
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"OrderId\",\"Attempts\",\"CreatedAt\" FROM delivery.pending_assignments;"
+```
+To see the parking itself: place four orders on a fresh stack (the three riders take the first three), and the fourth appears in `pending_assignments` with the log line `No available rider for order … parked in pending_assignments`. Deliver one of the first three as above, and within `PendingRetrySeconds` the log shows `Waiting order … finally got rider …` and the row is gone.
+> Pinned by `PendingAssignmentTests`, `DeliveryStatusTests` and `ConcurrentAssignmentTests`; not yet re-run against a live stack.
+
+### How this is actually implemented
+[`DeliveryService.cs`](../../src/Tadka.Delivery.Api/DeliveryService.cs) (`AssignAsync`, `RetryPendingAsync`, `ChangeStatusAsync`) and [`PendingAssignmentSweeper.cs`](../../src/Tadka.Delivery.Api/PendingAssignmentSweeper.cs). Because a sweeper now assigns at the same time as the Kafka consumer, the rider claim became **atomic**; the one-assignment-per-order unique index never protected the rider:
+```csharp
+var rows = await db.Agents
+    .Where(a => a.Id == candidate.Id && a.Status == AgentStatus.Available)
+    .ExecuteUpdateAsync(s => s.SetProperty(a => a.Status, AgentStatus.OnDelivery), ct);
+if (rows == 1) { claimed = ...; break; }   // 0 rows: someone else just took them, try the next candidate
+```
+The claim, the assignment insert and the removal of the parked row run in one transaction, so losing the order-level race also undoes the rider claim. `Delivered`/`Cancelled` release the rider in the same `SaveChanges` as the status change. Assignment is still **first-available**, not nearest.
+
+---
+
+## 4.8. A failing message is retried, then dead-lettered, never silently skipped (ADR-051)
+
+**What was wrong:** every consumer in all three services had this loop:
+```csharp
+await HandleAsync(cr.Message.Value, stoppingToken);
+consumer.Commit(cr);
+...
+catch (Exception ex) { logger.LogError(ex, "... will reprocess (idempotent)."); }
+```
+The Kafka client keeps its read position **in memory**. After a failure the next `Consume()` returned the *next* message, and committing that one moved the group's offset past the failed message too. A database blip on message 41 meant message 41 was skipped for good, while the log promised a retry.
+
+**Now** (`PoisonMessageTracker.cs` plus `HandlePoisonAsync` in all 5 consumers): on a failure the consumer **seeks back** to the failed offset (300 ms pause), so the same message comes round again. On the 3rd failure it stops blocking the partition: a `DlqMessage` (original topic, the raw original payload, the error, the attempt count, a timestamp) is published to **`{topic}.dlq`** (for example `order-confirmed.dlq`), and only then is the offset committed. If even that publish fails, nothing is committed: the consumer seeks back and tries again, and the failure does not escape the loop (an exception out of a `catch` block would stop the whole hosted service). Dead-letter topics: `order-placed.dlq`, `refund-requested.dlq` (Payment); `payment-results.dlq`, `payment-refunded.dlq` (monolith); `order-confirmed.dlq` (Delivery).
+
+To replay once the cause is fixed: `pwsh scripts/replay-dlq.ps1 -DlqTopic order-confirmed.dlq` republishes each quarantined payload onto its original topic (the handlers are idempotent, so a replay is safe). Kafka UI (`:8090`) shows every `*.dlq` topic.
+
+> Pinned by `PoisonMessageTrackerTests` in each service's test project (Docker-free); the seek-and-dead-letter path has not yet been exercised against the live broker. The attempt counter is process-local, so a consumer restart gives a message a fresh 3 attempts, and three quick attempts can outlast only a very short outage (both are named in ADR-051).
+
+---
+
 ## 5. API gateway: one entry point (ADR-035)
 
 **What you're proving:** the mobile client should not need to know there are 3 backend hosts. One host, `:8080`, routes by path, and per-service auth still holds underneath, so the gateway is a router, not a trust boundary.
@@ -413,12 +508,12 @@ Two pieces. In [`docker-compose.yml`](../../docker-compose.yml) a `pgbouncer` se
 
 ## 7. Run the tests
 ```bash
-dotnet test    # 59/59: monolith 39 + Payment 10 + Delivery 10
+dotnet test    # 82/82: monolith 44 + Payment 15 + Delivery 23
 ```
 ```powershell
 dotnet test
 ```
-> If you last checked this number before `4a5988e`/`d2bb1c5` landed you may remember `40/40`; those two commits added `LocationTrackingTests.cs` (3) and `OrderTrackingAuthorizationTests.cs` (4) to the suites. `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
+> The count went from 59 to 82 with the Delivery ownership, rider-lifecycle and consumer-retry fixes (sections 4.6 to 4.8): `DeliveryOwnershipTests`, `PendingAssignmentTests`, `DeliveryStatusTests`, `ConcurrentAssignmentTests`, `RealJwtAuthorizationTests`, and a Docker-free `PoisonMessageTrackerTests` in each service. If you last checked this number before `4a5988e`/`d2bb1c5` landed you may remember `40/40`; those two commits added `LocationTrackingTests.cs` (3) and `OrderTrackingAuthorizationTests.cs` (4) to the suites. `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
 
 ---
 
@@ -430,6 +525,9 @@ dotnet test
 - **API gateway (ADR-035):** [`src/Tadka.Gateway/Program.cs`](../../src/Tadka.Gateway/Program.cs), YARP routes plus a fixed-window per-IP limiter.
 - **Refund saga (ADR-045):** [`RestaurantAcceptanceOptions.cs`](../../src/Tadka.Api/Domain/Restaurants/RestaurantAcceptanceOptions.cs), [`RefundSagaOrchestrator.cs`](../../src/Tadka.Api/Infrastructure/Messaging/RefundSagaOrchestrator.cs), [`PaymentRefundedConsumer.cs`](../../src/Tadka.Api/Infrastructure/Messaging/PaymentRefundedConsumer.cs) (monolith); [`RefundRequestedConsumer.cs`](../../src/Tadka.Payment.Api/Messaging/RefundRequestedConsumer.cs), `PaymentService.RefundAsync` (Payment).
 - **SSE ownership fix (ADR-031):** [`OrderTrackingController.cs`](../../src/Tadka.Api/Controllers/OrderTrackingController.cs), `GetEvents`.
+- **Delivery ownership + rider logins (ADR-031/033):** [`src/Tadka.Delivery.Api/Program.cs`](../../src/Tadka.Delivery.Api/Program.cs) (`/track`, `/location`, `/status`), `DeliveryAgent.UserId`, `DeliveryAssignment.CustomerId`; rider accounts in the monolith's `AuthSeeder`.
+- **Parked orders + rider release:** [`DeliveryService.cs`](../../src/Tadka.Delivery.Api/DeliveryService.cs), [`PendingAssignmentSweeper.cs`](../../src/Tadka.Delivery.Api/PendingAssignmentSweeper.cs), table `delivery.pending_assignments`.
+- **Consumer retry + dead-letter:** `PoisonMessageTracker.cs` and `HandlePoisonAsync` in each service's consumers; `{topic}.dlq` topics; `scripts/replay-dlq.ps1`.
 - **PgBouncer (ADR-015):** the `pgbouncer` service in [`docker-compose.yml`](../../docker-compose.yml); demo load in [`docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1`](../../docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1).
 
 ### Cross-Stack Implementation Matrix
@@ -448,9 +546,12 @@ dotnet test
 
 ## 9. Demo vs. Production: named gaps, not overclaimed features
 
-- **Rider assignment is first-available, not nearest.** ADR-034 names `GEOSEARCH` for "nearby agents", but `DeliveryService.cs` has no `ORDER BY` distance and never calls `GEOSEARCH`: whichever `Available` rider the query returns first gets the order, even if a closer one exists. Proximity-based dispatch is the natural next step, not yet built. Real dispatch uses `GEOSEARCH` or geohash, and at extreme scale H3/S2 cells.
+- **Rider assignment is first-available, not nearest,** though the claim is now atomic so one rider never gets two orders. ADR-034 names `GEOSEARCH` for "nearby agents", but `DeliveryService.cs` has no `ORDER BY` distance and never calls `GEOSEARCH`: whichever `Available` rider the query returns first gets the order, even if a closer one exists. Proximity-based dispatch is the natural next step, not yet built. Real dispatch uses `GEOSEARCH` or geohash, and at extreme scale H3/S2 cells.
 - **A single gateway instance is a new SPOF.** Section 5 showed the 502 when a target is down; the gateway itself needs 2+ instances behind its own load balancer in production.
 - **The refund saga is choreographed and in-process on Day 11, both temporary by design.** ADR-045 names its own revisit triggers: once Restaurant is extracted (Day 12) the `AcceptMode` decision belongs in `Restaurant.Api` reacting to `order-confirmed`; and a refund that fails at the gateway needs its own failure path and a reconciliation job, not yet modelled.
+- **Delivery still publishes `delivery-assigned` straight to Kafka** (no Delivery-side Outbox). A crash between the assignment commit and the publish loses that announcement, not the assignment. Nothing consumes `delivery-assigned` yet.
+- **A poison message is parked, not fixed.** `{topic}.dlq` needs someone watching it; there is no alert on DLQ depth, and a replay is a manual script run.
+- **Rider accounts are demo seeds.** A rider record links to one login (`DeliveryAgent.UserId`); onboarding a new rider means creating both, by hand, in two services.
 - **PgBouncer transaction mode has real limits.** No reliable session state across statements, so anything using advisory locks across calls, `LISTEN/NOTIFY` or long-lived prepared statements needs session mode or a direct connection.
 
 - **Kafka is authenticated, not encrypted or isolated.** The broker requires SASL/SCRAM-SHA-256, which stops anonymous access to every topic. It is `SASL_PLAINTEXT` (production uses `SASL_SSL`), every service and tool shares one `tadka` user with no ACLs (real isolation is a user per service plus topic ACLs), and the password is a demo default committed to `appsettings.Development.json`. The Azure/cloud Kafka is a separate plain container reachable only inside the private network and is not covered. See ADR-027's security addendum.
@@ -464,11 +565,16 @@ dotnet test
 - [ ] Live-tracking SSE stream: the order's owner gets events; a different customer's token on the same order id gets **403**.
 - [ ] All services reachable via **one host** `:8080`; payment-no-token via gateway still **401**; a dead route's target returns **502**.
 - [ ] PgBouncer: direct-to-Postgres leaves the instances holding **100 of 100** connections; via `:6432` the same load runs on about **13**.
-- [ ] `dotnet test` → **59/59**.
+- [ ] Delivery ownership: Rahul on Priya's `track` gets **403**; Priya's token on `PUT location` gets **403**; the rider's own token gets **204**.
+- [ ] Rider lifecycle: `PickedUp` then `Delivered` returns the rider to `Available`; a 4th order on a fresh stack waits in `pending_assignments` and gets that rider on the next sweep.
+- [ ] `dotnet test` → **82/82**.
 
 ## Troubleshooting
 - **First order stays `Created` for a long time after a restart:** cold JIT plus Kafka consumers joining their group. Wait up to a minute; later orders confirm in about a second.
-- **No rider assigned:** is the Delivery service up and `tadka-kafka` healthy? Check its log for `OrderConfirmedConsumer subscribed` and `🛵 Order … assigned to rider`. The monolith publishes `order-confirmed` on auto-confirm after payment.
+- **No rider assigned:** is the Delivery service up and `tadka-kafka` healthy? Check its log for `OrderConfirmedConsumer subscribed` and `🛵 Order … assigned to rider`. The monolith publishes `order-confirmed` on auto-confirm after payment. If the log says `parked in pending_assignments`, every rider is busy: deliver one (section 4.7) or `docker compose down -v` for fresh riders.
+- **`track` returns 403 for the order's real owner:** the order was placed before `order-confirmed` carried `CustomerId`, so its assignment has no owner on record. Place a fresh order.
+- **The rider's token gets 403 on `location` / `status`:** it is a different rider's token. Log in as the rider named in `track`'s `agentName` (`<name>.rider@tadka.test`).
+- **A `*.dlq` topic appears in Kafka UI:** a message failed 3 times. Its `DlqMessage` JSON carries the error and the original payload; fix the cause, then run `scripts/replay-dlq.ps1 -DlqTopic <that topic>`.
 - **`track` location is null:** PUT a location first; Redis must be up (`Redis` in the Delivery service's `appsettings.Development.json`).
 - **Refund never happens / payment stays `Completed` with `RefundOnReject=true`:** it is a 2-hop Kafka round trip (`refund-requested`, then `payment-refunded`). If still stuck past a minute, check the monolith log for `PaymentRefundedConsumer subscribed to payment-refunded` and Payment's for `RefundRequestedConsumer subscribed`.
 - **SSE stream returns 403 for the order's real owner:** wrong token. Re-login and confirm the `sub` claim matches the order's `customerId`.

@@ -60,7 +60,7 @@ public sealed class ConfirmOrderOnPaymentCompleted(
         // Saga continues to the 3rd participant (ADR-029/033): publish `order-confirmed` via the Outbox, in
         // the SAME transaction as the confirm — the Delivery service consumes it and assigns a rider. The
         // event carries the delivery lat/long so Delivery needs no back-call (ADR-008).
-        var confirmed = new OrderConfirmedMessage(Guid.NewGuid(), order.Id, order.DeliveryAddress.Latitude, order.DeliveryAddress.Longitude);
+        var confirmed = new OrderConfirmedMessage(Guid.NewGuid(), order.Id, order.DeliveryAddress.Latitude, order.DeliveryAddress.Longitude, order.CustomerId);
         db.Set<OutboxMessage>().Add(new OutboxMessage
         {
             Topic = Topics.OrderConfirmed,

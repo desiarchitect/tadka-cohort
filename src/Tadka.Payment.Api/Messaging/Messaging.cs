@@ -6,8 +6,10 @@ namespace Tadka.Payment.Api.Messaging;
 public static class Topics
 {
     public const string OrderPlaced = "order-placed";
+    public const string OrderPlacedDlq = "order-placed.dlq";
     public const string PaymentResults = "payment-results";
     public const string RefundRequested = "refund-requested"; // ← the restaurant rejected an already-paid order (ADR-045)
+    public const string RefundRequestedDlq = "refund-requested.dlq";
     public const string PaymentRefunded = "payment-refunded"; // → the compensating refund settled (ADR-045)
 }
 
@@ -24,6 +26,11 @@ public sealed record RefundRequestedMessage(Guid MessageId, Guid OrderId, string
 /// <summary>Published back to Ordering once the refund settles.</summary>
 public sealed record PaymentRefundedMessage(Guid MessageId, Guid OrderId, string Status);
 
+/// <summary>A message that failed processing repeatedly is quarantined here instead of blocking the partition
+/// or being silently skipped (ADR-051). Carries the ORIGINAL raw payload so an operator can replay it onto
+/// <see cref="OriginalTopic"/> (<c>scripts/replay-dlq.ps1</c>) once the root cause is fixed.</summary>
+public sealed record DlqMessage(string OriginalTopic, string OriginalPayload, string Error, int Attempts, DateTimeOffset FailedAt);
+
 /// <summary>Kafka config (ADR-027). Empty <see cref="BootstrapServers"/> ⇒ Kafka OFF (the consumer doesn't start).</summary>
 public sealed class KafkaOptions
 {
@@ -32,6 +39,7 @@ public sealed class KafkaOptions
     public string ConsumerGroup { get; set; } = "tadka-payment";
     public string? SaslUsername { get; set; }
     public string? SaslPassword { get; set; }
+
     public bool Enabled => !string.IsNullOrWhiteSpace(BootstrapServers);
     public bool SaslEnabled => !string.IsNullOrWhiteSpace(SaslUsername);
 }

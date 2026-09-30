@@ -22,22 +22,32 @@ public class DeliveryApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     /// </summary>
     public FakeOrderTrackingPublisher TrackingPublisher { get; } = new();
 
+    /// <summary>True: requests authenticate through <see cref="TestAuthHandler"/> (X-Test-* headers). False:
+    /// the service's REAL JWT bearer validation runs, so tests must send real signed tokens
+    /// (<see cref="RealJwtDeliveryApiFactory"/>) — the only way to catch claim-mapping bugs.</summary>
+    protected virtual bool UseTestAuth => true;
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseSetting("ConnectionStrings:DeliveryDb", _db.GetConnectionString());
         builder.UseSetting("ConnectionStrings:Redis", "");   // → NullLocationStore
+        builder.UseSetting("Kafka:BootstrapServers", "");    // no broker in tests → no consumer
+        builder.UseSetting("Delivery:PendingRetrySeconds", "0"); // tests drive RetryPendingAsync directly
         builder.UseEnvironment("Development");
 
         builder.ConfigureTestServices(services =>
         {
-            services.AddAuthentication(TestAuthHandler.Scheme)
-                .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.Scheme, _ => { });
-            services.PostConfigure<AuthenticationOptions>(o =>
+            if (UseTestAuth)
             {
-                o.DefaultScheme = TestAuthHandler.Scheme;
-                o.DefaultAuthenticateScheme = TestAuthHandler.Scheme;
-                o.DefaultChallengeScheme = TestAuthHandler.Scheme;
-            });
+                services.AddAuthentication(TestAuthHandler.Scheme)
+                    .AddScheme<AuthenticationSchemeOptions, TestAuthHandler>(TestAuthHandler.Scheme, _ => { });
+                services.PostConfigure<AuthenticationOptions>(o =>
+                {
+                    o.DefaultScheme = TestAuthHandler.Scheme;
+                    o.DefaultAuthenticateScheme = TestAuthHandler.Scheme;
+                    o.DefaultChallengeScheme = TestAuthHandler.Scheme;
+                });
+            }
 
             // Swap the (disabled, because Redis:"" above) Null* implementations for enabled in-memory
             // fakes, so tests can drive the location endpoint past its "Redis not configured" guard and
@@ -49,4 +59,10 @@ public class DeliveryApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 
     public async Task InitializeAsync() => await _db.StartAsync();
     public new async Task DisposeAsync() => await _db.DisposeAsync();
+}
+
+/// <summary>Same real service + Postgres, but with the service's own JWT bearer validation left in place.</summary>
+public class RealJwtDeliveryApiFactory : DeliveryApiFactory
+{
+    protected override bool UseTestAuth => false;
 }

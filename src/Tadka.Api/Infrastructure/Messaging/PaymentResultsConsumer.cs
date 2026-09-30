@@ -17,9 +17,12 @@ namespace Tadka.Api.Infrastructure.Messaging;
 /// </summary>
 public sealed class PaymentResultsConsumer(
     IServiceScopeFactory scopeFactory,
+    KafkaProducer producer, // only for dead-lettering a message that keeps failing (ADR-051)
     IOptions<KafkaOptions> options,
     ILogger<PaymentResultsConsumer> logger) : BackgroundService
 {
+    private readonly PoisonMessageTracker _poison = new();
+
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.Run(async () =>
     {
         var config = new ConsumerConfig
@@ -36,21 +39,59 @@ public sealed class PaymentResultsConsumer(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            ConsumeResult<string, string>? cr = null;
             try
             {
-                var cr = consumer.Consume(TimeSpan.FromSeconds(1));
+                cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
 
                 await HandleAsync(cr.Message.Value, stoppingToken);
-                consumer.Commit(cr); // at-least-once: commit only after we've processed it
+                consumer.Commit(cr); // at-least-once: commit only after processing
+                _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
             catch (ConsumeException ex) { logger.LogError(ex, "PaymentResultsConsumer consume error."); }
-            catch (Exception ex) { logger.LogError(ex, "PaymentResultsConsumer handler error."); }
+            catch (Exception ex) when (cr is not null)
+            {
+                await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
         }
 
         consumer.Close();
     }, stoppingToken);
+
+    // ADR-051: a handler failure used to be logged and skipped, but Consume() advances the read position on every
+    // call regardless of commit, so committing the NEXT message silently committed past the failed one. Now:
+    // seek back to retry the SAME message a bounded number of times, then quarantine it on payment-results.dlq and commit.
+    private async Task HandlePoisonAsync(IConsumer<string, string> consumer, ConsumeResult<string, string> cr, Exception ex, CancellationToken ct)
+    {
+        if (!_poison.RecordFailureAndShouldDlq(cr.TopicPartitionOffset))
+        {
+            logger.LogWarning(ex, "payment-results at {Offset} failed — will retry (idempotent).", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromMilliseconds(300), ct); } catch (OperationCanceledException) { }
+            return;
+        }
+
+        logger.LogError(ex, "payment-results at {Offset} failed {Attempts}x — routing to DLQ, partition unblocked.", cr.TopicPartitionOffset, _poison.MaxAttempts);
+        try
+        {
+            await producer.PublishAsync(Topics.PaymentResultsDlq, cr.Message.Key,
+                new DlqMessage(Topics.PaymentResults, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+        }
+        catch (Exception dlqEx) when (!ct.IsCancellationRequested)
+        {
+            // Could not quarantine it (broker down). Do NOT commit past it and do NOT let this escape the loop
+            // (an exception out of a catch block would stop the whole host): rewind and try again later.
+            logger.LogError(dlqEx, "Could not publish payment-results at {Offset} to the DLQ — not committing; will retry.", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch (OperationCanceledException) { }
+            return;
+        }
+
+        consumer.Commit(cr); // now genuinely unblock: this offset is quarantined, not silently lost
+        _poison.Clear(cr.TopicPartitionOffset);
+    }
 
     private async Task HandleAsync(string value, CancellationToken ct)
     {

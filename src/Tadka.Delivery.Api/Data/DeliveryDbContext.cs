@@ -10,6 +10,7 @@ public class DeliveryDbContext(DbContextOptions<DeliveryDbContext> options) : Db
     public DbSet<DeliveryAgent> Agents => Set<DeliveryAgent>();
     public DbSet<DeliveryAssignment> Assignments => Set<DeliveryAssignment>();
     public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
+    public DbSet<PendingAssignment> PendingAssignments => Set<PendingAssignment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -23,6 +24,13 @@ public class DeliveryDbContext(DbContextOptions<DeliveryDbContext> options) : Db
             b.Property(x => x.Id).HasDefaultValueSql("gen_random_uuid()");
             b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).HasDefaultValue(AssignmentStatus.Assigned);
             b.HasIndex(x => x.OrderId).IsUnique(); // one assignment per order — the idempotency guard
+        });
+        modelBuilder.Entity<PendingAssignment>(b =>
+        {
+            b.ToTable("pending_assignments", "delivery");
+            b.HasKey(x => x.OrderId); // one waiting row per order — parking the same order twice is a no-op
+            b.Property(x => x.CreatedAt).HasDefaultValueSql("NOW()");
+            b.HasIndex(x => x.CreatedAt); // the sweeper serves the oldest waiting order first
         });
         modelBuilder.Entity<InboxMessage>(b =>
         {
@@ -45,10 +53,14 @@ public class DeliveryAgentConfiguration : IEntityTypeConfiguration<DeliveryAgent
         b.Property(x => x.Phone).HasMaxLength(15);
         b.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).HasDefaultValue(AgentStatus.Available);
 
-        // Seed a few available riders so assignment works out of the box.
+        b.HasIndex(x => x.UserId).IsUnique(); // one login ↔ one rider record
+
+        // Seed a few available riders so assignment works out of the box. UserId matches the DeliveryAgent
+        // accounts the monolith's AuthSeeder creates (suresh.rider@ / lakshmi.rider@ / imran.rider@tadka.test),
+        // so a rider can log in and post their own location (and only their own).
         b.HasData(
-            new DeliveryAgent { Id = new("f0000000-0000-4000-8000-000000000001"), Name = "Suresh", Phone = "+919876600001", Status = AgentStatus.Available },
-            new DeliveryAgent { Id = new("f0000000-0000-4000-8000-000000000002"), Name = "Lakshmi", Phone = "+919876600002", Status = AgentStatus.Available },
-            new DeliveryAgent { Id = new("f0000000-0000-4000-8000-000000000003"), Name = "Imran", Phone = "+919876600003", Status = AgentStatus.Available });
+            new DeliveryAgent { Id = new("f0000000-0000-4000-8000-000000000001"), Name = "Suresh", Phone = "+919876600001", Status = AgentStatus.Available, UserId = RiderUsers.Suresh },
+            new DeliveryAgent { Id = new("f0000000-0000-4000-8000-000000000002"), Name = "Lakshmi", Phone = "+919876600002", Status = AgentStatus.Available, UserId = RiderUsers.Lakshmi },
+            new DeliveryAgent { Id = new("f0000000-0000-4000-8000-000000000003"), Name = "Imran", Phone = "+919876600003", Status = AgentStatus.Available, UserId = RiderUsers.Imran });
     }
 }

@@ -19,6 +19,8 @@ public sealed class OrderConfirmedConsumer(
     IOptions<KafkaOptions> options,
     ILogger<OrderConfirmedConsumer> logger) : BackgroundService
 {
+    private readonly PoisonMessageTracker _poison = new();
+
     protected override Task ExecuteAsync(CancellationToken stoppingToken) => Task.Run(async () =>
     {
         var config = new ConsumerConfig
@@ -35,20 +37,59 @@ public sealed class OrderConfirmedConsumer(
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            ConsumeResult<string, string>? cr = null;
             try
             {
-                var cr = consumer.Consume(TimeSpan.FromSeconds(1));
+                cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
+
                 await HandleAsync(cr.Message.Value, stoppingToken);
-                consumer.Commit(cr);
+                consumer.Commit(cr); // at-least-once: commit only after processing
+                _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
             catch (ConsumeException ex) { logger.LogError(ex, "OrderConfirmedConsumer consume error."); }
-            catch (Exception ex) { logger.LogError(ex, "OrderConfirmedConsumer handler error — will reprocess (idempotent)."); }
+            catch (Exception ex) when (cr is not null)
+            {
+                await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
         }
 
         consumer.Close();
     }, stoppingToken);
+
+    // ADR-051: a handler failure used to be logged and skipped, but Consume() advances the read position on every
+    // call regardless of commit, so committing the NEXT message silently committed past the failed one. Now:
+    // seek back to retry the SAME message a bounded number of times, then quarantine it on order-confirmed.dlq and commit.
+    private async Task HandlePoisonAsync(IConsumer<string, string> consumer, ConsumeResult<string, string> cr, Exception ex, CancellationToken ct)
+    {
+        if (!_poison.RecordFailureAndShouldDlq(cr.TopicPartitionOffset))
+        {
+            logger.LogWarning(ex, "order-confirmed at {Offset} failed — will retry (idempotent).", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromMilliseconds(300), ct); } catch (OperationCanceledException) { }
+            return;
+        }
+
+        logger.LogError(ex, "order-confirmed at {Offset} failed {Attempts}x — routing to DLQ, partition unblocked.", cr.TopicPartitionOffset, _poison.MaxAttempts);
+        try
+        {
+            await producer.PublishAsync(Topics.OrderConfirmedDlq, cr.Message.Key,
+                new DlqMessage(Topics.OrderConfirmed, cr.Message.Value, ex.Message, _poison.MaxAttempts, DateTimeOffset.UtcNow), ct);
+        }
+        catch (Exception dlqEx) when (!ct.IsCancellationRequested)
+        {
+            // Could not quarantine it (broker down). Do NOT commit past it and do NOT let this escape the loop
+            // (an exception out of a catch block would stop the whole host): rewind and try again later.
+            logger.LogError(dlqEx, "Could not publish order-confirmed at {Offset} to the DLQ — not committing; will retry.", cr.TopicPartitionOffset);
+            consumer.Seek(cr.TopicPartitionOffset);
+            try { await Task.Delay(TimeSpan.FromSeconds(5), ct); } catch (OperationCanceledException) { }
+            return;
+        }
+
+        consumer.Commit(cr); // now genuinely unblock: this offset is quarantined, not silently lost
+        _poison.Clear(cr.TopicPartitionOffset);
+    }
 
     private async Task HandleAsync(string value, CancellationToken ct)
     {
@@ -64,7 +105,10 @@ public sealed class OrderConfirmedConsumer(
             return;
         }
 
-        var result = await scope.ServiceProvider.GetRequiredService<DeliveryService>().AssignAsync(msg.OrderId, ct);
+        // No rider free → AssignAsync parks the order in pending_assignments (durable) and returns null; the
+        // PendingAssignmentSweeper assigns it later. So stamping the Inbox below no longer drops the order.
+        var result = await scope.ServiceProvider.GetRequiredService<DeliveryService>()
+            .AssignAsync(msg.OrderId, ct, msg.CustomerId, msg.Latitude, msg.Longitude);
         if (result is not null)
             await producer.PublishAsync(Topics.DeliveryAssigned, msg.OrderId.ToString(),
                 new DeliveryAssignedMessage(Guid.NewGuid(), msg.OrderId, result.AgentId, result.AgentName), ct);

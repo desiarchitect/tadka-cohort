@@ -30,6 +30,16 @@ public class PaymentReactionTests(TadkaApiFactory factory) : IClassFixture<Tadka
         await PublishAsync(new PaymentCompletedEvent(orderId, "FAKEPAY-TEST-0001"));
 
         Assert.Equal(OrderStatus.Confirmed, await OrderStatusAsync(orderId));
+
+        // The order-confirmed event carries the customer, so Delivery can check ownership on /track (ADR-031)
+        // without ever reading this service's orders table.
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TadkaDbContext>();
+        var order = await db.Orders.AsNoTracking().SingleAsync(o => o.Id == orderId);
+        var outbox = await db.Set<Tadka.Api.Data.Messaging.OutboxMessage>().AsNoTracking()
+            .SingleAsync(o => o.Topic == "order-confirmed" && o.Key == orderId.ToString());
+        var message = JsonSerializer.Deserialize<Tadka.Api.Infrastructure.Messaging.OrderConfirmedMessage>(outbox.Payload)!;
+        Assert.Equal(order.CustomerId, message.CustomerId);
     }
 
     [Fact]
