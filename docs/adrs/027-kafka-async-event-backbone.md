@@ -47,5 +47,17 @@ Kafka itself is language-neutral. Clients: **Confluent.Kafka** (.NET) ≈ **spri
 - `docs/incidents/inc-107-consumer-catchup.md` (consumer-down catch-up; redelivery → one charge)
 - Implementation: monolith `Infrastructure/Messaging/*` (producer + results consumer), Payment service `Messaging/*` (order-placed consumer + results producer)
 
+## Security addendum: authenticated broker (SASL/SCRAM-SHA-256)
+
+**Decision.** The local broker requires SASL/SCRAM-SHA-256 on the `HOST` (apps, CLI) and `DOCKER` (Kafka UI) listeners. The `CONTROLLER` listener stays `PLAINTEXT`: it is KRaft quorum traffic on a single-voter broker with no published port. One shared user (`tadka`) is used by every client. Each service reads `Kafka:SaslUsername` / `Kafka:SaslPassword` and applies them to every producer and consumer through one `KafkaSecurity.ApplySasl(...)` extension in its own `Messaging.cs` (services do not share code, ADR-024/026). The extension does nothing unless a username is configured, so the test suite (Testcontainers Kafka, no auth) and any un-secured broker are unaffected.
+
+**Why not just document the gap.** An unauthenticated broker lets any process on the network read or write any topic, including `order-placed`. The teaching stack should not model that as normal.
+
+**How the broker gets its user.** The `apache/kafka` image cannot seed a SCRAM credential from environment variables: the credential must be written into the cluster metadata when storage is formatted (`kafka-storage.sh format --add-scram`, KIP-900). The image's own start-up formats storage as a side effect of writing `server.properties`, so `docker/kafka-scram-entrypoint.sh` lets that step run, wipes the freshly formatted log (the container has no persistent volume), and formats again with `--add-scram` before starting the broker. It also writes `/etc/kafka/docker/client.properties`, which the CLI tools take through `--command-config` (`kafka-topics.sh`, `kafka-consumer-groups.sh`), `--producer.config` (`kafka-console-producer.sh`) or `--consumer.config` (`kafka-console-consumer.sh`).
+
+**Trade-offs and limits.** `SASL_PLAINTEXT` authenticates but does not encrypt; production needs `SASL_SSL`. One shared user and no ACLs means any client can touch any topic; real isolation is a user per service plus ACLs. The password is a demo default committed in `appsettings.Development.json` and `docker-compose.yml`; production reads it from a secrets manager. **Not covered:** the Azure/cloud Kafka (`deploy/azure`), a separate plain container reachable only inside the private Container Apps network; securing it needs a custom image carrying the same bootstrap script and Terraform secret plumbing.
+
+**Revisit when** the broker is exposed beyond a single trusted network, or a second team owns a consumer: move to `SASL_SSL` and per-service users with ACLs.
+
 ## Revisit When
 When fan-out grows (Notification, Analytics, Delivery consumers) — revisit topic design + schema registry (event versioning). When ops burden justifies it, move from raw Confluent.Kafka to **MassTransit** (outbox/retry/DLQ built in). DLQ for poison messages is a future requirement → formalize when a real poison case appears.

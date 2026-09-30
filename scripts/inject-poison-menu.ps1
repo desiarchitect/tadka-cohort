@@ -10,7 +10,7 @@
 #
 # Watch the effect with:
 #   docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\",\"PriceAmount\" FROM ordering.menu_replica WHERE \"MenuItemId\"='b1b2c3d4-0001-4000-8000-000000000001';"
-#   docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-monolith-menu
+#   docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-monolith-menu
 
 param(
     [ValidateSet("SafeExtraField", "BreakingRename")]
@@ -52,7 +52,7 @@ Write-Output $payload
 $key = "$restaurantId="
 $line = "$key$payload"
 $line | docker exec -i tadka-kafka /opt/kafka/bin/kafka-console-producer.sh `
-    --bootstrap-server localhost:9092 --topic menu-updated `
+    --bootstrap-server localhost:9092 --producer.config /etc/kafka/docker/client.properties --topic menu-updated `
     --property "parse.key=true" --property "key.separator==" 2>$null
 
 Write-Output ""

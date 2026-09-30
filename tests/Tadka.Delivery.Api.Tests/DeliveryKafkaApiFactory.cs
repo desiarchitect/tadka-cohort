@@ -24,6 +24,9 @@ public class DeliveryKafkaApiFactory : WebApplicationFactory<Program>, IAsyncLif
         builder.UseSetting("ConnectionStrings:DeliveryDb", _db.GetConnectionString());
         builder.UseSetting("ConnectionStrings:Redis", "");   // → NullLocationStore
         builder.UseSetting("Kafka:BootstrapServers", BootstrapServers);
+        // The Testcontainers broker is unauthenticated, but Development appsettings carry the compose
+        // broker's SASL credentials: blank the username so the test host does not try to authenticate.
+        builder.UseSetting("Kafka:SaslUsername", "");
         builder.UseEnvironment("Development");
 
         builder.ConfigureTestServices(services =>

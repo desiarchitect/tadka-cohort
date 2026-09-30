@@ -30,7 +30,7 @@ Write-Host @'
 
   # Consumer group lag is 0 — the bad message was "successfully" consumed
   docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
-    --bootstrap-server localhost:9092 --describe --group tadka-payment
+    --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
 '@
 
 Write-Host ""

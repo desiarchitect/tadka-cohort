@@ -29,7 +29,7 @@ Write-Host @'
 
   # Consumer group lag is 0 - the bad message was "successfully" consumed
   docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
-    --bootstrap-server localhost:9092 --describe --group tadka-monolith-menu
+    --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-monolith-menu
 
   # Place an order for it and watch the total (LocalReplica mode reads straight from the row above)
   # POST /api/v1/orders with menuItemId b1b2c3d4-0001-4000-8000-000000000001 -> line total Rs 0.00

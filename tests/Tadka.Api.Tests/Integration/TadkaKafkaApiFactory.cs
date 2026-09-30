@@ -26,6 +26,9 @@ public class TadkaKafkaApiFactory : WebApplicationFactory<Program>, IAsyncLifeti
         builder.UseSetting("ConnectionStrings:Redis", "");
         builder.UseSetting("Payment:Mode", "Off"); // irrelevant here; keeps Day-4 order semantics out of the way
         builder.UseSetting("Kafka:BootstrapServers", BootstrapServers);
+        // The Testcontainers broker is unauthenticated, but Development appsettings carry the compose
+        // broker's SASL credentials: blank the username so the test host does not try to authenticate.
+        builder.UseSetting("Kafka:SaslUsername", "");
         builder.UseEnvironment("Development");
 
         builder.ConfigureTestServices(services =>

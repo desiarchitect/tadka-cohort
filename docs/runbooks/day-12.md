@@ -41,6 +41,8 @@ docker compose ps
 dotnet build Tadka.slnx
 ```
 
+**Kafka requires a login on this branch.** The local broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. All four services and Kafka UI already carry the demo credentials (`appsettings.Development.json`, `docker-compose.yml`). The Kafka command-line tools you run through `docker exec` are clients too: pass `--command-config /etc/kafka/docker/client.properties` to `kafka-topics.sh` and `kafka-consumer-groups.sh`, `--producer.config` to the console producer and `--consumer.config` to the console consumer (the helper scripts under `scripts/` already do). Without credentials a Kafka command hangs and prints nothing. Details are in the Day 9 runbook and ADR-027's security addendum. **The Azure/cloud Kafka is not covered** (see section 13).
+
 Five processes, five terminals (identical in either shell):
 ```
 dotnet run --project src/Tadka.Payment.Api    # :5240
@@ -437,7 +439,7 @@ The teaching script's Segment 7 walks a *real*, currently deployed Azure Contain
 ```
 dotnet test
 ```
-**117/117** on this branch at the time of writing: monolith 69, Payment 20, Delivery 5, Restaurant 8, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
+**133/133** on this branch at the time of writing: monolith 73, Payment 24, Delivery 9, Restaurant 12, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. That includes 16 Kafka authentication tests (4 per service, no broker needed), and the real-Kafka integration tests (Testcontainers) that run against an unauthenticated broker: their fixtures blank `Kafka:SaslUsername`, because the test host runs in the `Development` environment and would otherwise inherit the compose broker's credentials. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
 
 ---
 
@@ -471,6 +473,7 @@ dotnet test
 - **The SSE stream cap is a single in-memory counter per process.** With N replicas the effective per-user cap is N x 3. A shared counter (Redis) is the real answer at scale.
 - **PgBouncer is in this branch's compose but not in the cloud deployment yet.** The local demo (Day 11) and the live cloud stack are two stories that have not been reconciled.
 - **The giant-`UPDATE` contrast does not hurt at demo scale.** 20,000 rows updates in about half a second; the outage it illustrates needs a table orders of magnitude larger.
+- **Kafka is authenticated, not encrypted or isolated, and only locally.** The docker-compose broker requires SASL/SCRAM-SHA-256, which stops anonymous access to every topic. It is `SASL_PLAINTEXT` (production uses `SASL_SSL`), every service and tool shares one `tadka` user with no ACLs (real isolation is a user per service plus topic ACLs), and the password is a demo default committed to `appsettings.Development.json`. **The Azure/cloud Kafka (ADR-064) has no authentication at all**: it is a separate plain container reachable only inside the private Container Apps network. The apps only turn SASL on when `Kafka:SaslUsername` is set, so the cloud configuration, which sets none, keeps working unchanged; securing it needs a custom image carrying `docker/kafka-scram-entrypoint.sh`, a CI build step and Terraform secret plumbing. See ADR-027's security addendum.
 
 ## Reset
 `docker compose down -v` clears all volumes (including the backfill's synthetic rows).
@@ -487,7 +490,8 @@ monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway
 - [ ] SSE: a non-owner gets **403**; a 4th concurrent stream for one user gets **429**.
 - [ ] The replica-lag tests pass (**5/5**).
 - [ ] The gateway routes `/api/v1/restaurants/**` (**200**).
-- [ ] `dotnet test` is green (**117/117** at the time of writing).
+- [ ] `dotnet test` is green (**133/133** at the time of writing).
+- [ ] A Kafka command with no credentials hangs; with `--command-config /etc/kafka/docker/client.properties` it answers.
 
 ## Troubleshooting
 - **Baseline order is not ₹598:** a prior run already did Demo 2's PATCH and the restaurant-db volume kept ₹349. Run `docker compose down -v` and restart.
@@ -499,4 +503,7 @@ monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway
 - **SSE returns 403 for the order's real owner:** wrong token; re-login and check the `sub` claim matches the order's `customerId`.
 - **SSE returns 429 on the first attempt:** streams from an earlier test are still open. Look for stray `curl -N` processes.
 - **Demo 4 or 6 looks stuck right after a restart:** cold JIT plus consumer-group join. Wait up to a minute; later requests are fast.
+- **Every Kafka command hangs and prints nothing:** you left off the credentials flag. Add `--command-config /etc/kafka/docker/client.properties` (or `--producer.config` / `--consumer.config` for the console tools).
+- **A service logs `Disconnected: connection closed by peer` and `1/1 brokers are down` repeatedly:** it is connecting to Kafka without credentials. Check `Kafka:SaslUsername` and `Kafka:SaslPassword` in that service's `appsettings.Development.json` (each of the four has its own).
+- **A real-Kafka test in your own test project times out with "Value is null":** the test host inherited the SASL credentials from `appsettings.Development.json`. Blank them in the fixture: `builder.UseSetting("Kafka:SaslUsername", "")`.
 - **PgBouncer `SHOW POOLS` fails with "not allowed":** connect as the `tadka` user (set via `ADMIN_USERS` in `docker-compose.yml`), not `postgres`.

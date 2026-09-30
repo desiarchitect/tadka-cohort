@@ -33,7 +33,7 @@ Read-Host | Out-Null
 
 Write-Output "Resetting tadka-payment consumer group to earliest on order-placed..."
 docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh `
-    --bootstrap-server localhost:9092 --group tadka-payment --topic order-placed `
+    --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --group tadka-payment --topic order-placed `
     --reset-offsets --to-earliest --execute | Out-Null
 
 Write-Output ""
@@ -46,7 +46,7 @@ $deadline = (Get-Date).AddSeconds(30)
 do {
     Start-Sleep -Seconds 2
     $lagOut = docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh `
-        --bootstrap-server localhost:9092 --describe --group tadka-payment 2>$null
+        --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment 2>$null
     $stillLagging = $lagOut | Select-String "order-placed" | Where-Object { $_ -notmatch '\s0\s*$' }
 } while ($stillLagging -and (Get-Date) -lt $deadline)
 

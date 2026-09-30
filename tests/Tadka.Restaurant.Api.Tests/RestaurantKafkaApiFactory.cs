@@ -24,6 +24,9 @@ public class RestaurantKafkaApiFactory : WebApplicationFactory<Program>, IAsyncL
         builder.UseSetting("ConnectionStrings:RestaurantDb", _db.GetConnectionString());
         builder.UseSetting("ConnectionStrings:Redis", "");      // → NullCacheService
         builder.UseSetting("Kafka:BootstrapServers", BootstrapServers);
+        // The Testcontainers broker is unauthenticated, but Development appsettings carry the compose
+        // broker's SASL credentials: blank the username so the test host does not try to authenticate.
+        builder.UseSetting("Kafka:SaslUsername", "");
         builder.UseEnvironment("Development");
 
         builder.ConfigureTestServices(services =>

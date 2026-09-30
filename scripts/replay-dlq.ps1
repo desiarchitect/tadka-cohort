@@ -6,12 +6,12 @@
 #   pwsh scripts/replay-dlq.ps1
 #
 # Verify recovery with:
-#   docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --describe --group tadka-payment
+#   docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
 
 Write-Output "Reading order-placed.dlq (from-beginning, 5s window)..."
 
 $raw = docker exec tadka-kafka /opt/kafka/bin/kafka-console-consumer.sh `
-    --bootstrap-server localhost:9092 --topic order-placed.dlq `
+    --bootstrap-server localhost:9092 --consumer.config /etc/kafka/docker/client.properties --topic order-placed.dlq `
     --from-beginning --timeout-ms 5000 2>$null
 
 $lines = $raw -split "`n" | Where-Object { $_.Trim().Length -gt 0 }
@@ -36,7 +36,7 @@ foreach ($line in $lines) {
     Write-Output "  (originally failed $($dlq.attempts)x: $($dlq.error))"
 
     $dlq.originalPayload | docker exec -i tadka-kafka /opt/kafka/bin/kafka-console-producer.sh `
-        --bootstrap-server localhost:9092 --topic $dlq.originalTopic 2>$null
+        --bootstrap-server localhost:9092 --producer.config /etc/kafka/docker/client.properties --topic $dlq.originalTopic 2>$null
 }
 
 Write-Output ""

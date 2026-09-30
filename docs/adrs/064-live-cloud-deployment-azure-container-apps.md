@@ -131,7 +131,7 @@ reads `__EFMigrationsHistory`. Pool math on B1ms: Payment's pool drops to 2 when
   With the flag off, the default strategy runs the lambda exactly once. Proven by
   `tests/Tadka.Api.Tests/Integration/ExecutionStrategyRetryTests.cs`.
 - StackExchange.Redis `AbortOnConnectFail = false` set explicitly on all three multiplexers.
-- No SASL/Event Hubs settings were added (Kafka is a container, see above).
+- No SASL/Event Hubs settings were added (Kafka is a container, see above). The local docker-compose broker does require SASL/SCRAM-SHA-256 (ADR-027 security addendum); this cloud broker does not. The apps only enable SASL when `Kafka:SaslUsername` is set, so the cloud configuration, which sets none, is unaffected. Securing the cloud broker would need a custom Kafka image carrying `docker/kafka-scram-entrypoint.sh`, a CI build/push step, and Terraform secret plumbing for the password; it is not done and not verified.
 - `Gateway:RequiredFrontDoorId` (origin lockdown, above): empty = off.
 
 ## Consequences

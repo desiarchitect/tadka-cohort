@@ -30,7 +30,7 @@ public sealed class MenuUpdatedConsumer(
             GroupId = options.Value.ConsumerGroup + "-menu",
             AutoOffsetReset = AutoOffsetReset.Earliest,
             EnableAutoCommit = false
-        };
+        }.ApplySasl(options.Value);
 
         using var consumer = new ConsumerBuilder<string, string>(config).Build();
         consumer.Subscribe(Topics.MenuUpdated);
