@@ -3,7 +3,7 @@ using System.Text.Json.Serialization;
 
 namespace Tadka.Api.Auth;
 
-/// <summary>One public key in JWK format (RFC 7517) — what <c>/.well-known/jwks.json</c> publishes (ADR-062).</summary>
+/// <summary>One public key in JWK format (RFC 7517) — what <c>/.well-known/jwks.json</c> publishes (ADR-067).</summary>
 public sealed record Jwk(
     [property: JsonPropertyName("kty")] string Kty,
     [property: JsonPropertyName("use")] string Use,

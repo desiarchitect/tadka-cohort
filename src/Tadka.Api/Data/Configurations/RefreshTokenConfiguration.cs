@@ -13,7 +13,7 @@ public class RefreshTokenConfiguration : IEntityTypeConfiguration<RefreshToken>
         builder.HasKey(t => t.Id);
         builder.Property(t => t.Id).HasDefaultValueSql("gen_random_uuid()");
 
-        // The hash IS how we look a presented token up — unique + indexed, never a table scan (ADR-061).
+        // The hash IS how we look a presented token up — unique + indexed, never a table scan (ADR-066).
         builder.Property(t => t.TokenHash).IsRequired().HasMaxLength(64);
         builder.HasIndex(t => t.TokenHash).IsUnique();
 

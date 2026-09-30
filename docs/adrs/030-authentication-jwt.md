@@ -5,12 +5,12 @@
 **Deciders:** Tadka Engineering Team
 
 > **2026-09-21 update:** the two gaps this ADR explicitly named as future work are now closed.
-> Refresh-token rotation ("documented, not wired") is wired in **ADR-061**. Signing switches from
-> HS256 to **RS256 + JWKS discovery** in **ADR-062** (the "migration path to RS256" this ADR
+> Refresh-token rotation ("documented, not wired") is wired in **ADR-066**. Signing switches from
+> HS256 to **RS256 + JWKS discovery** in **ADR-067** (the "migration path to RS256" this ADR
 > flagged). The mechanism CHOICE below (JWT over sessions/OAuth2/etc.) and the claims shape
 > (`sub`/`role`/`restaurantId`) are unchanged and still authoritative — only the signing algorithm
-> and the refresh story have moved; read ADR-061/062 for those. Login is also now rate-limited and
-> account-lockout-protected (**ADR-060**).
+> and the refresh story have moved; read ADR-066/062 for those. Login is also now rate-limited and
+> account-lockout-protected (**ADR-065**).
 
 ## Context
 

@@ -5,8 +5,8 @@
 > **Related ADRs:**
 > - [ADR-030: Stateless JWT Authentication](file:///D:/work/cohort/tadka-cohort/docs/adrs/030-stateless-jwt-auth.md)
 > - [ADR-031: RBAC and Resource Ownership](file:///D:/work/cohort/tadka-cohort/docs/adrs/031-rbac-and-resource-ownership.md)
-> - [ADR-061: Refresh-Token Rotation & Reuse Detection](file:///D:/work/cohort/tadka-cohort/docs/adrs/048-refresh-token-rotation-reuse-detection.md)
-> - [ADR-062: RS256 Asymmetric Signing & JWKS Key Rotation](file:///D:/work/cohort/tadka-cohort/docs/adrs/049-rs256-jwks-key-rotation.md)
+> - [ADR-066: Refresh-Token Rotation & Reuse Detection](file:///D:/work/cohort/tadka-cohort/docs/adrs/048-refresh-token-rotation-reuse-detection.md)
+> - [ADR-067: RS256 Asymmetric Signing & JWKS Key Rotation](file:///D:/work/cohort/tadka-cohort/docs/adrs/049-rs256-jwks-key-rotation.md)
 
 ---
 
@@ -32,7 +32,7 @@ Tadka solves this using a **Dual-Token Architecture**:
 
 ## 2. Cryptographic Strategy & Database Schema
 
-### Why Asymmetric RS256 + JWKS (ADR-062)
+### Why Asymmetric RS256 + JWKS (ADR-067)
 In symmetric signing (HS256), the same secret key is used to both sign (mint) and verify tokens. If any downstream service (like `Tadka.Payment.Api`) needs to verify tokens, it must be given the secret key. If that downstream service is compromised or logs its config, **the attacker can forge tokens for ANY user, including Admins**.
 
 With asymmetric signing (**RS256**):
@@ -71,7 +71,7 @@ flowchart LR
     class JWKSClient,JwtBearer slate
 ```
 
-### Why Fast Deterministic Hash (SHA-256) instead of `IPasswordHasher` (ADR-061)
+### Why Fast Deterministic Hash (SHA-256) instead of `IPasswordHasher` (ADR-066)
 - Human passwords have low entropy ("Password123!") and require salted, deliberately slow key-derivation functions (like PBKDF2, bcrypt, or Argon2) to resist offline dictionary attacks.
 - A refresh token is generated using `RandomNumberGenerator.GetBytes(32)` (256 bits of cryptographic entropy). It cannot be brute-forced or guessed offline.
 - When a client presents a refresh token, the server needs to find it quickly: `WHERE TokenHash = @hash`. Slow salted hashers generate a different salt on every execution, making indexed $O(1)$ equality searches impossible.
@@ -209,7 +209,7 @@ When the 15-minute access token expires, the client calls `POST /api/v1/auth/ref
 ### The Concurrency Problem: Check-Then-Act Race Condition
 If two requests present the same refresh token concurrently (e.g., user opens two browser tabs simultaneously, or a mobile client fires two parallel calls after coming back online):
 1. **Naive approach (Broken):** Request A and Request B both run `SELECT ... WHERE TokenHash = @hash`. Both see `RevokedAt IS NULL`. Both proceed to mint new tokens. The rotation chain branches into two active tokens, silently defeating single-use enforcement!
-2. **Tadka's Atomic CAS Solution (ADR-061):** Execute a single SQL `UPDATE` that claims the token atomically:
+2. **Tadka's Atomic CAS Solution (ADR-066):** Execute a single SQL `UPDATE` that claims the token atomically:
    ```csharp
    var claimed = await db.RefreshTokens
        .Where(t => t.TokenHash == hash && t.RevokedAt == null && t.ExpiresAt > now)

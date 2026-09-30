@@ -63,7 +63,7 @@ public class DeliveryApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 
 /// <summary>
 /// Same real service + Postgres, but with the service's own JWT bearer + <see cref="Tadka.Delivery.Api.Auth.JwksClient"/>
-/// pipeline left in place (ADR-060), exactly as Program.cs wires it. The "jwks" HttpClient is redirected to a
+/// pipeline left in place (ADR-065), exactly as Program.cs wires it. The "jwks" HttpClient is redirected to a
 /// <see cref="FakeJwksServer"/> and the cache TTL forced to 0, so a test signs real RS256 tokens with a key the fake
 /// server publishes and every resolution reflects the current key set.
 /// </summary>

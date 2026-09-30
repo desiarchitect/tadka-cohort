@@ -10,18 +10,18 @@ namespace Tadka.Api.Auth;
 public enum RefreshOutcome
 {
     Ok,
-    Invalid,       // not found / expired / malformed — generic 401, don't say which (ADR-061)
+    Invalid,       // not found / expired / malformed — generic 401, don't say which (ADR-066)
     ReuseDetected  // presented token was already revoked → its whole family is now dead too
 }
 
 public readonly record struct RefreshResult(RefreshOutcome Outcome, string? AccessToken, string? RawRefreshToken, User? User);
 
 /// <summary>
-/// Refresh-token issuance + single-use rotation + reuse detection (ADR-061). We hash the raw token with a
+/// Refresh-token issuance + single-use rotation + reuse detection (ADR-066). We hash the raw token with a
 /// fast, deterministic hash (SHA-256) rather than <c>IPasswordHasher</c> — a refresh token is a 256-bit
 /// random secret (not a low-entropy user password), so it needs no per-value salt/slow-hash to resist
 /// guessing, and a deterministic hash is what lets us look a presented token up by an indexed column
-/// instead of iterating every stored hash (see ADR-061's Trade-off).
+/// instead of iterating every stored hash (see ADR-066's Trade-off).
 /// </summary>
 public sealed class RefreshTokenService(TadkaDbContext db, TokenService tokens, IOptions<JwtOptions> options)
 {
@@ -50,7 +50,7 @@ public sealed class RefreshTokenService(TadkaDbContext db, TokenService tokens, 
     /// <summary>
     /// Validates + rotates a presented refresh token. A valid token is revoked and replaced by a new one in
     /// the SAME family (rotation = single-use). A token that is already revoked is reuse of a stolen/replayed
-    /// token — the entire family is revoked immediately (ADR-061), forcing a full re-login even for the
+    /// token — the entire family is revoked immediately (ADR-066), forcing a full re-login even for the
     /// legitimate holder of the newest token in that chain.
     /// </summary>
     public async Task<RefreshResult> RotateAsync(string rawToken, CancellationToken ct = default)

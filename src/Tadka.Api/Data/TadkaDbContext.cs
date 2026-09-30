@@ -31,7 +31,7 @@ public class TadkaDbContext : DbContext
     // Delivery domain
     public DbSet<DeliveryAgent> DeliveryAgents => Set<DeliveryAgent>();
     public DbSet<DeliveryAssignment> DeliveryAssignments => Set<DeliveryAssignment>();
-    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>(); // rotation + reuse detection (ADR-061)
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>(); // rotation + reuse detection (ADR-066)
 
     // Identity domain
     public DbSet<User> Users => Set<User>();

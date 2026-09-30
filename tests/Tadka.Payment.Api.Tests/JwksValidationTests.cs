@@ -8,7 +8,7 @@ using Microsoft.IdentityModel.Tokens;
 namespace Tadka.Payment.Api.Tests;
 
 /// <summary>
-/// Payment.Api's side of RS256 + JWKS (ADR-062) — the "hardest task": this service holds NO signing
+/// Payment.Api's side of RS256 + JWKS (ADR-067) — the "hardest task": this service holds NO signing
 /// secret, only ever fetches PUBLIC keys via <c>JwksClient</c> + <c>IssuerSigningKeyResolver</c>, and must
 /// keep validating tokens correctly as Tadka.Api rotates its signing key underneath it. A
 /// <see cref="FakeJwksServer"/> stands in for Tadka.Api's real endpoint (see <see cref="RealAuthPaymentApiFactory"/>

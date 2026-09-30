@@ -9,7 +9,7 @@ using Tadka.Api.Domain.Users;
 namespace Tadka.Api.Tests.Integration;
 
 /// <summary>
-/// Refresh-token rotation + reuse detection (ADR-061): a refresh token is single-use — presenting it
+/// Refresh-token rotation + reuse detection (ADR-066): a refresh token is single-use — presenting it
 /// rotates in a new pair; presenting an already-rotated (revoked) token is treated as theft and kills the
 /// WHOLE rotation chain, not just the replayed token. Logout revokes the caller's own chain.
 /// </summary>
@@ -92,11 +92,11 @@ public class RefreshTokenTests(TadkaApiFactory factory) : IClassFixture<TadkaApi
         var logoutResp = await client.SendAsync(logoutReq);
         Assert.Equal(HttpStatusCode.NoContent, logoutResp.StatusCode);
 
-        // The refresh token is dead post-logout (ADR-061).
+        // The refresh token is dead post-logout (ADR-066).
         var refreshAfterLogout = await client.PostAsJsonAsync("/api/v1/auth/refresh", new { refreshToken = tokens.RefreshToken });
         Assert.Equal(HttpStatusCode.Unauthorized, refreshAfterLogout.StatusCode);
 
-        // Known limitation named in ADR-061: the ACCESS token itself is a stateless JWT with no denylist,
+        // Known limitation named in ADR-066: the ACCESS token itself is a stateless JWT with no denylist,
         // so it is NOT revoked by logout — it simply expires on its own short (15 min) TTL. We don't assert
         // that here (this factory swaps in TestAuthHandler, so it never checks a real bearer token's
         // validity), but the ADR is explicit that "logout" only ever means "no more silent refreshes."

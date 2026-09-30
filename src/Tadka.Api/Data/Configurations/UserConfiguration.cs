@@ -38,7 +38,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.HasIndex(u => u.Email).IsUnique();
         builder.Property(u => u.OwnedRestaurantId); // RestaurantOwner → their restaurant (ADR-031)
 
-        // Brute-force lockout counters (ADR-060).
+        // Brute-force lockout counters (ADR-065).
         builder.Property(u => u.FailedLoginAttempts).HasDefaultValue(0);
         builder.Property(u => u.LockedUntil);
 

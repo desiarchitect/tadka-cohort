@@ -3,7 +3,7 @@ using System.Security.Claims;
 namespace Tadka.Api.Auth;
 
 /// <summary>
-/// JWT config (ADR-030, signing switched to RS256 in ADR-062). No shared secret any more — the monolith
+/// JWT config (ADR-030, signing switched to RS256 in ADR-067). No shared secret any more — the monolith
 /// signs with its own <see cref="SigningKeyStore"/> RSA key; every verifier (including Payment.Api) fetches
 /// the PUBLIC key from <c>/.well-known/jwks.json</c> instead of holding a copy of a signing secret.
 /// </summary>
@@ -16,7 +16,7 @@ public sealed class JwtOptions
     public int RefreshTokenDays { get; set; } = 7;
 }
 
-/// <summary>Fixed-window rate limiting on the auth write endpoints (ADR-060).</summary>
+/// <summary>Fixed-window rate limiting on the auth write endpoints (ADR-065).</summary>
 public sealed class AuthRateLimitOptions
 {
     public const string SectionName = "Auth:RateLimit";
@@ -24,7 +24,7 @@ public sealed class AuthRateLimitOptions
     public int WindowSeconds { get; set; } = 10;
 }
 
-/// <summary>Per-account brute-force lockout thresholds (ADR-060).</summary>
+/// <summary>Per-account brute-force lockout thresholds (ADR-065).</summary>
 public sealed class AccountLockoutOptions
 {
     public const string SectionName = "Auth:Lockout";

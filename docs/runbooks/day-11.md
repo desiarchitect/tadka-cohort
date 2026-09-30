@@ -402,7 +402,7 @@ To replay once the cause is fixed: `pwsh scripts/replay-dlq.ps1 -DlqTopic order-
 
 **What you're proving:** with three services verifying tokens, *how* they verify matters more. Nothing here shares a secret.
 
-**RS256 + JWKS (ADR-062).** `Tadka.Api` signs access tokens with an RSA private key that never leaves its process and publishes the public keys. Payment and Delivery each fetch them (cached 5 minutes by `Jwt:JwksCacheMinutes`) and verify by `kid`, so a compromised Delivery can verify tokens but cannot mint one. There is no `Jwt:SigningKey` in any `appsettings.json`.
+**RS256 + JWKS (ADR-067).** `Tadka.Api` signs access tokens with an RSA private key that never leaves its process and publishes the public keys. Payment and Delivery each fetch them (cached 5 minutes by `Jwt:JwksCacheMinutes`) and verify by `kid`, so a compromised Delivery can verify tokens but cannot mint one. There is no `Jwt:SigningKey` in any `appsettings.json`.
 ```bash
 curl -s http://localhost:5224/.well-known/jwks.json           # the public keys (kty, kid, n, e)
 ADMIN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
@@ -417,9 +417,9 @@ Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/rotate-signing-key -Met
 ```
 The monolith keeps the current key plus one previous, so a token signed before ONE rotation still verifies (the `track` call returns 200, not 401); after a second rotation that token is 401. A monolith restart generates new keys, so every token signed before the restart is rejected until the client refreshes.
 
-**Access and refresh tokens (ADR-061).** Login returns a 15-minute access token and a 7-day refresh token. `POST /api/v1/auth/refresh` consumes the presented refresh token and returns a new pair; presenting an already-used one revokes the whole family (a theft signal). `POST /api/v1/auth/logout` revokes the caller's family (the current access token still works until it expires).
+**Access and refresh tokens (ADR-066).** Login returns a 15-minute access token and a 7-day refresh token. `POST /api/v1/auth/refresh` consumes the presented refresh token and returns a new pair; presenting an already-used one revokes the whole family (a theft signal). `POST /api/v1/auth/logout` revokes the caller's family (the current access token still works until it expires).
 
-**Login is rate limited (ADR-060).** The auth endpoints allow 5 requests per 10 seconds per IP (`Auth:RateLimit`) and lock an account for 60 seconds after 5 wrong passwords (`Auth:Lockout`). **A script that logs several users in back to back can hit 429**: space the logins out, or raise `Auth:RateLimit:PermitLimit` for a demo run.
+**Login is rate limited (ADR-065).** The auth endpoints allow 5 requests per 10 seconds per IP (`Auth:RateLimit`) and lock an account for 60 seconds after 5 wrong passwords (`Auth:Lockout`). **A script that logs several users in back to back can hit 429**: space the logins out, or raise `Auth:RateLimit:PermitLimit` for a demo run.
 
 **Payment's HTTP surface is authorised, not just authenticated (ADR-031).** `POST /payments/charge` is Admin-only (the real charge flow runs off the `order-placed` Kafka event, in-process). `GET /payments/{orderId}` returns 403 unless the caller is the customer who placed the order (`order-placed` carries `CustomerId`) or Admin. `PATCH /orders/{id}/status` for a `RestaurantOwner` requires that the order belongs to their restaurant.
 ```bash

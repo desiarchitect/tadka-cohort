@@ -1,7 +1,7 @@
 namespace Tadka.Api.Domain.Users;
 
 /// <summary>
-/// A rotated, single-use refresh token (ADR-061). We never store the raw token — only its hash
+/// A rotated, single-use refresh token (ADR-066). We never store the raw token — only its hash
 /// (<see cref="TokenHash"/>), looked up directly on presentation. <see cref="FamilyId"/> ties every
 /// token born from the same login into one rotation chain, so reuse of an already-rotated-away token
 /// (a theft signal) can revoke the whole chain in one write, not just the one token.
@@ -11,7 +11,7 @@ public class RefreshToken
     public Guid Id { get; set; }
     public Guid UserId { get; set; }
 
-    /// <summary>SHA-256 hex digest of the raw token (never the raw value itself — see ADR-061).</summary>
+    /// <summary>SHA-256 hex digest of the raw token (never the raw value itself — see ADR-066).</summary>
     public string TokenHash { get; set; } = string.Empty;
 
     /// <summary>Shared by every token in one rotation chain, starting at login/register.</summary>

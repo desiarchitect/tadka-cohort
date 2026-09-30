@@ -45,7 +45,7 @@ if (kafkaOptions?.Enabled == true)
 }
 
 // Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token the
-// monolith issued — but no shared secret any more (ADR-062). It fetches Tadka.Api's PUBLIC key over
+// monolith issued — but no shared secret any more (ADR-067). It fetches Tadka.Api's PUBLIC key over
 // HTTP (JWKS) and caches it briefly; the network is not a trust boundary — even with no gateway, a direct
 // call to the Payment service's HTTP endpoints needs a valid token.
 builder.Services.Configure<JwksOptions>(builder.Configuration.GetSection(JwksOptions.SectionName));
@@ -55,7 +55,7 @@ builder.Services.AddSingleton<JwksClient>();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>
 {
-    // See the matching comment in Tadka.Api/Program.cs (ADR-062 live-verification finding): without
+    // See the matching comment in Tadka.Api/Program.cs (ADR-067 live-verification finding): without
     // this, the handler silently remaps "sub"/"role" to legacy long-form claim URIs and RoleClaimType
     // below matches nothing against a REAL token.
     options.MapInboundClaims = false;
@@ -78,7 +78,7 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
         {
             if (string.IsNullOrEmpty(kid)) return [];
             // Blocking on purpose: IssuerSigningKeyResolver is a synchronous callback. The in-memory
-            // cache (ADR-062) means this almost always returns instantly without an actual HTTP call.
+            // cache (ADR-067) means this almost always returns instantly without an actual HTTP call.
             var key = jwksClient.ResolveAsync(kid, CancellationToken.None).GetAwaiter().GetResult();
             return key is null ? [] : new SecurityKey[] { key };
         };

@@ -7,10 +7,10 @@ using Tadka.Api.Domain.Users;
 namespace Tadka.Api.Auth;
 
 /// <summary>
-/// Issues short-lived RS256 access tokens (ADR-030, signing switched from HS256 in ADR-062). Claims:
+/// Issues short-lived RS256 access tokens (ADR-030, signing switched from HS256 in ADR-067). Claims:
 /// <c>sub</c> (userId), <c>role</c>, <c>email</c>, and <c>restaurantId</c> for owners (used by
 /// resource-ownership authz, ADR-031). Refresh-token issuance/rotation lives in <see cref="RefreshTokenService"/>
-/// (ADR-061) — this class only ever mints the access token.
+/// (ADR-066) — this class only ever mints the access token.
 /// </summary>
 public sealed class TokenService(IOptions<JwtOptions> options, SigningKeyStore keys)
 {
@@ -41,7 +41,7 @@ public sealed class TokenService(IOptions<JwtOptions> options, SigningKeyStore k
             Subject = new ClaimsIdentity(claims),
             Expires = DateTime.UtcNow.AddMinutes(_o.AccessTokenMinutes),
             // RS256: the monolith holds the private half; every verifier — including this same process,
-            // via the identical JWKS-shaped lookup (ADR-062) — checks only the public half.
+            // via the identical JWKS-shaped lookup (ADR-067) — checks only the public half.
             SigningCredentials = new SigningCredentials(rsaKey, SecurityAlgorithms.RsaSha256)
         };
 

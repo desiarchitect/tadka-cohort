@@ -12,7 +12,7 @@ namespace Tadka.Delivery.Api.Tests;
 
 /// <summary>
 /// The same ownership rules, but through the service's REAL JWT bearer validation with real RS256 tokens, verified
-/// by key id against a JWKS endpoint (ADR-060), shaped exactly like the monolith's TokenService issues them
+/// by key id against a JWKS endpoint (ADR-065), shaped exactly like the monolith's TokenService issues them
 /// (<c>sub</c>, <c>role</c>). TestAuthHandler builds claims
 /// directly and never goes through the handler's inbound claim renaming, so without these tests a missing
 /// <c>MapInboundClaims = false</c> would make every real rider's IsInRole("DeliveryAgent") false (403 for the

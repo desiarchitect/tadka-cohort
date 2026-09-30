@@ -13,7 +13,7 @@ public class User
     public List<UserAddress> SavedAddresses { get; set; } = [];
     public DateTime CreatedAt { get; set; }
 
-    // Brute-force lockout (ADR-060). Consecutive failed logins; reset to 0 on a successful login.
+    // Brute-force lockout (ADR-065). Consecutive failed logins; reset to 0 on a successful login.
     public int FailedLoginAttempts { get; set; }
     // Set once FailedLoginAttempts crosses the threshold; the account can't log in (even with the
     // correct password) until this passes. Null when not locked.

@@ -14,7 +14,7 @@ the real architectural question — the library is secondary.
 
 **Java (Spring Security):** `oauth2ResourceServer().jwt()` handles validation, but you have to
 decide *how* it gets the key — either a static symmetric key (HS256), or `jwkSetUri(...)` to fetch
-public keys from a discovery endpoint, which is what Tadka itself does as of the ADR-062 hardening
+public keys from a discovery endpoint, which is what Tadka itself does as of the ADR-067 hardening
 pass — `NimbusJwtDecoder.withJwkSetUri(...)` is the closest one-line Spring equivalent of
 `Tadka.Payment.Api`'s hand-rolled `JwksClient`. One genuine gotcha: Spring Security's filter chain order matters.
 If your JWT filter isn't registered before your controller's security rules evaluate, you'll get
@@ -92,7 +92,7 @@ possible in every language.
 
 ## 4. Production hardening: rate limiting, refresh rotation, RS256 + JWKS
 
-> Beyond the 120-minute class script (real code, real tests, ADR-060/061/062) — the same category
+> Beyond the 120-minute class script (real code, real tests, ADR-065/066/067) — the same category
 > as ADR-052/046. Worth reading even if you didn't build it live.
 
 **The question, in any language:** three separate gaps, three separate mechanisms — don't conflate

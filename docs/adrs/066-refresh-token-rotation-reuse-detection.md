@@ -1,6 +1,6 @@
-# ADR-061: Refresh-Token Rotation + Reuse Detection
+# ADR-066: Refresh-Token Rotation + Reuse Detection
 
-> Numbered **ADR-048** on the day-10 branch, where it was first written; the same decision carries the number ADR-061 here and on day-12.
+> Numbered **ADR-048** on the day-10 branch, where it was first written; the same decision carries the number ADR-066 here and on day-12.
 
 **Date:** 2026-09-21
 **Status:** Accepted
@@ -55,7 +55,7 @@ token.
     time): not found, or found-but-expired → generic `401`, family untouched — it's just an invalid
     token, not theft. Found AND not expired AND already revoked → **reuse detected.** The entire
     family is revoked immediately (`RevokeFamilyAsync`), and the response is still a generic `401`,
-    identical to "not found," so a caller can never tell which case fired (ADR-060's same
+    identical to "not found," so a caller can never tell which case fired (ADR-065's same
     honesty-about-leakage stance).
 - **`POST /api/v1/auth/logout`** (`[Authorize]`): revokes the caller's own refresh-token family
   (verified by matching `UserId` — one user cannot silently kill another's session by guessing/
@@ -137,7 +137,7 @@ token.
   reason." The honest diagnosis path: check whether TWO requests hit `/refresh` with the SAME token
   close together (a client bug — a race between tabs/retries) versus a genuine stolen-token replay
   from a different IP/user-agent — the `RefreshToken` row's `CreatedAt`/`RevokedAt` timestamps are
-  the forensic trail, but this repo does not (yet) log WHICH case fired, by design (ADR-060's
+  the forensic trail, but this repo does not (yet) log WHICH case fired, by design (ADR-065's
   don't-leak-which stance) — a real deployment needs a server-side audit log (not returned to the
   caller) to actually distinguish these at 2 AM.
 - **Revisit when:** add device/session metadata (user-agent, approximate location) to
@@ -152,7 +152,7 @@ token.
 
 ## References
 - ADR-030 (JWT authentication — named this as the intended-but-unwired production strategy),
-  ADR-060 (the sibling rate-limiting/lockout control on the same auth surface), ADR-052 (field-level
+  ADR-065 (the sibling rate-limiting/lockout control on the same auth surface), ADR-052 (field-level
   hashing/encryption — the same "never store the raw secret" discipline applied here to tokens
   instead of PII).
 - `src/Tadka.Api/Auth/RefreshTokenService.cs`, `AuthController.cs` (`/refresh`, `/logout`),

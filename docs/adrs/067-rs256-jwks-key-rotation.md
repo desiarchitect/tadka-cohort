@@ -1,6 +1,6 @@
-# ADR-062: RS256 Signing + JWKS Key Rotation (replaces the shared HS256 secret)
+# ADR-067: RS256 Signing + JWKS Key Rotation (replaces the shared HS256 secret)
 
-> Numbered **ADR-049** on the day-10 branch, where it was first written; the same decision carries the number ADR-062 here and on day-12.
+> Numbered **ADR-049** on the day-10 branch, where it was first written; the same decision carries the number ADR-067 here and on day-12.
 
 **Date:** 2026-09-21
 **Status:** Accepted
@@ -73,7 +73,7 @@ set instead of holding a copy of a secret.**
   signing key.** With the (short, 15-minute) access-token TTL from ADR-030, this is bounded — the
   affected tokens simply expire soon regardless — but it IS a real availability wrinkle a rolling
   deploy needs to be aware of: a token signed by the pre-restart process, if the OLD key is gone
-  from the NEW process's memory, fails to verify. A refresh (ADR-061) issues a fresh token signed
+  from the NEW process's memory, fails to verify. A refresh (ADR-066) issues a fresh token signed
   by the new process's current key, so a client that refreshes on a 401 recovers transparently;
   one that doesn't (or is mid-flight on a long-lived access token) sees a spurious 401.
 - **`Tadka.Payment.Api` now has a genuine network dependency to verify ANY token** — it did not

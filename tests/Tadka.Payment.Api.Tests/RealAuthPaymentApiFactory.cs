@@ -10,11 +10,11 @@ namespace Tadka.Payment.Api.Tests;
 /// <summary>
 /// Unlike <see cref="PaymentApiFactory"/>, this factory does NOT swap in the test auth scheme — it keeps
 /// the REAL <c>AddJwtBearer</c> + <see cref="JwksClient"/> pipeline wired exactly as Program.cs configures
-/// it (ADR-062), so <see cref="JwksValidationTests"/> exercises the actual thing that verifies a token in
+/// it (ADR-067), so <see cref="JwksValidationTests"/> exercises the actual thing that verifies a token in
 /// production: fetch-by-kid, cache, and reject-on-miss. The "jwks" named HttpClient is redirected to a
 /// <see cref="FakeJwksServer"/> instead of a real network call, and the cache TTL is forced to 0 so every
 /// resolution reflects the fake server's CURRENT key set (a real deployment uses a multi-minute TTL —
-/// see ADR-062's Trade-off; a 0-minute TTL here trades that off for deterministic, wait-free assertions).
+/// see ADR-067's Trade-off; a 0-minute TTL here trades that off for deterministic, wait-free assertions).
 /// </summary>
 public sealed class RealAuthPaymentApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {

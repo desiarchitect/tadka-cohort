@@ -5,7 +5,7 @@ using Tadka.Api.Auth;
 namespace Tadka.Api.Tests.Integration;
 
 /// <summary>
-/// Brute-force protection on the login endpoint (ADR-060): a fixed-window rate limiter keyed by IP
+/// Brute-force protection on the login endpoint (ADR-065): a fixed-window rate limiter keyed by IP
 /// (429 once tripped) plus an independent per-account lockout counter (401, even for the RIGHT password,
 /// once the account is locked). The two are tested with DIFFERENT clients — the lockout tests bump the
 /// rate-limit's PermitLimit way up via <c>WithWebHostBuilder</c> so a 429 from the OTHER control never
@@ -44,7 +44,7 @@ public class RateLimitingTests(TadkaApiFactory factory) : IClassFixture<TadkaApi
             Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
         }
 
-        // 6th attempt uses the CORRECT password — still 401, because the account is now locked (ADR-060:
+        // 6th attempt uses the CORRECT password — still 401, because the account is now locked (ADR-065:
         // a generic 401 either way, so a caller can't distinguish "wrong password" from "locked out").
         var lockedAttempt = await client.PostAsJsonAsync("/api/v1/auth/login",
             new { email = "rahul@tadka.test", password = AuthSeeder.DefaultPassword });

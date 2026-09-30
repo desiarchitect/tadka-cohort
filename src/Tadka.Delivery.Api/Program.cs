@@ -47,7 +47,7 @@ if (kafka?.Enabled == true)
 }
 
 // Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token the monolith
-// issued, with no shared secret (ADR-060): it fetches Tadka.Api's PUBLIC keys over HTTP (JWKS) and caches them
+// issued, with no shared secret (ADR-065): it fetches Tadka.Api's PUBLIC keys over HTTP (JWKS) and caches them
 // briefly. The network is not a trust boundary, so a direct call to Delivery needs a valid token.
 builder.Services.Configure<JwksOptions>(builder.Configuration.GetSection(JwksOptions.SectionName));
 var jwksOptions = builder.Configuration.GetSection(JwksOptions.SectionName).Get<JwksOptions>() ?? new();

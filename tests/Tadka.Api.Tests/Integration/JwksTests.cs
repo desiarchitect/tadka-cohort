@@ -7,7 +7,7 @@ using Tadka.Api.Auth;
 namespace Tadka.Api.Tests.Integration;
 
 /// <summary>
-/// RS256 signing + JWKS publication + admin-only rotation (ADR-062). These prove the actual cryptographic
+/// RS256 signing + JWKS publication + admin-only rotation (ADR-067). These prove the actual cryptographic
 /// round trip — a token this service issues really does verify against the public key IT publishes — and
 /// the retention/grace-window behaviour: an old key stays verifiable for one rotation, then is dropped.
 /// </summary>
@@ -74,7 +74,7 @@ public class JwksTests(TadkaApiFactory factory) : IClassFixture<TadkaApiFactory>
         var stillValid = await Handler.ValidateTokenAsync(originalToken, ValidationParamsFor(stillThere));
         Assert.True(stillValid.IsValid, stillValid.Exception?.ToString());
 
-        // Rotate a second time: cap is current + 1 previous (ADR-062) — the ORIGINAL key is now dropped.
+        // Rotate a second time: cap is current + 1 previous (ADR-067) — the ORIGINAL key is now dropped.
         var rotate2 = await client.PostAsync("/api/v1/auth/rotate-signing-key", null);
         rotate2.EnsureSuccessStatusCode();
         var afterSecondRotation = await (await client.GetAsync("/.well-known/jwks.json")).Content.ReadFromJsonAsync<JwksDocument>();

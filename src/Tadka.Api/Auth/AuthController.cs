@@ -11,8 +11,8 @@ namespace Tadka.Api.Auth;
 
 /// <summary>
 /// Register + login → access + refresh tokens (ADR-030/048); refresh/logout/rotate-signing-key round out
-/// the token lifecycle (ADR-061/049). Register/login/refresh are anonymous (you can't have a token before
-/// you log in) but rate-limited (ADR-060); logout and key rotation require an authenticated caller.
+/// the token lifecycle (ADR-066/049). Register/login/refresh are anonymous (you can't have a token before
+/// you log in) but rate-limited (ADR-065); logout and key rotation require an authenticated caller.
 /// </summary>
 [ApiController]
 [Route("api/v1/auth")]
@@ -53,7 +53,7 @@ public class AuthController(
 
         // Same generic response whether the user is missing, the password is wrong, or the account is
         // locked — a distinct "locked" response would tell an attacker their guess-flood is working and
-        // confirm the email exists (ADR-060's honesty-about-the-trade-off call).
+        // confirm the email exists (ADR-065's honesty-about-the-trade-off call).
         if (user is null)
             return Unauthorized(new { error = "Invalid credentials." });
 
@@ -79,14 +79,14 @@ public class AuthController(
         return Ok(await IssueTokenPairAsync(user));
     }
 
-    /// <summary>Single-use rotation (ADR-061): the presented refresh token is consumed; a new pair comes back.</summary>
+    /// <summary>Single-use rotation (ADR-066): the presented refresh token is consumed; a new pair comes back.</summary>
     [HttpPost("refresh")]
     [AllowAnonymous]
     [EnableRateLimiting(RateLimitPolicies.AuthWrite)]
     public async Task<ActionResult<TokenResponse>> Refresh([FromBody] RefreshRequest request)
     {
         var result = await refreshTokens.RotateAsync(request.RefreshToken);
-        // 401 either way — ReuseDetected isn't revealed to the caller (ADR-061); it's still logged
+        // 401 either way — ReuseDetected isn't revealed to the caller (ADR-066); it's still logged
         // server-side by SaveChanges/EF's own logging, which is enough for an on-call investigation.
         if (result.Outcome != RefreshOutcome.Ok)
             return Unauthorized(new { error = "Invalid refresh token." });
@@ -95,7 +95,7 @@ public class AuthController(
     }
 
     /// <summary>
-    /// Revokes the caller's current refresh-token family. Known limitation (ADR-061): the ACCESS token
+    /// Revokes the caller's current refresh-token family. Known limitation (ADR-066): the ACCESS token
     /// already issued stays valid until its own short expiry — a stateless JWT can't be revoked without
     /// extra infra (a denylist), so this is "no more silent refreshes," not "instantly logged out."
     /// </summary>
@@ -113,7 +113,7 @@ public class AuthController(
         return NoContent();
     }
 
-    /// <summary>Admin-only key rotation (ADR-062): a fresh RSA keypair becomes the signer; the oldest drops once over the cap.</summary>
+    /// <summary>Admin-only key rotation (ADR-067): a fresh RSA keypair becomes the signer; the oldest drops once over the cap.</summary>
     [HttpPost("rotate-signing-key")]
     [Authorize(Roles = nameof(UserRole.Admin))]
     public IActionResult RotateSigningKey()
@@ -130,7 +130,7 @@ public class AuthController(
     }
 }
 
-/// <summary>Named rate-limiting policies (ADR-060).</summary>
+/// <summary>Named rate-limiting policies (ADR-065).</summary>
 public static class RateLimitPolicies
 {
     public const string AuthWrite = "auth-write";

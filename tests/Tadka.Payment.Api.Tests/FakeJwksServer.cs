@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Tadka.Payment.Api.Tests;
 
 /// <summary>
-/// A tiny in-memory stand-in for Tadka.Api's <c>/.well-known/jwks.json</c> (ADR-062) — an independent
+/// A tiny in-memory stand-in for Tadka.Api's <c>/.well-known/jwks.json</c> (ADR-067) — an independent
 /// TestServer, not Tadka.Api itself, so this suite can drive "rotate" / "drop a key" deterministically
 /// without booting a second full service + its own Postgres. It serves whatever keys are currently in
 /// <see cref="Keys"/>, in the exact JWK Set shape <see cref="Tadka.Payment.Api.Auth.JwksClient"/> consumes.

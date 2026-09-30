@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 
 namespace Tadka.Api.Auth;
 
-/// <summary>One RSA keypair the monolith can sign with (or has recently signed with) — ADR-062.</summary>
+/// <summary>One RSA keypair the monolith can sign with (or has recently signed with) — ADR-067.</summary>
 public sealed class SigningKey
 {
     public required string Kid { get; init; }
@@ -11,14 +11,14 @@ public sealed class SigningKey
 }
 
 /// <summary>
-/// In-memory RSA keypair store for RS256 signing + JWKS publication (ADR-062). Holds the CURRENT
+/// In-memory RSA keypair store for RS256 signing + JWKS publication (ADR-067). Holds the CURRENT
 /// signing key plus a small number of retired keys kept around for VERIFICATION only, so a rotation
 /// doesn't instantly 401 every token issued moments earlier. Keys live only in process memory — see
-/// ADR-062's Trade-off for why, and what that costs on a restart.
+/// ADR-067's Trade-off for why, and what that costs on a restart.
 /// </summary>
 public sealed class SigningKeyStore
 {
-    // Current + 1 previous (ADR-062's retention choice). Index 0 is always the current signing key.
+    // Current + 1 previous (ADR-067's retention choice). Index 0 is always the current signing key.
     private const int MaxKeys = 2;
 
     private readonly Lock _lock = new();

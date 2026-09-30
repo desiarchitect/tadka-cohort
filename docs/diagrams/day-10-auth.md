@@ -8,8 +8,8 @@ Complete visual flow of JWT authentication, asymmetric RS256/JWKS per-service va
 > - [ADR-030: Stateless JWT Authentication](../adrs/030-stateless-jwt-auth.md)
 > - [ADR-031: RBAC and Resource Ownership](../adrs/031-rbac-and-resource-ownership.md)
 > - [ADR-032: PII Encryption and Right-to-be-Forgotten](../adrs/032-pii-masking-and-encryption.md)
-> - [ADR-061: Refresh-Token Rotation & Reuse Detection](../adrs/048-refresh-token-rotation-reuse-detection.md)
-> - [ADR-062: RS256 Asymmetric Signing & JWKS Key Rotation](../adrs/049-rs256-jwks-key-rotation.md)
+> - [ADR-066: Refresh-Token Rotation & Reuse Detection](../adrs/048-refresh-token-rotation-reuse-detection.md)
+> - [ADR-067: RS256 Asymmetric Signing & JWKS Key Rotation](../adrs/049-rs256-jwks-key-rotation.md)
 
 ---
 
@@ -42,7 +42,7 @@ sequenceDiagram
         M-->>P: { keys: [ { kid, n, e } ] }
     end
     P->>P: Verify RS256 signature → 200 OK / 401 Unauthorized
-    Note over M,P: Zero shared secrets: verifiers hold only public keys (ADR-062)
+    Note over M,P: Zero shared secrets: verifiers hold only public keys (ADR-067)
 ```
 
 ---

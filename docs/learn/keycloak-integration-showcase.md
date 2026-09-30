@@ -14,7 +14,7 @@ In Day 10, we built a hand-rolled asymmetric RS256 token issuer (`TokenService`)
 
 The natural question is: **how difficult is it to swap this for an enterprise IAM platform like Keycloak, Okta, or Auth0?**
 
-Because [`Tadka.Payment.Api`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Auth/JwksClient.cs) was built with defense-in-depth and dynamic JWKS public key resolution (ADR-062), **the downstream service has zero vendor lock-in**. It does not know or care whether the token was minted by a C# class or an enterprise Keycloak cluster.
+Because [`Tadka.Payment.Api`](file:///D:/work/cohort/tadka-cohort/src/Tadka.Payment.Api/Auth/JwksClient.cs) was built with defense-in-depth and dynamic JWKS public key resolution (ADR-067), **the downstream service has zero vendor lock-in**. It does not know or care whether the token was minted by a C# class or an enterprise Keycloak cluster.
 
 ```mermaid
 sequenceDiagram

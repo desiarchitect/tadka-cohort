@@ -1,6 +1,6 @@
-# ADR-060: Login Rate Limiting + Account Lockout
+# ADR-065: Login Rate Limiting + Account Lockout
 
-> Numbered **ADR-047** on the day-10 branch, where it was first written; the same decision carries the number ADR-060 here and on day-12.
+> Numbered **ADR-047** on the day-10 branch, where it was first written; the same decision carries the number ADR-065 here and on day-12.
 
 **Date:** 2026-09-21
 **Status:** Accepted
