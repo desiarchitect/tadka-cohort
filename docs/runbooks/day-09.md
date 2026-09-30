@@ -350,10 +350,11 @@ Section 4 proved the inbox stops one redelivered message from double-charging. T
 
 Stop Payment, then reset the group's offset back to the beginning of the topic. A still-active consumer group registration refuses an offset reset, and it takes longer than you would guess to go inactive. This is the client library's session timeout, not the broker being slow. `Confluent.Kafka`'s default session timeout is 45 seconds. Checked live on this branch, the reset command failed on retries at 10 seconds and 22 seconds elapsed, before finally succeeding around a 60 to 70 second total wait. Poll instead of guessing a fixed sleep.
 
-One more thing worth knowing, also checked live: `kafka-consumer-groups.sh --reset-offsets` always exits 0, even when it prints an error and does nothing. A loop that only checks the exit code reports success on the first try, wrongly. Check the actual output text instead:
+One more thing worth knowing, also checked live: `kafka-consumer-groups.sh --reset-offsets` always exits 0, even when it prints an error and does nothing. A loop that only checks the exit code reports success on the first try, wrongly. Check the actual output text instead. Match the row anywhere in the text, not at the start of a line: this tool prints the header and the data row on the same line, so a check like `^tadka-payment` never matches.
+
 
 ```bash
-until docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute 2>&1 | grep -q "^tadka-payment"; do
+until docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --group tadka-payment --topic order-placed --reset-offsets --to-earliest --execute 2>&1 | grep -qE "tadka-payment +order-placed"; do
   echo "group still active, retrying in 5s..."; sleep 5
 done
 ```
