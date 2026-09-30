@@ -48,7 +48,10 @@ Write-Host "[backfill] rows with NULL DisplayName: $nullCount (chunk=$ChunkSize)
 
 $done = 0
 while ($true) {
-  $n = [int]((Sql @"
+  # RETURNING 1 prints one "1" per updated row, but psql also prints a command tag ("UPDATE 200", or
+  # "UPDATE 0" when nothing is left). Counting every output line would see that tag as one row, so $n
+  # would never reach 0 and this loop would spin forever after the work is done. Count only the "1"s.
+  $n = @(Sql @"
 WITH batch AS (
   SELECT "Id" FROM restaurant.menu_items
   WHERE "DisplayName" IS NULL
@@ -61,10 +64,10 @@ SET "DisplayName" = m."Name"
 FROM batch b
 WHERE m."Id" = b."Id"
 RETURNING 1;
-"@ | Measure-Object -Line).Lines)
+"@ | Where-Object { $_ -eq "1" }).Count
   if ($n -le 0) { break }
   $done += $n
-  Write-Host "  batch wrote ~$n rows (cumulative ~$done)"
+  Write-Host "  batch wrote $n rows (cumulative $done)"
   Start-Sleep -Milliseconds 50
 }
 

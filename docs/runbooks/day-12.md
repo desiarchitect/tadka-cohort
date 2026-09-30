@@ -1,180 +1,502 @@
-# Runbook — Day 12: Extract Restaurant (4th service) + zero-downtime migration
+# Day 12: Runbook: Extract Restaurant (4th service) + zero-downtime migration
 
-**What changed since Day 11:** [`docs/changelog.md`](../changelog.md).
+**Branch:** `day-12`  ·  **What changed since Day 11:** [`docs/changelog.md`](../changelog.md).
 
-Tadka reaches the canonical **4 services + a gateway**. Restaurant is the *last* and *hardest* extraction because order pricing reads its menu on the critical path — so it earns a **local read model** (event-carried state transfer, ADR-037) and a **zero-downtime data backfill** (ADR-038). Deploy is a black-box (`deploy/README.md`, ADR-039/064). This branch is intentionally kept fast-forwarded to `main` (`docs/runbooks/DAY-EVOLUTION.md`), so it also carries the live-tracking SSE hardening (ownership check + per-user stream cap) that landed after this branch's own Day-12 work — both get their own demo below since neither exists on Day 11.
+Tadka reaches the canonical **4 services + a gateway**. Restaurant is the *last* and *hardest* extraction because order pricing reads its menu on the critical path, so it earns a **local read model** (event-carried state transfer, ADR-037) and a **zero-downtime data backfill** (ADR-038). Deploy is a black box (`deploy/README.md`, ADR-039/064). This branch is intentionally kept fast-forwarded to `main` (`docs/runbooks/DAY-EVOLUTION.md`), so it also carries the live-tracking SSE hardening (ownership check plus a per-user stream cap) that landed after this branch's own Day-12 work. Both get their own demo below, since neither exists on Day 11.
 
-## Start the stack
+> Demo password `Password123!`.
+
+Every command below is given twice, bash first and PowerShell second, wherever the two shells differ. They are not the same commands with `curl` swapped for `curl.exe`: bash's `VAR=$(...)`, `sed -E`, and inline `VAR=value command` syntax do not run in plain PowerShell at all. Windows PowerShell 5.1 also cannot read an HTTP status code off a 4xx/5xx response without the call throwing, so one small helper is defined once in section 1 and reused. Every PowerShell block here was run live against this branch before being written down.
+
+---
+
+## 1. Start the stack
+
+To start from a clean slate (wipes every volume). **Do this if you have run this branch before**: a previous Demo 2 PATCH persists in the restaurant-db volume and would give you a ₹349 baseline instead of the documented ₹299.
+```bash
+docker compose down -v
+```
+```powershell
+docker compose down -v
+```
+
+Then bring up infra and wait for it:
 ```bash
 git checkout day-12
-docker compose up -d                          # +restaurant-db (5436)
+docker compose up -d                          # + restaurant-db (5436)
+until docker inspect tadka-kafka --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+until docker inspect tadka-restaurant-db --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+docker compose ps
+```
+```powershell
+git checkout day-12
+docker compose up -d
+do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.State.Health.Status}}") -eq "healthy")
+do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-restaurant-db --format "{{.State.Health.Status}}") -eq "healthy")
+docker compose ps
+```
+
+**Build once before starting the apps.** All the services share the `Tadka.Telemetry` project, and if you start several `dotnet run` at once on a fresh checkout they race to build it. Two of the five failed with `Cannot open ...Tadka.Telemetry.dll for writing` in the run that produced this doc. One build first avoids it (identical in either shell):
+```
+dotnet build Tadka.slnx
+```
+
+Five processes, five terminals (identical in either shell):
+```
+dotnet run --project src/Tadka.Payment.Api    # :5240
+dotnet run --project src/Tadka.Delivery.Api   # :5250
 dotnet run --project src/Tadka.Restaurant.Api # :5260  (own DB, seeds, publishes menu-updated)
 dotnet run --project src/Tadka.Api            # :5224  (applies the Day-12 migration on startup)
 dotnet run --project src/Tadka.Gateway        # :8080
 ```
-On monolith startup the Day-12 migration **drops** `restaurant.{restaurants,menu_items}` and **creates + seeds** `ordering.{restaurant_replica,menu_replica}`. If you're testing from a volume that already ran an earlier verification pass, run `docker compose down -v` first — a prior Demo 2 PATCH persists in the restaurant-db volume and will give you a ₹349 baseline instead of the documented ₹299.
+On monolith startup the Day-12 migration **drops** `restaurant.{restaurants,menu_items}` and **creates and seeds** `ordering.{restaurant_replica,menu_replica}`. You may see `Subscribed topic not available` logged by a consumer that started before its topic existed. It is harmless: the consumer keeps retrying and picks the topic up once a producer creates it.
 
-Lever: `Ordering:RestaurantReadMode` = `LocalReplica` (default) | `SyncHttp`. Seeded password `Password123!`.
+Lever: `Ordering:RestaurantReadMode` = `LocalReplica` (default) | `SyncHttp`.
 
-## Demo 1 — Restaurant down → orders still flow
+### PowerShell helper: reading a status code without the call throwing
+Define this once, in the same terminal you'll run every PowerShell block below in:
+```powershell
+function Get-StatusCode {
+    param($Uri, $Method = "GET", $Headers = @{}, $Body = $null, $ContentType = "application/json")
+    try {
+        $params = @{ Uri = $Uri; Method = $Method; Headers = $Headers; UseBasicParsing = $true }
+        if ($Body) { $params.Body = $Body; $params.ContentType = $ContentType }
+        $r = Invoke-WebRequest @params
+        return [int]$r.StatusCode
+    } catch {
+        if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode }
+        else { throw }
+    }
+}
+```
 
-**What you're proving:** the same wound Day 8 healed for Payment (a synchronous cross-service call on the order's hot path) exists again here in a worse spot — pricing, not just charging — and the same fix (a local read model) heals it.
+> **Timing on a cold start.** After a service (re)starts, the first request can be slow (JIT) and Kafka consumers need a few seconds to join their group. Every wait below is a poll with a timeout, not a fixed `sleep`.
 
+Shared setup used by the demos below:
 ```bash
-# baseline (Restaurant up): login priya@tadka.test, place 2x Chicken Biryani at Meghana -> ₹598 (from the replica)
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+BODY='{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":2}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.93,"longitude":77.61}}'
+```
+```powershell
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+$BODY = '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":2}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.93,"longitude":77.61}}'
+```
+
+---
+
+## 2. Demo 1: Restaurant down, orders still flow
+
+**What you're proving:** the same wound Day 8 healed for Payment (a synchronous cross-service call on the order's hot path) exists again here in a worse spot, pricing and not just charging, and the same fix (a local read model) heals it.
+
+**Baseline** (Restaurant up): place 2 x Chicken Biryani at Meghana. The price comes from the replica.
+```bash
+curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"totalAmount":\{"amount":([0-9.]+).*/total: \1/'
+```
+```powershell
+"total: " + (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).totalAmount.amount
 ```
 **Captured live: `total: 598.00`.**
 
+**The wound.** Stop the Restaurant service (Ctrl+C), restart the monolith with the lever forcing a synchronous HTTP price read, then place an order:
 ```bash
-# the wound:  ASPNETCORE: Ordering__RestaurantReadMode=SyncHttp ; restart monolith ; Ctrl+C Restaurant.Api ; POST /orders
+Ordering__RestaurantReadMode=SyncHttp dotnet run --project src/Tadka.Api
+# then, in another terminal:
+curl -s -o /dev/null -w "POST /orders (SyncHttp, Restaurant down): %{http_code}\n" -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY"
 ```
-**Captured live: `500 Internal Server Error`.** With the lever forcing a synchronous HTTP call to price the order, a dead Restaurant service takes the order path down with it — the exact Day-8 shape, now on pricing.
-
-```bash
-# the fix:    Remove-Item Env:\Ordering__RestaurantReadMode ; restart monolith (LocalReplica default) ; Restaurant STILL stopped ; POST /orders
+```powershell
+$env:Ordering__RestaurantReadMode = "SyncHttp"
+dotnet run --project src/Tadka.Api
+# after you stop it (Ctrl+C), clear the lever: $env:Ordering__RestaurantReadMode = $null
+# then, in another terminal:
+"POST /orders (SyncHttp, Restaurant down): " + (Get-StatusCode -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -Body $BODY)
 ```
-**Captured live: `201 Created`, `₹598`.** Pricing came from `ordering.menu_replica`, not a live call. Restaurant being down only blocks *menu edits* — ordering, payment, and browsing are untouched.
+**Captured live: `500 Internal Server Error`.** With the lever forcing a synchronous HTTP call to price the order, a dead Restaurant service takes the order path down with it: the exact Day-8 shape, now on pricing.
 
-## Demo 2 — Price change propagates (event-carried state transfer)
-
-**What you're proving:** the replica isn't a one-time snapshot — it's kept live by Restaurant's own `menu-updated` events, the same Outbox→Kafka pattern Day 9 built for Ordering.
-
+**The fix.** Restaurant is *still stopped*. Restart the monolith with no override (the default is `LocalReplica`) and place the same order:
 ```bash
-# login admin@tadka.test ; PATCH price 299->349 on the Restaurant service:
-curl.exe -X PATCH http://localhost:5260/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu/b1b2c3d4-0001-4000-8000-000000000001 \
-  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+dotnet run --project src/Tadka.Api
+# then:
+curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"status":"([^"]+)".*"totalAmount":\{"amount":([0-9.]+).*/status: \1  total: \2/'
+```
+```powershell
+dotnet run --project src/Tadka.Api
+# then:
+$o = Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY
+"status: " + $o.status + "  total: " + $o.totalAmount.amount
+```
+**Captured live: `201`, status `Created`, `₹598`.** Pricing came from `ordering.menu_replica`, not a live call. Restaurant being down only blocks *menu edits*. Ordering, payment and browsing are untouched. Restart Restaurant before Demo 2.
+
+### How this is actually implemented
+The switch is one line in [`Program.cs`](../../src/Tadka.Api/Program.cs), which picks the pricing source from config:
+```csharp
+var readMode = builder.Configuration["Ordering:RestaurantReadMode"] ?? "LocalReplica";
+if (string.Equals(readMode, "SyncHttp", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddHttpClient<IRestaurantPricingSource, HttpRestaurantPricingSource>(c => { ... c.Timeout = TimeSpan.FromSeconds(2); });
+else
+    builder.Services.AddScoped<IRestaurantPricingSource, LocalReplicaPricingSource>();
+```
+Both implement `IRestaurantPricingSource`. [`LocalReplicaPricingSource`](../../src/Tadka.Api/Infrastructure/RestaurantReadModel/LocalReplicaPricingSource.cs) reads the monolith's own `restaurant_replica` and `menu_replica` tables through EF; [`HttpRestaurantPricingSource`](../../src/Tadka.Api/Infrastructure/RestaurantReadModel/HttpRestaurantPricingSource.cs) calls Restaurant over HTTP with a 2 second timeout. A fast timeout still fails the order when the peer is down, which is the point. The `SyncHttp` lever exists **for the demo only**; the default is the replica.
+
+### Option space: pricing an order when the menu lives in another service
+| Option | Order path when Restaurant is down | Freshness | Use when |
+|---|---|---|---|
+| Sync HTTP + circuit breaker | Fails (a breaker only fails faster) | Always fresh | The price must never be stale |
+| Shared Redis cache | Better, but shared ownership | TTL | Weak service boundaries are acceptable |
+| **Local read model / event-carried state transfer** (what Tadka does) | **Unaffected**, the replica is local | Eventual (seconds) | The default for a hot-path read |
+| Gateway composition | Coupling moves to the edge | Fresh | Read-only joins, not pricing |
+| Trust the client's price | n/a | n/a | **Never** (discount exploit) |
+
+**The trade-off, stated honestly:** availability over freshness. There is a stale-price window of a few seconds, and the line price is **snapshotted at order capture** (ADR-009), so a later menu event does not reprice an order already placed. An interview follow-up worth having ready: *who absorbs the price difference?* Tadka's answer is that the order snapshot wins and the customer pays what they were shown; the restaurant absorbs the gap. That is a business decision, not an engineering one, and it should be written down somewhere (a platform-fee agreement), not decided silently in code.
+
+---
+
+## 3. Demo 2: A price change propagates (event-carried state transfer)
+
+**What you're proving:** the replica is not a one-time snapshot. It is kept live by Restaurant's own `menu-updated` events, the same Outbox→Kafka pattern Day 9 built for Ordering.
+
+Log in as admin and change the price 299 to 349 on the **Restaurant** service:
+```bash
+ADMIN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+curl -s -o /dev/null -w "PATCH: %{http_code}\n" -X PATCH http://localhost:5260/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu/b1b2c3d4-0001-4000-8000-000000000001 \
+  -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
   -d '{"price":{"amount":349,"currency":"INR"}}'        # -> 204
 ```
-> The runbook previously showed this curl with literal `{meghana}`/`{biryani}` placeholders — copy-paste-unrunnable. Meghana is `a1b2c3d4-0001-4000-8000-000000000001`; Chicken Biryani is `b1b2c3d4-0001-4000-8000-000000000001` — both now inline above, matching the verification query below.
+```powershell
+$ADMIN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"admin@tadka.test","password":"Password123!"}').accessToken
+$AH = @{ Authorization = "Bearer $ADMIN" }
+"PATCH: " + (Get-StatusCode -Uri "http://localhost:5260/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu/b1b2c3d4-0001-4000-8000-000000000001" -Method Patch -Headers $AH -Body '{"price":{"amount":349,"currency":"INR"}}')   # 204
+```
+> An earlier version of this runbook showed this curl with literal `{meghana}` and `{biryani}` placeholders, which cannot be pasted and run. Meghana is `a1b2c3d4-0001-4000-8000-000000000001`; Chicken Biryani is `b1b2c3d4-0001-4000-8000-000000000001`.
+
+Then watch it reach the monolith's replica (`menu-updated` → Outbox → Kafka → `MenuUpdatedConsumer` upserts):
+```bash
+docker exec tadka-postgres psql -U tadka -d tadka -c 'SELECT "Name","PriceAmount" FROM ordering.menu_replica WHERE "MenuItemId"='"'"'b1b2c3d4-0001-4000-8000-000000000001'"'"';'
+curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"totalAmount":\{"amount":([0-9.]+).*/new total: \1/'
+```
+```powershell
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \`"Name\`",\`"PriceAmount\`" FROM ordering.menu_replica WHERE \`"MenuItemId\`"='b1b2c3d4-0001-4000-8000-000000000001';"
+"new total: " + (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).totalAmount.amount
+```
+> In PowerShell the double quotes around `"Name"` need a backtick-escape (`` \`" ``: a backslash for the native `psql` argument, a backtick so PowerShell keeps the quote). A bare `\"` gets stripped before it reaches `psql`.
+
+**Captured live:** the PATCH returned `204`; the replica showed `Chicken Biryani | 349.00` within about a second on a warm stack (up to a few seconds cold); a fresh 2x order totalled **`₹698`**. The event carried the full new price, so the monolith never called back to Restaurant to fetch it.
+
+### How this is actually implemented
+Restaurant writes the menu row and a full-snapshot `menu-updated` message to its Outbox in the **same transaction**, and the relay publishes it to Kafka. [`MenuUpdatedConsumer`](../../src/Tadka.Api/Infrastructure/Messaging/MenuUpdatedConsumer.cs) upserts the restaurant and menu rows in `ordering`. It is **idempotent by design (last write wins), so it needs no Inbox**: a redelivery just re-applies the same state. The message carries the whole snapshot, not a diff, precisely so the monolith never has to call back (ADR-008).
+
+### Option space: keeping a copy of another service's data
+| Approach | Consistency | Cost |
+|---|---|---|
+| **Full-snapshot events** (what Tadka does) | Eventual, self-healing (last write wins) | Larger messages |
+| Delta events (`price-changed`) | Eventual, but a lost or reordered event corrupts the copy | Small messages, needs ordering and dedupe |
+| Change data capture (Debezium) | Eventual, no app code | A whole pipeline to run; the right answer at scale |
+| Query the owner on demand | Always fresh | Brings back the temporal coupling from Demo 1 |
+
+Cross-stack: the consumer is a listener plus an upsert in any stack (Spring Kafka + JPA, kafkajs + Prisma, kafka-go + sqlc).
+
+---
+
+## 4. Demo 3: Online data backfill (zero-downtime)
+
+**What you're proving:** events only carry *future* changes, so the replica starts empty and the *current* menu has to be backfilled. In production that table is huge and the system is live, so you cannot lock it or saturate the replica. This demo shows the discipline: chunked, `SKIP LOCKED`, throttled, lag-watched, idempotent.
 
 ```bash
-# menu-updated -> Outbox -> Kafka -> monolith MenuUpdatedConsumer upserts the replica:
-docker exec tadka-postgres psql -U tadka -d tadka -c 'SELECT "Name","PriceAmount" FROM ordering.menu_replica WHERE "MenuItemId"='"'"'b1b2c3d4-0001-4000-8000-000000000001'"'"';'
-# -> Chicken Biryani | 349.00 ;  a new 2x order now totals ₹698
+powershell.exe -NoProfile -File ./scripts/backfill-menu-replica.ps1 -SeedExtra 5000 -ChunkSize 1000 -ThrottleMs 50
 ```
-**Captured live:** the PATCH returned `204`; ~4 seconds later `ordering.menu_replica` showed `349.00`; a fresh 2x order totalled **`₹698`**. The event carried the full new price — the monolith never called back to Restaurant to fetch it (ADR-008: no cross-schema reads, now no cross-service reads either).
-
-## Demo 3 — Online data backfill (zero-downtime)
 ```powershell
-./scripts/backfill-menu-replica.ps1 -SeedExtra 5000 -ChunkSize 1000 -ThrottleMs 50
-# chunked (keyset) + FOR UPDATE SKIP LOCKED + throttle + replication-lag watch + idempotent upsert
-# the table is never locked; reads never block. At scale -> CDC (Debezium).
+.\scripts\backfill-menu-replica.ps1 -SeedExtra 5000 -ChunkSize 1000 -ThrottleMs 50
 ```
-**Captured live:** `5016 row(s)` backfilled in **`6 batches over 7s`**, replica lag staying at **`4-10ms`** throughout, the table never locked. Class mein strategy, script nahi — the LLD lives in the repo, not on the slide.
+(The script is PowerShell either way, and it drives everything through `docker exec psql`, so no host `psql` is needed.)
 
-## Demo 4 — Restaurant service accept/reject (ADR-062, production multi-service path)
+**Captured live, twice:** `5016 row(s)` backfilled in **`6 batches over 7s`**, replica lag staying at **`1-10 ms`** throughout, the table never locked. (5016 = the 16 real seeded items plus 5000 synthetic ones.) Strategy in class, not script: the LLD lives in the repo, not on the slide.
 
-**What you're proving:** Day 11's refund saga (ADR-045) put the accept/reject *decision* inside Ordering, because Restaurant didn't exist as its own process yet. Now it does — the same refund machinery runs, but the decision genuinely lives in a different service and reaches Ordering over Kafka, not a local check.
+### How this is actually implemented
+[`scripts/backfill-menu-replica.ps1`](../../scripts/backfill-menu-replica.ps1) claims a keyset-paged chunk of the source with `FOR UPDATE SKIP LOCKED`, upserts it with `INSERT ... ON CONFLICT ("MenuItemId") DO UPDATE`, sleeps `-ThrottleMs`, reads replication lag from `pg_stat_replication`, and backs off if it exceeds `-LagCeilingMs`. Each batch is its own transaction, so there is never a giant lock.
 
-See also **[decision-mode-matrix.md](decision-mode-matrix.md)**. Day 11 used **Inline** (Ordering decides). Day 12 earns **Service** (Restaurant.Api owns accept/reject). Same refund machinery either way — only the trigger moves.
+### Option space: moving data on a live table
+| Technique | What it buys | Watch |
+|---|---|---|
+| Chunked keyset paging | No giant transaction | Page on the primary key; track a high-water mark |
+| `FOR UPDATE SKIP LOCKED` | N workers take disjoint batches; live traffic is not blocked | The same primitive as the Outbox relay |
+| Throttle + lag watch | Protects the read replica (ADR-016) | If lag grows, back off |
+| Idempotent upsert | Resumable: a re-run never duplicates | Needs a natural id |
+| **CDC (Debezium)** | A continuous stream instead of a one-off copy | A separate pipeline; the answer at scale |
 
+**Why not one big `UPDATE`:** on a 5 crore row table, an unthrottled statement holds locks and pushes replica lag from milliseconds to tens of seconds, and a replica that lags serves stale reads (an order "not found" right after it was placed). The DDL is easy; the data is hard.
+
+---
+
+## 5. Demo 4: Restaurant service accept/reject (ADR-062)
+
+**What you're proving:** Day 11's refund saga (ADR-045) put the accept/reject *decision* inside Ordering, because Restaurant did not exist as its own process yet. Now it does. The same refund machinery runs, but the decision genuinely lives in a different service and reaches Ordering over Kafka. See **[decision-mode-matrix.md](decision-mode-matrix.md)**: Day 11 used **Inline**, Day 12 earns **Service**.
+
+Restart Restaurant with `AcceptMode=Reject` and the monolith with `DecisionMode=Service` (Ctrl+C each first):
+```bash
+Restaurant__AcceptMode=Reject dotnet run --project src/Tadka.Restaurant.Api
+Restaurant__DecisionMode=Service dotnet run --project src/Tadka.Api
+```
 ```powershell
-# Ordering always confirms; Restaurant.Api decides on order-confirmed.
-# Terminal A (Restaurant.Api):  $env:Restaurant__AcceptMode="Reject"
-# Terminal B (Ordering):        $env:Restaurant__DecisionMode="Service"
-# Place an order → Confirmed → restaurant-response Rejected → cancel + refund-requested
+$env:Restaurant__AcceptMode = "Reject"; dotnet run --project src/Tadka.Restaurant.Api
+# after you stop it: $env:Restaurant__AcceptMode = $null
+$env:Restaurant__DecisionMode = "Service"; dotnet run --project src/Tadka.Api
+# after you stop it: $env:Restaurant__DecisionMode = $null
 ```
-**Captured live:** order showed `Created` immediately after payment, **`Cancelled`** ~30 seconds later, and `GET /api/v1/payments/{orderId}` on the Payment service showed **`Refunded`** with a fresh gateway reference. Give it real time here — this is a 3-hop Kafka chain (`order-confirmed` → `restaurant-response` → `refund-requested` → `payment-refunded`), longer than Demo 1's single hop or even Day 11's 2-hop refund saga.
+Ordering always confirms; Restaurant.Api decides on `order-confirmed`. Place an order and poll until it settles:
+```bash
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
+for i in $(seq 1 60); do S=$(curl -s http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); P=$(curl -s http://localhost:5240/api/v1/payments/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && [ "$P" = "Refunded" ] && break; sleep 2; done
+echo "order: $S  payment: $P"
+curl -s http://localhost:5240/api/v1/payments/$ORDER -H "Authorization: Bearer $TOKEN"
 ```
-# Stuck Confirmed? Restaurant.Api/Kafka down — see decision-mode-matrix.md runbook.
-# With Saga__Mode=Orchestration, query:
+```powershell
+$ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
+$sw = [Diagnostics.Stopwatch]::StartNew()
+do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$ORDER" -Headers $H).status; $p = (Invoke-RestMethod -Uri "http://localhost:5240/api/v1/payments/$ORDER" -Headers $H -ErrorAction SilentlyContinue).status } until (($s -eq "Cancelled" -and $p -eq "Refunded") -or $sw.Elapsed.TotalSeconds -gt 120)
+"order: $s  payment: $p"
+Invoke-RestMethod -Uri "http://localhost:5240/api/v1/payments/$ORDER" -Headers $H
+```
+> **Note the path: `/api/v1/payments/{orderId}`.** Payment's routes were versioned on this branch; the Day-11 `/payments/{orderId}` path returns a bare `404` here (no body, which is how you tell a routing miss from a "no such payment" `404`).
+
+**Captured live:** order `Cancelled` and payment **`Refunded`** with a fresh gateway reference (`FAKEREF-…`), about **39 seconds** after services had just restarted. Give it real time: this is a 3-hop Kafka chain (`order-confirmed` → `restaurant-response` → `refund-requested` → `payment-refunded`), longer than Demo 1's single hop or Day 11's 2-hop refund.
+```
+# Stuck Confirmed? Restaurant.Api or Kafka is down: see decision-mode-matrix.md.
+# With Saga__Mode=Orchestration you can also query the saga state:
 #   SELECT * FROM ordering.saga_instances ORDER BY "StartedAt" DESC LIMIT 5;
 ```
 
-## Demo 5 — Expand-contract dual-write (ADR-038 live)
+### How this is actually implemented
+In `Service` mode the monolith stops deciding: it publishes `order-confirmed`, and Restaurant.Api consumes it and replies on `restaurant-response` (`Rejected` here). The monolith's `RestaurantResponseConsumer` receives that and runs the *same* `RefundSagaOrchestrator` from Day 11 (cancel + `refund-requested` via the Outbox), so only the *trigger* moved between processes. The refund half (Payment's `RefundRequestedConsumer`, `PaymentService.RefundAsync`) is unchanged.
+
+### Option space: where the accept/reject decision lives
+| | `Inline` | `Service` (this demo) |
+|---|---|---|
+| Who decides | Ordering, at payment-settled | Restaurant.Api, on `order-confirmed` |
+| Kafka required | No | Yes, plus Restaurant.Api running |
+| If Restaurant is down | Not applicable | Orders sit `Confirmed` |
+| Refund path | Same orchestrator | Same, triggered by `restaurant-response` |
+
+There is **no automatic timeout-then-reject** in the teaching build; an order whose restaurant never answers just stays `Confirmed`. ADR-062 names that as a revisit.
+
+---
+
+## 6. Demo 5: Expand-contract dual-write (ADR-038 live)
+
+**What you're proving:** renaming a column on a live table without downtime. Add the new column (expand), write to **both** during the transition (dual-write), backfill the historical rows in chunks, switch reads, and only later drop the old column (contract). Every step is its own deploy, and no app version ever runs against a schema it cannot handle.
+
+Restart Restaurant with the dual-write lever and change a menu item's name:
+```bash
+Demo__DualWriteDisplayName=true dotnet run --project src/Tadka.Restaurant.Api
+# then:
+ADMIN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+curl -s -o /dev/null -w "PATCH name: %{http_code}\n" -X PATCH http://localhost:5260/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu/b1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" -d '{"name":"Hyderabadi Chicken Biryani"}'
+docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -c 'SELECT "Name","DisplayName" FROM restaurant.menu_items WHERE "Id"='"'"'b1b2c3d4-0001-4000-8000-000000000001'"'"';'
+```
 ```powershell
-# Demo__DualWriteDisplayName=true on Restaurant.Api, then PATCH a menu name.
-# Both Name and DisplayName columns update; MapItem prefers DisplayName when set.
-./scripts/expand-contract-demo.ps1                 # chunked backfill Name -> DisplayName
-./scripts/expand-contract-demo.ps1 -BreakGiantUpdate  # contrast: one giant UPDATE
+$env:Demo__DualWriteDisplayName = "true"; dotnet run --project src/Tadka.Restaurant.Api
+# after you stop it: $env:Demo__DualWriteDisplayName = $null
+# then:
+$ADMIN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"admin@tadka.test","password":"Password123!"}').accessToken
+Invoke-RestMethod -Uri "http://localhost:5260/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu/b1b2c3d4-0001-4000-8000-000000000001" -Method Patch -Headers @{ Authorization = "Bearer $ADMIN" } -ContentType "application/json" -Body '{"name":"Hyderabadi Chicken Biryani"}'
+docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -c "SELECT \`"Name\`",\`"DisplayName\`" FROM restaurant.menu_items WHERE \`"Id\`"='b1b2c3d4-0001-4000-8000-000000000001';"
 ```
-**Captured live:** the dual-write PATCH updated both `Name` and `DisplayName` to the same value in one call — verified directly against `restaurant.menu_items`. The chunked backfill converged correctly (NULL `DisplayName` count reached 0, no errors, no lock waits) across the ~5,000 synthetic rows Demo 3 seeded.
+**Captured live:** both columns hold `Hyderabadi Chicken Biryani` after one PATCH.
 
-> **A real bug found and fixed running this script:** `expand-contract-demo.ps1` failed outright under Windows PowerShell 5.1 with a cascade of parser errors (`An expression was expected after '('`, `Missing argument in parameter list`) that looked nothing like the actual mistake. The file's em dashes had been corrupted into a 3-character mojibake sequence at some point (`â€"` instead of `—`) with no byte-order mark, and separately every embedded SQL identifier used a PowerShell-invalid `\"` escape (PowerShell isn't Bash — a backslash doesn't escape a quote). Fixed both: added a UTF-8 BOM and replaced the corrupted bytes with plain ASCII, and switched the embedded double quotes to PowerShell's own `` `" `` escape (single-line strings) or removed them entirely (inside `@"..."@` here-strings, which don't need quote-escaping at all). **A separate, unresolved observation:** on this machine, the chunked loop advanced one row per iteration instead of up to `-ChunkSize`, even though a direct `docker exec ... psql -c` run of the identical query correctly updated multiple rows in one call. The backfill still converged correctly and never locked — just slower than the chunk size implies. Root cause not confirmed (a Windows Docker Desktop npipe stdin/stdout buffering quirk under `docker exec -i ... -f -` is the leading suspect); worth watching if you run this demo live.
-
-## Demo 6 — The live-tracking SSE stream: ownership + a per-user stream cap
-
-**What you're proving:** two hardening fixes landed on this branch after its own Day-12 work, because they apply everywhere the SSE endpoint exists, not just on the day they were found. Day 10 taught resource ownership as a REST rule; this is the same rule, now enforced on the SSE endpoint too. And because the SSE path bypasses the cloud gateway's Front Door origin lock (ADR-064), a single user could otherwise hold unlimited concurrent streams — so there's a cap.
-
+Now backfill the *historical* rows (the ones written before dual-write was on, including the ~5,000 synthetic rows Demo 3 seeded straight into the table):
 ```bash
-# Priya (the order's owner) streams her own order — fine:
-curl -s -N http://localhost:5224/api/v1/orders/$ORDER/events -H "Authorization: Bearer $TOKEN"   # event: ... (Ctrl+C to stop)
-# Rahul (a different customer) tries the same order id:
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER/events -H "Authorization: Bearer $RAHUL"   # 403
+powershell.exe -NoProfile -File ./scripts/expand-contract-demo.ps1
 ```
-**Captured live: `403`** for Rahul, before the stream ever opens.
+```powershell
+.\scripts\expand-contract-demo.ps1
+```
+**Captured live:** `4815` rows with a NULL `DisplayName` backfilled in **25 batches** (24 x 200, then 15) in about **11 seconds**, ending with `remaining NULL DisplayName: 0`.
 
+And the contrast, one giant unthrottled `UPDATE`:
 ```bash
-# Priya opens 3 concurrent streams on the same order (the default cap), then a 4th:
-curl -s -o /dev/null -w "%{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER/events -H "Authorization: Bearer $TOKEN"   # 429
+powershell.exe -NoProfile -File ./scripts/expand-contract-demo.ps1 -BreakGiantUpdate
 ```
-**Captured live: `429`** on the 4th concurrent stream; closing one of the first three frees the slot immediately (the lease is released in a `finally`, so a dropped client never burns a slot forever). Default cap is 3 per user (`SseStreamLimiter`, constructor default `maxPerUser`).
+```powershell
+.\scripts\expand-contract-demo.ps1 -BreakGiantUpdate
+```
+**Captured live, and be honest about it:** on 20,000 rows the giant `UPDATE` finished in **519 ms**. That is instant on a laptop. The script's own message says it "locks and blows replica lag on a 50M-row hot table", which is the *shape* of the failure, not something this small demo reproduces. Say so if a student asks why nothing broke.
 
-## Demo 7 — Replica staleness has a signal now (ADR-063), briefly
+> **Two real bugs fixed in `expand-contract-demo.ps1` while verifying this runbook.** (1) It failed to *parse* under Windows PowerShell 5.1, with a cascade of confusing errors (`An expression was expected after '('`): its em dashes had been corrupted into mojibake bytes, and every embedded SQL identifier used Bash's `\"` escape, which PowerShell does not understand. (2) After the backfill was complete the loop **never terminated**: `psql` prints a command tag (`UPDATE 200`, or `UPDATE 0`) after the returned rows, the loop counted output lines, so an empty batch still counted as 1 and the loop spun forever printing `batch wrote ~1 rows`. It now counts only the rows it returned (`Where-Object { $_ -eq "1" }`).
 
-**What you're proving:** ADR-037's local read model trades freshness for availability — and until this fix, nothing measured that trade. `tadka.replica.lag_seconds` closes that gap, riding the same OTEL pipeline Day 13 builds properly.
+### How this is actually implemented
+Restaurant's migration added a nullable `DisplayName` column (the additive, non-breaking *expand*). With `Demo:DualWriteDisplayName=true`, PATCH and POST fill both `Name` and `DisplayName`. The API's `MapItem` reads `DisplayName ?? Name`, which is the *switch-read*. The script backfills history in `SKIP LOCKED` chunks, with a 50 ms pause between batches. The *contract* step (stop writing `Name`, drop the column) is deliberately **not** done by the script: that is a later deploy.
 
-This isn't a full demo — Day 13 hasn't happened yet in the taught sequence, and a real dashboard needs that day's Collector/Prometheus/Grafana stack running. What you *can* show without it: the calculation and the wiring are both unit-tested without Docker or a broker.
+### Option space: schema change on a live table
+| Approach | Downtime | Risk |
+|---|---|---|
+| Big-bang `ALTER` + deploy | A maintenance window, which 99.9% availability does not allow | Lock the table, roll back is hard |
+| **Expand and contract** (what Tadka does) | None | More deploys; every step must be backward compatible |
+| Online schema-change tools (gh-ost, `pg_repack`, `pt-online-schema-change`) | None | Extra tooling; needed for very large tables |
+| Blue/green database | None | Data sync and cutover complexity |
+
+Migration tooling by stack: Flyway or Liquibase (Java), Prisma Migrate or Knex (Node), goose or Atlas (Go). All of them are expand-contract underneath.
+
+---
+
+## 7. Demo 6: The live-tracking SSE stream, ownership and a per-user cap
+
+**What you're proving:** two hardening fixes landed on this branch after its own Day-12 work, because they apply everywhere the SSE endpoint exists. Day 10 taught resource ownership as a REST rule; here it is enforced on the SSE endpoint too. And because the SSE path bypasses the cloud gateway's Front Door origin lock (ADR-064), one user could otherwise hold unlimited streams, so there is a cap.
+
+Place an order as Priya, then try to stream it as Rahul:
 ```bash
-dotnet test tests/Tadka.Api.Tests --filter "FullyQualifiedName~ReplicaLag"   # 5/5, no Docker needed
+ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
+RAHUL=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"rahul@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+curl -s -o /dev/null -w "Rahul streams Priya's order: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER/events -H "Authorization: Bearer $RAHUL"   # 403
 ```
-If the Day-13 stack happens to be up (`OTEL_EXPORTER_OTLP_ENDPOINT` set), the gauge flows to Grafana like every other `tadka.*` metric — nothing extra to configure. Full treatment: `docs/adrs/063-replica-lag-metric.md`.
+```powershell
+$ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
+$RAHUL = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"rahul@tadka.test","password":"Password123!"}').accessToken
+"Rahul streams Priya's order: " + (Get-StatusCode -Uri "http://localhost:5224/api/v1/orders/$ORDER/events" -Headers @{ Authorization = "Bearer $RAHUL" })   # 403
+```
+**Captured live: `403`**, before the stream ever opens.
 
-## Demo 8, deferred — the live Azure cloud walk (ADR-064)
+Now open three concurrent streams as Priya (the default cap), then a fourth:
+```bash
+for i in 1 2 3; do curl -s -N http://localhost:5224/api/v1/orders/$ORDER/events -H "Authorization: Bearer $TOKEN" > /dev/null & done
+sleep 2
+curl -s -o /dev/null -w "4th concurrent stream: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER/events -H "Authorization: Bearer $TOKEN"   # 429
+kill %1 %2 %3
+```
+```powershell
+# curl.exe streams (Invoke-RestMethod would buffer), so start three as background processes:
+$procs = 1..3 | ForEach-Object { Start-Process -FilePath curl.exe -ArgumentList "-s","-N","http://localhost:5224/api/v1/orders/$ORDER/events","-H","`"Authorization: Bearer $TOKEN`"" -RedirectStandardOutput "$env:TEMP\sse_$_.txt" -PassThru -WindowStyle Hidden }
+Start-Sleep -Seconds 3
+"4th concurrent stream: " + (Get-StatusCode -Uri "http://localhost:5224/api/v1/orders/$ORDER/events" -Headers $H)   # 429
+$procs | Stop-Process -Force
+```
+**Captured live: `429`** on the fourth concurrent stream. After closing the first three, a new stream opened normally (still open after 3 seconds, not another `429`): the slot is released in a `finally`, so a dropped client never burns one forever.
 
-The teaching script's Segment 7 walks a *real*, currently-deployed Azure Container Apps stack (Front Door CDN cache, private Postgres, hop-counting through the platform's own Envoy sidecars, the SSE-bypasses-CDN pattern). That's real cloud infrastructure costing real money, requiring the instructor's own Azure credentials and a pre-class `cloud-up.ps1 -Mode basic` run — **not something to bring up as part of running this runbook**, and nothing in this section was executed live for this pass. If you have that stack up: `deploy/README.md` and `docs/adrs/064-live-cloud-deployment-azure-container-apps.md` are the reference; the teaching script's `[S7-B5]` has the exact walkthrough (CDN cache-hit check, `docker compose`-to-Azure-box mapping, hop count, gateway-vs-CDN for SSE). Remember `cloud-down.ps1` after.
+### How this is actually implemented
+Ownership is the same line as `OrdersController.GetById`, before the stream opens (`if (!User.IsAdmin() && order.CustomerId != User.UserId()) return Forbid();`). The cap is [`SseStreamLimiter`](../../src/Tadka.Api/Infrastructure/Realtime/SseStreamLimiter.cs): a `ConcurrentDictionary<Guid,int>` counting streams per user, `TryAcquire` returns a disposable lease or refuses when the count passes `maxPerUser` (default **3**), and the controller disposes the lease in a `finally` so a cancelled or crashed stream still frees its slot.
+```csharp
+if (!_limiter.TryAcquire(userId, out var lease)) { Response.StatusCode = 429; ... }
+try { ... stream ... } finally { lease?.Dispose(); }
+```
 
-## What changed
-- NEW `src/Tadka.Restaurant.Api` — own Postgres (5436), per-service JWT, Redis cache, publishes `menu-updated` via Outbox→Kafka; consumes `order-confirmed` for accept/reject (ADR-062).
-- Monolith — dropped the `restaurant` schema; added `ordering.{restaurant_replica,menu_replica}` + `MenuUpdatedConsumer`; prices orders from `IRestaurantPricingSource` (LocalReplica/SyncHttp); `RestaurantResponseConsumer` for Service decision mode.
-- Gateway — routes `/api/v1/restaurants/**` to the Restaurant service.
-- `scripts/backfill-menu-replica.ps1`, `expand-contract-demo.ps1`, `evolution-break.ps1`; `deploy/README.md` (cloud black-box reference, superseded in part by ADR-064's live Azure deployment).
-- Carried forward from `main` (not part of Day 12's own work, but present on this branch): the SSE ownership check + per-user stream cap (Demo 6), the replica-lag metric (ADR-063, Demo 7), and the live Azure deployment (ADR-064, Demo 8).
+### Option space: limiting concurrent streams
+| Approach | Scope | Catch |
+|---|---|---|
+| **In-memory counter per process** (what Tadka does) | One instance | Cheap, no new infra; with N replicas the effective cap is N x 3 |
+| Shared counter in Redis | Whole fleet | An extra dependency on the hot path |
+| Edge rate limit (WAF, gateway) | Requests per minute | Does not bound *concurrent long-lived* connections |
+| Connection limits at the load balancer | Per IP | Users behind one NAT share a budget |
 
-## Ports
-monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway :8080 · postgres 5432 / replica 5433 / payment-db 5434 / delivery-db 5435 / restaurant-db 5436 · redis 6379 · kafka 9092 / kafka-ui 8090 · **PgBouncer 6432** (Day 11, carried forward)
+---
 
-PgBouncer is not a Day-12 teaching beat — the demo lives on `day-11`. The service stays in compose so later days don't lose it.
+## 8. Demo 7: Replica staleness has a signal now (ADR-063), briefly
 
-## Wiring Reference & Cross-Stack Architecture
+**What you're proving:** ADR-037's local read model trades freshness for availability, and until this fix nothing measured the trade. `tadka.replica.lag_seconds` closes that gap, riding the same OTEL pipeline Day 13 builds properly.
+
+This is not a full dashboard demo. Day 13 has not happened yet in the taught sequence, and a real dashboard needs that day's Collector, Prometheus and Grafana stack. What you can show without it is that the calculation and the wiring are both unit-tested without Docker or a broker (identical command in either shell):
+```
+dotnet test tests/Tadka.Api.Tests --filter "FullyQualifiedName~ReplicaLag"
+```
+**Captured live: 5/5 passed.** With `OTEL_EXPORTER_OTLP_ENDPOINT` set (Day 13's existing gate) the gauge flows to Grafana like every other `tadka.*` metric; unset, it is simply never scraped.
+
+### How this is actually implemented
+[`MenuUpdatedConsumer`](../../src/Tadka.Api/Infrastructure/Messaging/MenuUpdatedConsumer.cs) records the Kafka message's own timestamp each time it *actually applies* a snapshot (`Interlocked.Exchange(ref TadkaDiagnostics.LastMenuReplicaAppliedEventUnixMs, ...)`). An `ObservableGauge` in [`Tadka.Telemetry`](../../src/Tadka.Telemetry/TadkaDiagnostics.cs) evaluates `now - baseline` at scrape time. The design choice that matters: a **gauge that keeps counting up**, not a per-message histogram, because if the consumer stalls no new messages arrive to produce a sample, so a histogram would go flat and hide exactly the failure this metric exists to catch.
+
+### Option space: knowing the replica is stale
+| Approach | Catch |
+|---|---|
+| **Observed gauge from the last-applied timestamp** (what Tadka does) | Cannot tell a stalled relay from a stalled consumer |
+| Per-message lag histogram | Goes silent when the consumer dies |
+| A `/health/replica` JSON endpoint | Does not compose with Grafana and alerting |
+| Kafka consumer-group lag | Measures the topic, not what has actually been applied to the table |
+
+No alert is wired on this metric yet: a high value is visible if someone looks, not paged on.
+
+---
+
+## 9. The gateway's 4th route
+
+The gateway now also routes `/api/v1/restaurants/**` to the Restaurant service. Everything else is as on Day 11.
+```bash
+curl -s -o /dev/null -w "restaurants via gateway: %{http_code}\n" http://localhost:8080/api/v1/restaurants                                                 # 200 -> Restaurant
+curl -s -o /dev/null -w "menu via gateway: %{http_code}\n" http://localhost:8080/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu   # 200 -> Restaurant
+```
+```powershell
+"restaurants via gateway: " + (Get-StatusCode -Uri http://localhost:8080/api/v1/restaurants)   # 200 -> Restaurant
+"menu via gateway: " + (Get-StatusCode -Uri http://localhost:8080/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu)   # 200 -> Restaurant
+```
+**Captured live: 200 and 200.** The route is data, not code: [`src/Tadka.Gateway/appsettings.json`](../../src/Tadka.Gateway/appsettings.json) matches `/api/v1/restaurants/{**remainder}`. That completes the canonical **4 services + gateway**. Each service still validates the JWT itself; the gateway is a router, not a trust boundary.
+
+---
+
+## 10. Deferred, not run here: the live Azure cloud walk (ADR-064)
+
+The teaching script's Segment 7 walks a *real*, currently deployed Azure Container Apps stack (a Front Door CDN cache hit, a private Postgres, counting the hops through the platform's own Envoy sidecars, the SSE-bypasses-the-CDN pattern). That is real cloud infrastructure that costs real money and needs the instructor's own Azure credentials and a pre-class `cloud-up.ps1 -Mode basic` run, so it is **not** part of running this runbook, and **nothing in this section was executed live**. If you have that stack up, see `deploy/README.md`, `docs/adrs/064-live-cloud-deployment-azure-container-apps.md`, and `docs/runbooks/azure-getting-started.md` for the one-time setup. Run `cloud-down.ps1` afterwards.
+
+---
+
+## 11. Run the tests
+```
+dotnet test
+```
+**117/117** on this branch at the time of writing: monolith 69, Payment 20, Delivery 5, Restaurant 8, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
+
+---
+
+## 12. Wiring Reference & Cross-Stack Architecture
 
 ### Where the code lives in Tadka
 - **Restaurant extraction (ADR-036):** [`src/Tadka.Restaurant.Api/Controllers/RestaurantsController.cs`](../../src/Tadka.Restaurant.Api/Controllers/RestaurantsController.cs), [`Data/RestaurantDbContext.cs`](../../src/Tadka.Restaurant.Api/Data/RestaurantDbContext.cs) (own Postgres, own migration history).
-- **Local read model (ADR-037):** [`src/Tadka.Api/Infrastructure/RestaurantReadModel/LocalReplicaPricingSource.cs`](../../src/Tadka.Api/Infrastructure/RestaurantReadModel/LocalReplicaPricingSource.cs) and `HttpRestaurantPricingSource.cs` (both implement `IRestaurantPricingSource`), wired in `Program.cs` off `Ordering:RestaurantReadMode`.
-- **Zero-downtime backfill (ADR-038):** [`scripts/backfill-menu-replica.ps1`](../../scripts/backfill-menu-replica.ps1), [`scripts/expand-contract-demo.ps1`](../../scripts/expand-contract-demo.ps1).
-- **Gateway route:** [`src/Tadka.Gateway/appsettings.json`](../../src/Tadka.Gateway/appsettings.json) — `/api/v1/restaurants/{**remainder}` match.
-- **SSE ownership + cap:** [`src/Tadka.Api/Controllers/OrderTrackingController.cs`](../../src/Tadka.Api/Controllers/OrderTrackingController.cs), [`Infrastructure/Realtime/SseStreamLimiter.cs`](../../src/Tadka.Api/Infrastructure/Realtime/SseStreamLimiter.cs).
-- **Replica-lag metric (ADR-063):** [`src/Tadka.Telemetry/TadkaDiagnostics.cs`](../../src/Tadka.Telemetry/TadkaDiagnostics.cs), [`src/Tadka.Api/Infrastructure/Messaging/MenuUpdatedConsumer.cs`](../../src/Tadka.Api/Infrastructure/Messaging/MenuUpdatedConsumer.cs).
+- **Local read model (ADR-037):** [`LocalReplicaPricingSource.cs`](../../src/Tadka.Api/Infrastructure/RestaurantReadModel/LocalReplicaPricingSource.cs) and `HttpRestaurantPricingSource.cs` (both implement `IRestaurantPricingSource`), chosen in `Program.cs` off `Ordering:RestaurantReadMode`; fed by [`MenuUpdatedConsumer.cs`](../../src/Tadka.Api/Infrastructure/Messaging/MenuUpdatedConsumer.cs).
+- **Zero-downtime migration (ADR-038):** [`scripts/backfill-menu-replica.ps1`](../../scripts/backfill-menu-replica.ps1), [`scripts/expand-contract-demo.ps1`](../../scripts/expand-contract-demo.ps1).
+- **Gateway route:** [`src/Tadka.Gateway/appsettings.json`](../../src/Tadka.Gateway/appsettings.json).
+- **SSE ownership + cap:** [`OrderTrackingController.cs`](../../src/Tadka.Api/Controllers/OrderTrackingController.cs), [`SseStreamLimiter.cs`](../../src/Tadka.Api/Infrastructure/Realtime/SseStreamLimiter.cs).
+- **Replica-lag metric (ADR-063):** [`TadkaDiagnostics.cs`](../../src/Tadka.Telemetry/TadkaDiagnostics.cs).
 
 ### Cross-Stack Implementation Matrix
 
 | Concern | .NET Core (This Repo) | Java (Spring Boot) | Node.js (TypeScript) | Go |
 |---|---|---|---|---|
-| **Local read model, fed by events** | EF Core upsert in `MenuUpdatedConsumer` | Spring Kafka listener + JPA upsert | kafkajs consumer + Prisma upsert | kafka-go consumer + sqlc |
-| **Zero-downtime migration** | Hand-rolled chunked scripts (this repo) | Flyway (expand-contract migrations) | Prisma Migrate | goose |
-| **Continuous CDC at scale** | Debezium (any stack — Kafka Connect) | Debezium | Debezium | Debezium |
+| **Local read model fed by events** | EF Core upsert in `MenuUpdatedConsumer` | Spring Kafka listener + JPA upsert | kafkajs consumer + Prisma upsert | kafka-go consumer + sqlc |
+| **Zero-downtime migration** | Hand-rolled chunked scripts (this repo) | Flyway / Liquibase (expand-contract) | Prisma Migrate / Knex | goose / Atlas |
+| **Continuous CDC at scale** | Debezium (Kafka Connect, any stack) | Debezium | Debezium | Debezium |
 | **Reverse-proxy gateway, 4th route** | YARP | Spring Cloud Gateway | Express-gateway | Kong / Envoy / Traefik |
-| **Cloud deploy shape** | Terraform → ECS/Container Apps (this repo, ADR-039/064) | same cloud primitives, any stack | same cloud primitives, any stack | same cloud primitives, any stack |
+| **Cloud deploy shape** | Terraform to ECS or Container Apps (ADR-039/064) | same cloud primitives | same cloud primitives | same cloud primitives |
 
-**Pattern is language-neutral.** Event-carried state transfer and expand-contract migrations are architecture ideas, not .NET ideas — the same shape shows up wherever a service needs its own copy of another service's data on a hot path. Full matrix: `day-12/option-space.md`.
+**Pattern is language-neutral.** Event-carried state transfer and expand-contract migrations are architecture ideas, not .NET ideas: the same shape shows up wherever a service needs its own copy of another service's data on a hot path. Full matrix: `day-12/option-space.md`.
 
-## Demo vs. Production: named gaps, not overclaimed features
-- **No auto-timeout reject in Service decision mode.** If Restaurant.Api never responds (down, or its consumer stuck), the order sits `Confirmed` forever — there's no timeout-then-cancel. Named as a revisit in ADR-062, not silently assumed away.
-- **The replica-lag metric has no alert wired.** Unlike Day 14's `tadka.payment.circuit_transitions` (which got a Grafana panel), a stalled replica is visible if someone looks at the gauge, not paged on. Named directly in ADR-063.
-- **The SSE stream cap is a single in-memory counter per process.** It caps concurrent streams *per instance*, not truly per user across a horizontally-scaled deployment — fine for this teaching build, not the real answer at scale (a shared counter, e.g. Redis, would be).
-- **PgBouncer is present in this branch's compose but isn't wired into the cloud deployment (ADR-064) yet.** The local demo (Day 11) and the live cloud stack are two separate stories that haven't been reconciled.
+---
+
+## 13. Demo vs. Production: named gaps, not overclaimed features
+- **No automatic timeout-reject in Service decision mode.** If Restaurant.Api never responds, the order sits `Confirmed` forever. Named as a revisit in ADR-062.
+- **The replica-lag metric has no alert.** A stalled replica is visible if someone looks at the gauge, not paged on (ADR-063).
+- **The SSE stream cap is a single in-memory counter per process.** With N replicas the effective per-user cap is N x 3. A shared counter (Redis) is the real answer at scale.
+- **PgBouncer is in this branch's compose but not in the cloud deployment yet.** The local demo (Day 11) and the live cloud stack are two stories that have not been reconciled.
+- **The giant-`UPDATE` contrast does not hurt at demo scale.** 20,000 rows updates in about half a second; the outage it illustrates needs a table orders of magnitude larger.
 
 ## Reset
-`docker compose down -v` clears all volumes (incl. the backfill's synthetic rows).
+`docker compose down -v` clears all volumes (including the backfill's synthetic rows).
 
-## Tests
-Live count as of this pass (Docker up, `dotnet test`): **117/117** — monolith 69, Payment 20, Delivery 5, Restaurant 8, and a wholly new `Tadka.Gateway.Tests` project (15, `FrontDoorOriginLockTests` among them) that no prior count in this file ever included. The branch's own earlier note ("39/39 at landing, 90/90 as of a later check") is honest about *why* the number moves — `day-12` stays fast-forwarded to `main` — but 90/90 is itself now stale: three more commits (Azure deploy code + its new Gateway.Tests project, the SSE ownership fix, the SSE stream cap) landed after that number was written. **Re-run `dotnet test` yourself before class — this number will move again.**
+## Ports
+monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway :8080 · postgres 5432 / replica 5433 / payment-db 5434 / delivery-db 5435 / restaurant-db 5436 · redis 6379 · kafka 9092 / kafka-ui 8090 · **PgBouncer 6432** (Day 11, carried forward; not a Day-12 teaching beat)
+
+## ✅ Done when
+- [ ] Baseline order totals **₹598**; with `SyncHttp` and Restaurant down `POST /orders` fails (**500**); with `LocalReplica` and Restaurant still down it succeeds (**Created, ₹598**).
+- [ ] PATCH price 299 to 349 returns **204**; the replica shows **349.00**; a new 2x order totals **₹698**.
+- [ ] The backfill completes (**5016 rows, 6 batches**) with replica lag in single-digit milliseconds and no lock.
+- [ ] Service mode: order **Cancelled**, payment **Refunded** (`/api/v1/payments/{orderId}`).
+- [ ] Dual-write PATCH fills both `Name` and `DisplayName`; `expand-contract-demo.ps1` ends with `remaining NULL DisplayName: 0` (and stops on its own).
+- [ ] SSE: a non-owner gets **403**; a 4th concurrent stream for one user gets **429**.
+- [ ] The replica-lag tests pass (**5/5**).
+- [ ] The gateway routes `/api/v1/restaurants/**` (**200**).
+- [ ] `dotnet test` is green (**117/117** at the time of writing).
 
 ## Troubleshooting
-- **Menu PATCH curl 404s or looks wrong:** use the real GUIDs (`a1b2c3d4-0001-...` for Meghana, `b1b2c3d4-0001-...` for Chicken Biryani), not literal placeholder text — see Demo 2's note.
-- **Baseline order isn't ₹598:** a prior verification pass already ran Demo 2's PATCH and the restaurant-db volume kept the ₹349 price. `docker compose down -v` and re-seed.
-- **`expand-contract-demo.ps1` throws parser errors on Windows PowerShell:** you have the pre-fix version of the script. It's fixed in this pass — pull the branch again if you still see this.
-- **Stuck `Confirmed` in Demo 4 (Service mode):** Restaurant.Api or Kafka is down, or its consumer isn't running — see `decision-mode-matrix.md`'s stuck-Confirmed runbook. Fallback: flip `Restaurant__DecisionMode` back to `Inline` for the next order.
-- **SSE stream returns 403 for the order's real owner:** wrong token — re-login and confirm the `sub` claim matches the order's `customerId`.
-- **SSE stream returns 429 for a first attempt:** a previous test session's streams are still open somewhere and haven't released their slots — check for stray `curl -N` processes.
+- **Baseline order is not ₹598:** a prior run already did Demo 2's PATCH and the restaurant-db volume kept ₹349. Run `docker compose down -v` and restart.
+- **`Cannot open ...Tadka.Telemetry.dll for writing` when starting the apps:** you started several `dotnet run` at once on a fresh checkout. Run `dotnet build Tadka.slnx` once first, then start them.
+- **Menu PATCH returns 401 or 403:** you are using a customer token. Log in as `admin@tadka.test`.
+- **`GET /payments/{id}` returns a bare `404`:** wrong path on this branch. Use `/api/v1/payments/{orderId}`.
+- **`expand-contract-demo.ps1` throws parser errors, or never stops:** you have the pre-fix version. Both bugs are fixed on this branch; pull it.
+- **Stuck `Confirmed` in Demo 4:** Restaurant.Api or Kafka is down or not consuming; see `decision-mode-matrix.md`. Fallback: flip `Restaurant__DecisionMode` back to `Inline` for the next order.
+- **SSE returns 403 for the order's real owner:** wrong token; re-login and check the `sub` claim matches the order's `customerId`.
+- **SSE returns 429 on the first attempt:** streams from an earlier test are still open. Look for stray `curl -N` processes.
+- **Demo 4 or 6 looks stuck right after a restart:** cold JIT plus consumer-group join. Wait up to a minute; later requests are fast.
 - **PgBouncer `SHOW POOLS` fails with "not allowed":** connect as the `tadka` user (set via `ADMIN_USERS` in `docker-compose.yml`), not `postgres`.
