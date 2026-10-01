@@ -10,16 +10,32 @@ Every command below is given twice, bash first and PowerShell second. They are n
 
 ## 1. Run it (infra + 3 services + gateway)
 
-Bring up infra first. Delivery needs its own Postgres (`delivery-db`, 5435), and PgBouncer (`6432`) now sits next to it, both new since Day 10. To start from a clean slate (wipes every volume, so the seed data and rider states are fresh):
+### Demo Day Fresh Reset (Clean Slate)
+If you want to remove all existing containers, network overlays, and persistent database volumes (and ensure any leftover Keycloak or test containers are destroyed) to start completely fresh:
 
+**Bash:**
 ```bash
-docker compose down -v
-```
-```powershell
-docker compose down -v
+docker compose --profile auth-prod down -v --remove-orphans && docker compose up -d
+until docker inspect tadka-delivery-db --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+until docker inspect tadka-kafka --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+docker compose ps
 ```
 
-Then:
+**PowerShell:**
+```powershell
+docker compose --profile auth-prod down -v --remove-orphans; docker compose up -d
+do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-delivery-db --format "{{.State.Health.Status}}") -eq "healthy")
+do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.State.Health.Status}}") -eq "healthy")
+docker compose ps
+```
+
+*(This stops all running services, wipes volume directories `pgdata`, `pgdata_replica`, `pgdata_payment`, `pgdata_delivery`, and brings up the 8 containers fresh from scratch).*
+
+---
+
+### Standard Launch
+If starting existing containers without wiping data:
+
 ```bash
 git checkout day-11
 docker compose up -d            # + delivery-db (5435), pgbouncer (6432)
