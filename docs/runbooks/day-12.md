@@ -12,15 +12,32 @@ Every command below is given twice, bash first and PowerShell second, wherever t
 
 ## 1. Start the stack
 
-To start from a clean slate (wipes every volume). **Do this if you have run this branch before**: a previous Demo 2 PATCH persists in the restaurant-db volume and would give you a ₹349 baseline instead of the documented ₹299.
+### Demo Day Fresh Reset (Clean Slate)
+To start from a clean slate (wiping every volume, lingering test containers, or Keycloak profile instances). **Do this if you have run this branch before**: a previous Demo 2 PATCH persists in the `restaurant-db` volume and would give you a ₹349 baseline instead of the documented ₹299:
+
+**Bash:**
 ```bash
-docker compose down -v
-```
-```powershell
-docker compose down -v
+docker compose --profile auth-prod down -v --remove-orphans && docker compose up -d
+until docker inspect tadka-kafka --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+until docker inspect tadka-restaurant-db --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+docker compose ps
 ```
 
-Then bring up infra and wait for it:
+**PowerShell:**
+```powershell
+docker compose --profile auth-prod down -v --remove-orphans; docker compose up -d
+do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.State.Health.Status}}") -eq "healthy")
+do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-restaurant-db --format "{{.State.Health.Status}}") -eq "healthy")
+docker compose ps
+```
+
+*(This wipes volume directories `pgdata`, `pgdata_replica`, `pgdata_payment`, `pgdata_delivery`, `pgdata_restaurant`, and brings up the 9 containers fresh from scratch).*
+
+---
+
+### Standard Launch
+If starting existing containers without wiping data:
+
 ```bash
 git checkout day-12
 docker compose up -d                          # + restaurant-db (5436)
