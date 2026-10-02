@@ -749,7 +749,7 @@ dotnet test
 - [ ] Delivery **down** → orders 201 + menu 200 (fault isolation).
 - [ ] Live-tracking SSE stream: the order's owner gets events; a different customer's token on the same order id gets **403**.
 - [ ] All services reachable via **one host** `:8080`; payment-no-token via gateway still **401**; a dead route's target returns **502**.
-- [ ] PgBouncer: direct-to-Postgres leaves the instances holding **100 of 100** connections; via `:6432` the same load runs on about **13**.
+- [ ] PgBouncer: the peak of real Postgres connections during the burst is clearly higher direct to `:5432` (about 55 to 100) than via `:6432` (about **12**), and `SHOW POOLS` shows `pool_mode = transaction`.
 - [ ] Delivery ownership: Rahul on Priya's `track` gets **403**; Priya's token on `PUT location` gets **403**; the rider's own token gets **204**.
 - [ ] Rider lifecycle: `PickedUp` then `Delivered` returns the rider to `Available`; a 4th order on a fresh stack waits in `pending_assignments` and gets that rider on the next sweep.
 - [ ] RS256: `/.well-known/jwks.json` lists the public keys; tokens verify in all three services with no shared secret; one rotation keeps old tokens valid, a second rejects them.
@@ -767,6 +767,7 @@ dotnet test
 - **SSE stream returns 403 for the order's real owner:** wrong token. Re-login and confirm the `sub` claim matches the order's `customerId`.
 - **Gateway 502 on a route:** the target service is down; start all three before the gateway demo.
 - **Both `Tadka.Api` instances crash on startup in the PgBouncer demo:** you forgot `--no-launch-profile`; `launchSettings.json`'s `applicationUrl` overrides `ASPNETCORE_URLS` and both fight over `:5224`.
+- **The two extra copies in section 6 fail with MSB3021 ... file is locked by Tadka.Api (Windows):** your running monolith has Tadka.Api.exe open and dotnet run tried to rebuild it. Add --no-build (run dotnet build Tadka.slnx once first if the branch was never built).
 - **The demo script says every request failed with "Invalid URI":** `-Urls` was passed as one comma-joined string. Pass a real array (`@("http://…","http://…")`).
 - **`pwsh: command not found`:** `pwsh` (PowerShell 7) is not installed by default. The demo script runs fine under Windows PowerShell 5.1: use `powershell.exe` as shown above.
 - **PgBouncer `SHOW POOLS` fails with "not allowed":** connect as the `tadka` user (set via `ADMIN_USERS` in `docker-compose.yml`), not `postgres`; or just count `pg_stat_activity` as this runbook does.
