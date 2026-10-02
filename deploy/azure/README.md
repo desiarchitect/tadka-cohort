@@ -12,8 +12,9 @@ bill), not this HCL. Run it through the scripts, not by hand:
 
 Prereqs, timings, costs and the per-session checklist: [`docs/runbooks/cloud-deploy.md`](../../docs/runbooks/cloud-deploy.md).
 
-> **Status: not yet applied or `terraform validate`d.** It was written without Terraform or an Azure
-> login available. The first dry run is also the validation run. Expect to fix small schema details.
+> **Status: `terraform validate` passes (checked with Terraform 1.16.2), but nothing has been through `plan` or
+> `apply` against a real Azure subscription yet.** The first real run is the real test. Expect to fix small
+> schema, quota or naming details.
 
 ## What it builds (one resource group, region `centralindia`)
 
@@ -53,8 +54,14 @@ Prereqs, timings, costs and the per-session checklist: [`docs/runbooks/cloud-dep
 
 - **Kafka container, not Event Hubs.** `main` has 14 topics (`order-placed`, `payment-results`,
   `order-confirmed`, `menu-updated`, `refund-requested`, `payment-refunded`, `restaurant-response`,
-  `delivery-assigned` + 6 `.dlq`). Event Hubs Standard caps at 10 per namespace. So no SASL code was
-  added to the apps. TCP ingress for Kafka is why the environment is VNet-integrated.
+  `delivery-assigned` + 6 `.dlq`). Event Hubs Standard caps at 10 per namespace. TCP ingress for Kafka is why
+  the environment is VNet-integrated.
+- **Cloud Kafka is not authenticated, unlike local.** The apps can log in to Kafka with SASL/SCRAM
+  (`Kafka:SaslUsername`, set only in `appsettings.Development.json` for the local docker-compose broker). In
+  Azure that setting is absent, so the apps connect without a login, and the broker is plain `PLAINTEXT`
+  reachable only inside the private Container Apps environment. This is a known gap, not an oversight; see
+  ADR-027's security addendum and ADR-064. Closing it needs a custom Kafka image, a CI step and secret
+  plumbing, and cannot be verified until the pipeline has run once.
 - **Redis Sentinel, not Azure Managed Redis, for `ha`.** `azurerm_managed_redis` exists, but Managed Redis
   has no user-triggered failover, so it can't be failed over on cue in class. Sentinel shows the election.
 - **One Postgres server, four databases.** Database-per-service at the logical level; four servers would be
@@ -82,7 +89,7 @@ Prereqs, timings, costs and the per-session checklist: [`docs/runbooks/cloud-dep
 
 ## Known rough edges (fix on the first dry run)
 
-- `terraform validate` passes; nothing has been through `plan` or `apply` yet.
+- `terraform validate` passes, but `plan` and `apply` have never run against real Azure.
 - Front Door route/cache-rule interplay (caching enabled only by a rule override) needs a real check of the
   `x-cache` header.
 - SSE uses the gateway URL by design (ADR-064 "Realtime split"), not Front Door.
