@@ -18,9 +18,6 @@ Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself*
 | 10 | JWT + RBAC + resource ownership + PII (masking, right-to-be-forgotten) | [day-10.md](day-10.md) |
 | 11 | Extract Delivery (3rd service) + YARP gateway + Redis-geo + PgBouncer | [day-11.md](day-11.md) |
 | 12 | Extract Restaurant (4th service) + local read model + zero-downtime backfill | [day-12.md](day-12.md) |
-| 13 | Observability: OpenTelemetry traces/metrics/logs; saga as one trace | [day-13.md](day-13.md) |
-| 14 | Resilience & chaos: circuit breaker, retry, graceful degradation | [day-14.md](day-14.md) |
-| 16 | Load test + cost model + portfolio | [day-16.md](day-16.md) |
 
 > Consolidated demo index (issue → fix → trade-off → captured numbers): the instructor pack's `cohort-prep/DEMOS.md`.
 
