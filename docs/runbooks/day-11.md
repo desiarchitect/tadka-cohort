@@ -668,12 +668,54 @@ Measured on this branch (Windows, Docker Desktop), 150 requests at each of two c
 | | A. Direct to `:5432` | B. Via PgBouncer `:6432` |
 |---|---|---|
 | Requests that succeeded | 295 to 300 of 300 | 300 of 300 |
-| Peak real Postgres connections | about 55 to 100 | about 12 |
-| `SHOW POOLS`, real (`sv_*`) connections | n/a | about 8, capped by `default_pool_size=20` |
+| Peak real Postgres connections | about 55 to 101 (101 means the ceiling of 100 was reached) | about 12 |
+| Wall clock for the 300 requests | about 0.5 to 1.3 s | about 1.9 to 2.1 s |
+| p99 latency | about 90 to 550 ms | about 700 to 840 ms |
+| `SHOW POOLS`, real (`sv_*`) connections | n/a | about 8 to 10, capped by `default_pool_size=20` |
 
 **Read this before you promise a failure on stage.** Failures on the direct run are **not deterministic**. One run saw 5 of 300 requests fail with HTTP 500 (Npgsql `"sorry, too many clients already"`); the next runs returned 300/300 and even 800/800 with zero failures. The peak on the direct run also varies with how warm the stack is and how much of `/api/v1/restaurants` is served from the Redis cache (cached reads need no database connection): an earlier capture showed `100 of 100` allowed connections, the latest showed 57. What does **not** vary is the shape: direct connections grow with `instances x pool size` and with concurrency until they hit `max_connections` (100), while through PgBouncer they stay near a small fixed number no matter how many clients connect. So the lesson to show is the peak connection count, with failed requests as a bonus when they happen. For more pressure, raise `-RequestsPerInstance` or run Step 2 immediately after starting the copies, before their caches warm.
 
 `Pooling=false` is what a real service ships with once it is behind PgBouncer, per `connection-pooling-guide.md`. The first run used `Maximum Pool Size=60` on the direct leg and `Pooling=false` on the PgBouncer leg; mention that if a student asks why the two connection strings differ. Full numbers: ADR-015.
+
+### How to read these numbers (and what to say in class)
+Three things in the table are not what people expect, so say them out loud before a student asks:
+
+1. **Zero failures direct does not mean it was safe.** A direct run can sit at `100 of 100` connections and still return 300/300, because connections free up within milliseconds and Npgsql waits for one. The danger is zero headroom, not guaranteed errors. One more instance, one migration or one engineer running `psql` at that moment would be refused with "too many clients".
+2. **PgBouncer is slower here, and that is honest.** In every run it cost latency (about 1.5 to 4 times the wall clock in the warm direct runs). Three reasons: every request opens a fresh connection to PgBouncer because the app runs with `Pooling=false` (a login each time), requests queue for 10 to 20 backend slots, and there is one more network hop. PgBouncer buys safety and headroom, not speed.
+3. **`SHOW STATS` totals are cumulative** since PgBouncer started, so they include earlier runs. Do not quote `total_xact_count` as "the 300 requests". The useful figures are `avg_wait_time` (microseconds a client waited for a backend; about 300 here, so almost none) and `total_server_assignment_count` equal to `total_xact_count` (every transaction borrowed a backend connection and returned it).
+
+**Why 12 and not 20?** 20 is the cap, not the target. Each query takes about 2 ms, so the burst needed only about 10 backends at once. The 12 is your normal stack's baseline (about 4 to 6 connections, plus the watcher) plus the pooled ones.
+
+**A script for the room (about 90 seconds):**
+- *Setup.* "Each app instance keeps up to 60 connections, and Postgres allows 100 in total. Day 5 had one instance, so it looked fine. Two instances means 120 people wanting a seat in a 100-seat hall."
+- *After run A.* "Peak is about 100 out of 100. The hall is full. Nothing failed this time, and I will not promise you it fails on demand. But there are no spare seats. That is a ticking bomb, not an error."
+- *After run B.* "Same 300 requests, same two instances, 12 connections instead of 100. PgBouncer is the host at the door: 300 guests wait in the lobby while a few tables turn over quickly, because each transaction holds a table for about 2 ms. `SHOW POOLS` shows the guests (`cl_*`) on one side and the few real tables (`sv_*`) on the other."
+- *The cost, said before anyone asks.* "It is slower here: about 1.9 seconds against 1.3. We added a hop, a queue and a login per request. We spend a little latency to buy headroom."
+
+### PgBouncer: advantages and disadvantages
+| Advantage | In this demo |
+|---|---|
+| Fewer real database connections (many app connections share a few real ones) | about 12 instead of about 100 for the same 300 requests |
+| Headroom under `max_connections` | direct leaves 0 spare connections; via PgBouncer about 85 are free |
+| Scale-out is safe: more app instances do not mean more database connections | two instances at 60 each behave like a small fixed pool |
+| Spikes queue at PgBouncer instead of being refused by Postgres | 300 clients served by about 10 backends, average wait about 0.3 ms |
+| One central place for pool limits and stats | `SHOW POOLS` and `SHOW STATS` cover every instance |
+| Stack-agnostic | only the port in the connection string changed (5432 to 6432) |
+| Less memory: each real connection is a server process of about 1 to 3 MB | about 12 processes instead of about 100 |
+
+| Disadvantage | What it means |
+|---|---|
+| Extra latency: another hop, a queue for a backend slot, and a login per request when the app uses `Pooling=false` | about 1.5 times the wall clock in the captured run |
+| Transaction mode breaks session features: advisory locks across statements, `LISTEN/NOTIFY`, session-level `SET`, prepared statements spanning transactions | the app must set `Pooling=false` so it does not reuse state PgBouncer already wiped |
+| One more component to run, monitor and keep available, and it sits on the path of every query | if PgBouncer is down, every app that uses it loses the database; production runs at least two |
+| It hides problems, it does not fix them | a slow query or long transaction still holds a backend, so Day 5's indexing still matters |
+| Not a performance tool | it does not make a single query faster |
+| Another setting to tune (`default_pool_size`, `MAX_CLIENT_CONN`) | too small and clients queue, too large and you are back at the ceiling |
+| Overkill for small systems | at Tadka's real scale (about 1.2 orders per second on average) you would not need it; it appears here because the demo runs 2 or more instances |
+
+**When to use it:** when **instances x pool size is more than `max_connections`** (here 2 x 60 = 120 against 100), or when many small services or serverless functions each open their own connections. Skip it for one or two instances with small pools; set `Maximum Pool Size` sensibly instead.
+
+**The trade-off in one line:** you give up a little latency, some session features and one more thing to operate, and in return the database stops being the thing that falls over when you scale out.
 
 ### How this is actually implemented
 Two pieces. In [`docker-compose.yml`](../../docker-compose.yml) a `pgbouncer` service runs in **transaction** pooling mode on `:6432` with `default_pool_size=20`, so at most about 20 real backend connections regardless of how many clients connect. The apps change nothing except the port in their connection string (and `Pooling=false`). The load generator, [`docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1`](../../docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1), fires the requests; which port each instance's pool points at is decided at instance startup by `ConnectionStrings__TadkaDb`.
