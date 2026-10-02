@@ -60,6 +60,18 @@ dotnet build Tadka.slnx
 
 **Kafka requires a login on this branch.** The local broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. All four services and Kafka UI already carry the demo credentials (`appsettings.Development.json`, `docker-compose.yml`). The Kafka command-line tools you run through `docker exec` are clients too: pass `--command-config /etc/kafka/docker/client.properties` to `kafka-topics.sh` and `kafka-consumer-groups.sh`, `--producer.config` to the console producer and `--consumer.config` to the console consumer (the helper scripts under `scripts/` already do). Without credentials a Kafka command hangs and prints nothing. Details are in the Day 9 runbook and ADR-027's security addendum. **The Azure/cloud Kafka is not covered** (see section 13).
 
+**Pre-create the eight Kafka topics this branch uses** (once per fresh broker, right after the containers are healthy). On a broker with no topics yet, each service subscribes the moment it starts, and a consumer that starts before anyone has published to its topic logs `Confluent.Kafka.ConsumeException: Subscribed topic not available` once a second. It is harmless (the consumer keeps retrying and picks the topic up once it exists), but it looks alarming on a first run. Auto-create is on, so skipping this step breaks nothing. The `*.dlq` topics are not in the list on purpose: nothing subscribes to them, and they appear on their own the first time a poison message is parked.
+```bash
+for t in order-placed payment-results order-confirmed delivery-assigned refund-requested payment-refunded menu-updated restaurant-response; do
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+done
+```
+```powershell
+foreach ($t in "order-placed","payment-results","order-confirmed","delivery-assigned","refund-requested","payment-refunded","menu-updated","restaurant-response") {
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+}
+```
+
 Five processes, five terminals (identical in either shell):
 ```
 dotnet run --project src/Tadka.Payment.Api    # :5240
