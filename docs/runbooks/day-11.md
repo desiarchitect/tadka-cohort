@@ -211,19 +211,24 @@ dotnet run --project src/Tadka.Api
 # after you stop it (Ctrl+C), clear the levers so later sections behave normally:
 Remove-Item Env:Restaurant__AcceptMode, Env:Restaurant__RefundOnReject
 ```
-Then, in another terminal (your `$TOKEN` normally survives the restart on this branch; if you get a 401, log in again as in section 2):
+**Log in again after every monolith restart.** The monolith keeps its JWT signing keys in memory only (ADR-067), so a restart creates new keys and every token you issued before it now returns `401`. That is why each block below starts with a fresh login. `$BODY` is the order body from section 2 (if this is a new terminal, set it again first). The orders in this section go into `$REJECTED` on purpose, so `$ORDER` from section 2 (the one with a rider) is still intact for sections 4.5 and 4.6.
+
+Then, in another terminal:
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
-for i in $(seq 1 45); do S=$(curl -s http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); P=$(curl -s http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && [ "$P" = "Refunded" ] && break; sleep 2; done
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+REJECTED=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
+for i in $(seq 1 45); do S=$(curl -s http://localhost:5224/api/v1/orders/$REJECTED -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); P=$(curl -s http://localhost:5240/payments/$REJECTED -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && [ "$P" = "Refunded" ] && break; sleep 2; done
 echo "order: $S  payment: $P"
-curl -s http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN"   # {"status":"Refunded","gatewayReference":"FAKEREF-..."}
+curl -s http://localhost:5240/payments/$REJECTED -H "Authorization: Bearer $TOKEN"   # {"status":"Refunded","gatewayReference":"FAKEREF-..."}
 ```
 ```powershell
-$ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+$REJECTED = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
 $sw = [Diagnostics.Stopwatch]::StartNew()
-do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$ORDER" -Headers $H).status; $p = (Invoke-RestMethod -Uri "http://localhost:5240/payments/$ORDER" -Headers $H).status } until (($s -eq "Cancelled" -and $p -eq "Refunded") -or $sw.Elapsed.TotalSeconds -gt 90)
+do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$REJECTED" -Headers $H).status; $p = (Invoke-RestMethod -Uri "http://localhost:5240/payments/$REJECTED" -Headers $H).status } until (($s -eq "Cancelled" -and $p -eq "Refunded") -or $sw.Elapsed.TotalSeconds -gt 90)
 "order: $s  payment: $p"
-Invoke-RestMethod -Uri "http://localhost:5240/payments/$ORDER" -Headers $H
+Invoke-RestMethod -Uri "http://localhost:5240/payments/$REJECTED" -Headers $H
 ```
 **Captured live:** order `Cancelled`, payment **`Refunded`** with its own gateway reference (`FAKEREF-…`, different from the original `FAKEPAY-…` charge, proving a real second gateway call happened and not a status flip). On a monolith restarted seconds earlier the order stayed `Created`/`Completed` for over 12 seconds before the refund chain ran, then finished about 10 seconds later. Give the first order after a restart up to a minute; warm ones are much faster.
 
@@ -238,22 +243,32 @@ dotnet run --project src/Tadka.Api
 # after you stop it: Remove-Item Env:Restaurant__AcceptMode, Env:Restaurant__RefundOnReject
 ```
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
-for i in $(seq 1 45); do S=$(curl -s http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && break; sleep 2; done
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+REJECTED=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
+for i in $(seq 1 45); do S=$(curl -s http://localhost:5224/api/v1/orders/$REJECTED -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && break; sleep 2; done
 sleep 5; echo "order: $S"
-curl -s http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN"   # {"status":"Completed", ...}: STILL Completed
+curl -s http://localhost:5240/payments/$REJECTED -H "Authorization: Bearer $TOKEN"   # {"status":"Completed", ...}: STILL Completed
 ```
 ```powershell
-$ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+$REJECTED = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
 $sw = [Diagnostics.Stopwatch]::StartNew()
-do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$ORDER" -Headers $H).status } until ($s -eq "Cancelled" -or $sw.Elapsed.TotalSeconds -gt 90)
+do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$REJECTED" -Headers $H).status } until ($s -eq "Cancelled" -or $sw.Elapsed.TotalSeconds -gt 90)
 Start-Sleep -Seconds 5
 "order: $s"
-Invoke-RestMethod -Uri "http://localhost:5240/payments/$ORDER" -Headers $H   # status: Completed, STILL
+Invoke-RestMethod -Uri "http://localhost:5240/payments/$REJECTED" -Headers $H   # status: Completed, STILL
 ```
 **Captured live:** order `Cancelled` after 36 seconds on a freshly restarted monolith, payment stayed **`Completed`**: money genuinely stuck, until someone flips the lever back and reconciles by hand. The monolith's log says so out loud: `Order {id} cancelled after restaurant rejection, but Restaurant:RefundOnReject is OFF, the completed payment is NOT refunded.` This is a real gap shown on purpose, not hidden behind a passing test.
 
-Restart the monolith with no env overrides (`AcceptMode` defaults to `Auto`) before continuing. Every section after this one assumes orders confirm normally.
+Restart the monolith with no env overrides (`AcceptMode` defaults to `Auto`) before continuing. Every section after this one assumes orders confirm normally. That restart invalidates your tokens again, so log in once more and put the result back in `$TOKEN` / `$H` (and `$RAHUL` / `$RIDER` if a later section uses them):
+```bash
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+```
+```powershell
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+```
 
 ### How this is actually implemented
 [`RefundSagaOrchestrator.cs`](../../src/Tadka.Api/Infrastructure/Messaging/RefundSagaOrchestrator.cs) is the one named place that sequences the compensation: cancel the order, then (if `RefundOnReject`) write a `refund-requested` row to the Outbox in the same transaction as the cancellation:
