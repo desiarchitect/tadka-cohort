@@ -297,10 +297,26 @@ Two things juniors miss: a **timeout is not "didn't charge"**, so a refund needs
 
 Stop the Delivery service (Ctrl+C in its terminal), then:
 ```bash
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
 curl -s -o /dev/null -w "POST /orders: %{http_code}\n" -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY"   # 201
 curl -s -o /dev/null -w "menu: %{http_code}\n" http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu   # 200
 ```
 ```powershell
+# Self-contained: run this in ANY PowerShell window. It defines the helper, logs in and sets $BODY only if they are missing.
+if (-not (Get-Command Get-StatusCode -ErrorAction SilentlyContinue)) {
+    function Get-StatusCode {
+        param($Uri, $Method = "GET", $Headers = @{}, $Body = $null, $ContentType = "application/json")
+        try {
+            $params = @{ Uri = $Uri; Method = $Method; Headers = $Headers; UseBasicParsing = $true }
+            if ($Body) { $params.Body = $Body; $params.ContentType = $ContentType }
+            return [int](Invoke-WebRequest @params).StatusCode
+        } catch { if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode } else { throw } }
+    }
+}
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+if (-not $BODY) { $BODY = '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.93,"longitude":77.61}}' }
+
 "POST /orders: " + (Get-StatusCode -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -Body $BODY)   # 201
 "menu: " + (Get-StatusCode -Uri http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu)   # 200
 ```
