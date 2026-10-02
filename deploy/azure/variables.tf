@@ -28,9 +28,9 @@ variable "resource_group_name" {
 }
 
 variable "image_prefix" {
-  description = "Image name prefix; the service name is appended (ghcr.io/desiarchitect/tadka-api, ...). Built by .github/workflows/images.yml."
+  description = "Image name prefix; the service name is appended (ghcr.io/desiarchitect/tadka-cohort-api, ...). Built by .github/workflows/images.yml; the packages are public."
   type        = string
-  default     = "ghcr.io/desiarchitect/tadka"
+  default     = "ghcr.io/desiarchitect/tadka-cohort"
 }
 
 variable "image_tag" {

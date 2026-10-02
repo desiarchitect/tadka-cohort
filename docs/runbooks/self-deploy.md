@@ -25,10 +25,10 @@ you're logged in.
    `az account set -s <your-subscription-id>`.
 2. Terraform >= 1.6 (`winget install Hashicorp.Terraform`) and the Azure CLI (`winget install Microsoft.AzureCLI`).
 3. Container images. The default in `deploy/azure/variables.tf` is the course's
-   `ghcr.io/desiarchitect/tadka-*`; that only works once those packages are public (ask the instructor).
+   `ghcr.io/desiarchitect/tadka-cohort-*`, which are public, so nothing to do for the default.
    Otherwise, or if you changed the code, push your fork to GitHub so `.github/workflows/images.yml` builds
    your own images, make the packages public (or set `ghcr_username`/`ghcr_token`), and set `image_prefix`
-   to `ghcr.io/<your-github-user>/tadka` in a gitignored `deploy/azure/my.auto.tfvars` file.
+   to `ghcr.io/<your-github-user>/tadka-cohort` in a gitignored `deploy/azure/my.auto.tfvars` file.
 4. An email address for the budget alert.
 
 ## Bring it up

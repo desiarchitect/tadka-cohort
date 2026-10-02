@@ -72,14 +72,14 @@ immediately and clearly with: `Not logged in to Azure. Run 'az login' (and 'az a
 
 ## 4. Get the 5 container images into GHCR — the step nothing automates
 
-The deployment pulls 5 pre-built images: `ghcr.io/desiarchitect/tadka-{api,payment,delivery,restaurant,gateway}`.
+The deployment pulls 5 pre-built images: `ghcr.io/desiarchitect/tadka-cohort-{api,payment,delivery,restaurant,gateway}`.
 Two ways to get access to them, pick one:
 
-**Option A — the images already exist and are public.** If someone with access to the `desiarchitect/tadka`
-GitHub repo has already made these 5 packages public (GitHub → the repo → Packages tab), you don't need to
-do anything here at all — `deploy/azure/variables.tf`'s default `image_prefix` already points at them and
-no credentials are needed to pull a public GHCR image. Try step 6 directly; come back here only if Terraform
-fails to pull an image.
+**Option A — the images already exist and are public (the normal case).** The `images` workflow in this repo
+(`desiarchitect/tadka-cohort`) has built all 5 and they are public, so no credentials are needed to pull them.
+`deploy/azure/variables.tf`'s default `image_prefix` already points at them. Try step 6 directly; come back here
+only if Terraform fails to pull an image. You can check from any machine:
+`docker pull ghcr.io/desiarchitect/tadka-cohort-api:latest` (no `docker login`).
 
 **Option B — build and push your own.** Push to `main` (or, if you don't want to push code, trigger the
 workflow manually: GitHub → the repo → Actions → "images" workflow → **Run workflow**, `workflow_dispatch` is
@@ -99,7 +99,7 @@ tagged both `:<git-sha>` and `:latest`.
 >   ghcr_token    = "<your-PAT>"
 >   ```
 >
-> If you forked the repo or changed the code, also set `image_prefix = "ghcr.io/<your-github-username>/tadka"`
+> If you forked the repo or changed the code, also set `image_prefix = "ghcr.io/<your-github-username>/tadka-cohort"`
 > in the same `my.auto.tfvars` file, so Terraform pulls *your* images, not the course's.
 
 ## 5. Set the budget alert email
