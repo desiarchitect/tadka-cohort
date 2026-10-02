@@ -51,7 +51,19 @@ do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.St
 docker compose ps
 ```
 
-**Kafka requires a login on this branch.** The broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. Payment, Delivery and the monolith already carry the demo credentials (`appsettings.Development.json`), and so does Kafka UI (`docker-compose.yml`). Nothing in this runbook talks to Kafka through its command-line tools, but if you do (for example `docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh ...`), add `--command-config /etc/kafka/docker/client.properties`; the console producer and consumer take `--producer.config` and `--consumer.config` instead. Without credentials a Kafka command hangs and prints nothing. Details are in the Day 9 runbook and ADR-027's security addendum.
+**Kafka requires a login on this branch.** The broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. Payment, Delivery and the monolith already carry the demo credentials (`appsettings.Development.json`), and so does Kafka UI (`docker-compose.yml`). The Kafka command-line tools you run through `docker exec` are clients too, so each one takes `--command-config /etc/kafka/docker/client.properties` (`kafka-topics.sh`, `kafka-consumer-groups.sh`), or `--producer.config` / `--consumer.config` for the console producer and consumer. Without credentials a Kafka command hangs and prints nothing. Details are in the Day 9 runbook and ADR-027's security addendum.
+
+**Pre-create the six Kafka topics this branch uses** (once per fresh broker, right after the containers are healthy). On a broker with no topics yet, each service subscribes the moment it starts, and a consumer that starts before anyone has published to its topic logs `Confluent.Kafka.ConsumeException: Subscribed topic not available` once a second. It is harmless (the consumer keeps retrying and picks the topic up once it exists), but it looks alarming on a first run. Auto-create is on, so skipping this step breaks nothing. The `*.dlq` topics are not in the list on purpose: nothing subscribes to them, and they appear on their own the first time a poison message is parked.
+```bash
+for t in order-placed payment-results order-confirmed delivery-assigned refund-requested payment-refunded; do
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+done
+```
+```powershell
+foreach ($t in "order-placed","payment-results","order-confirmed","delivery-assigned","refund-requested","payment-refunded") {
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+}
+```
 
 Four processes, four terminals (identical command in either shell). The gateway goes last, since it only has something to route to once the other three are listening:
 
