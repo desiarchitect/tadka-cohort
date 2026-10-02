@@ -564,52 +564,116 @@ The route table is data (`ReverseProxy` in `appsettings.json`), not code, so add
 
 Day 5 showed that one `Tadka.Api` instance cannot truly exhaust a pool on a laptop. Day 11 is the first day with **2+ instances**, so this is where the real demo lands. Each instance keeps its own Npgsql pool (`Maximum Pool Size=60`), the pools know nothing about each other, and 2 x 60 = 120 is more than Postgres's `max_connections` of 100.
 
-Start two instances, both **direct** to Postgres on `:5432`:
+**What this section is.** A side experiment, separate from your normal stack. You do **not** stop or restart any of your normal services (Postgres, PgBouncer, Kafka, Payment, Delivery, Gateway, and the monolith on `:5224` all keep running). You start **two extra copies** of the monolith on ports `5226` and `5227`, fire the same burst of requests at them twice, and compare how many real Postgres connections each run used:
+
+| Run | The two extra copies connect to | What to look at |
+|---|---|---|
+| A. Direct | Postgres `:5432` (each copy keeps its own 60-connection pool) | peak real connections, any failed requests |
+| B. Via PgBouncer | PgBouncer `:6432` (many app connections share a few real ones) | peak real connections, and `SHOW POOLS` |
+
+**Before you start:** run `docker compose ps` and confirm `tadka-pgbouncer` is `healthy` (it was added to `docker-compose.yml` on this branch; `docker compose up -d` starts it). Your normal stack already holds about 4 to 6 Postgres connections, so every number below includes that baseline.
+
+> **Windows: `--no-build` is required.** Your running monolith has `Tadka.Api.exe` open. A plain `dotnet run` tries to rebuild it, cannot overwrite the locked file, and fails with `MSB3021 ... file is locked by Tadka.Api`. `--no-build` reuses the binaries you already built. (Run `dotnet build Tadka.slnx` once first if you have not built this branch yet.) The extra copies also get `Kafka__BootstrapServers=` (empty), which switches Kafka off for them, so they do not join the monolith's consumer group and disturb your normal stack.
+
+### Step 1. Start the two extra copies, connected directly to Postgres
 ```bash
-ASPNETCORE_URLS=http://localhost:5226 ConnectionStrings__TadkaDb="Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60" dotnet run --project src/Tadka.Api --no-launch-profile &
-ASPNETCORE_URLS=http://localhost:5227 ConnectionStrings__TadkaDb="Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60" dotnet run --project src/Tadka.Api --no-launch-profile &
+Kafka__BootstrapServers= ASPNETCORE_URLS=http://localhost:5226 ConnectionStrings__TadkaDb="Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60" dotnet run --project src/Tadka.Api --no-launch-profile --no-build &
+Kafka__BootstrapServers= ASPNETCORE_URLS=http://localhost:5227 ConnectionStrings__TadkaDb="Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60" dotnet run --project src/Tadka.Api --no-launch-profile --no-build &
+until curl -sf http://localhost:5226/health >/dev/null && curl -sf http://localhost:5227/health >/dev/null; do sleep 2; done; echo "both copies are up"
 ```
 ```powershell
 $env:ConnectionStrings__TadkaDb = "Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60"
-$env:ASPNETCORE_URLS = "http://localhost:5226"
-Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-$env:ASPNETCORE_URLS = "http://localhost:5227"
-Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null
+$env:Kafka__BootstrapServers = ""
+foreach ($port in 5226,5227) {
+  $env:ASPNETCORE_URLS = "http://localhost:$port"
+  Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile","--no-build" -WindowStyle Minimized
+}
+$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null; $env:Kafka__BootstrapServers = $null
+foreach ($port in 5226,5227) { do { Start-Sleep -Seconds 2; try { $c = [int](Invoke-WebRequest "http://localhost:$port/health" -UseBasicParsing -TimeoutSec 3).StatusCode } catch { $c = 0 } } until ($c -eq 200); "port $port is up" }
 ```
-> **`--no-launch-profile` matters here.** Without it, `dotnet run` applies `launchSettings.json`'s own `applicationUrl` (`:5224`) *after* your `ASPNETCORE_URLS`, so both instances silently try to bind the same port and crash.
+> `--no-launch-profile` still matters: without it `dotnet run` applies `launchSettings.json`'s own `applicationUrl` (`:5224`) *after* your `ASPNETCORE_URLS`, and both copies would try to take the same port and crash. In PowerShell, `Start-Process` opens a minimized window for each copy; you will see them in the taskbar.
 
-Fire 150 concurrent requests at each instance, then look at how many real connections the database is holding:
+### Step 2. Run A: fire the burst and measure the peak
+The number that matters is the **peak** count of real Postgres connections *during* the burst. Postgres closes idle connections within moments, so a count taken after the burst is too low. This starts a watcher that samples the count for about 14 seconds, then fires 150 requests at each copy:
 ```bash
-powershell.exe -NoProfile -Command "& './docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1' -Urls @('http://localhost:5226','http://localhost:5227') -Label 'DIRECT :5432' -RequestsPerInstance 150"
-docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
+( m=0; end=$((SECONDS+14)); while [ $SECONDS -lt $end ]; do n=$(docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"); [ "$n" -gt "$m" ] && m=$n; done; echo "$m" > /tmp/peak.txt ) &
+WATCH=$!
+sleep 1
+powershell.exe -NoProfile -Command "& './docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1' -Urls @('http://localhost:5226','http://localhost:5227') -Label 'A: DIRECT :5432' -RequestsPerInstance 150"
+wait $WATCH; echo "Peak real Postgres connections during the burst: $(cat /tmp/peak.txt)"
 ```
 ```powershell
-.\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "DIRECT :5432" -RequestsPerInstance 150
-docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
+$watch = Start-Job { $m = 0; $end = (Get-Date).AddSeconds(14); while ((Get-Date) -lt $end) { $n = [int](docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"); if ($n -gt $m) { $m = $n } }; $m }
+Start-Sleep -Seconds 1
+.\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "A: DIRECT :5432" -RequestsPerInstance 150
+"Peak real Postgres connections during the burst: " + (Receive-Job $watch -Wait)
 ```
-> The script is PowerShell either way (`pwsh` is not installed on a stock Windows machine, so the bash line calls `powershell.exe`). Pass `-Urls` as an array; a single comma-joined string binds as one bad URI.
+> The load script is PowerShell either way (`pwsh` is not on a stock Windows machine, so the bash line calls `powershell.exe`). Pass `-Urls` as an array; a single comma-joined string binds as one bad URI.
 
-Now stop both instances and restart them pointed at PgBouncer `:6432`. In transaction-pooling mode a physical connection can be handed to a different client between statements, so .NET's own client-side pooling must be turned off (`Pooling=false`), otherwise Npgsql may reuse session state PgBouncer has already wiped (see `docs/database/connection-pooling-guide.md`):
+Write down two numbers: **Failed** (from the script's `RESULTS` box) and the **peak connections** line.
+
+### Step 3. Stop the two extra copies
+Only these two. Your normal stack on `:5224`, `:5240`, `:5250` and `:8080` is not touched. This works from any PowerShell window (on macOS or Linux use `kill $(lsof -ti :5226 :5227)`):
+```powershell
+foreach ($p in 5226,5227) { Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force } }
+```
+
+### Step 4. Start the two copies again, this time through PgBouncer
+Only the port in the connection string changes (`5432` becomes `6432`), plus `Pooling=false`. In transaction-pooling mode a physical connection can be handed to a different client between statements, so .NET's own client-side pooling must be off. Otherwise Npgsql may reuse session state PgBouncer has already wiped (see `docs/database/connection-pooling-guide.md`).
 ```bash
-ASPNETCORE_URLS=http://localhost:5226 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api --no-launch-profile &
-ASPNETCORE_URLS=http://localhost:5227 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api --no-launch-profile &
-powershell.exe -NoProfile -Command "& './docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1' -Urls @('http://localhost:5226','http://localhost:5227') -Label 'VIA PGBOUNCER :6432' -RequestsPerInstance 150"
-docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
+Kafka__BootstrapServers= ASPNETCORE_URLS=http://localhost:5226 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api --no-launch-profile --no-build &
+Kafka__BootstrapServers= ASPNETCORE_URLS=http://localhost:5227 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api --no-launch-profile --no-build &
+until curl -sf http://localhost:5226/health >/dev/null && curl -sf http://localhost:5227/health >/dev/null; do sleep 2; done; echo "both copies are up"
 ```
 ```powershell
 $env:ConnectionStrings__TadkaDb = "Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false"
-$env:ASPNETCORE_URLS = "http://localhost:5226"
-Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-$env:ASPNETCORE_URLS = "http://localhost:5227"
-Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null
-.\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "VIA PGBOUNCER :6432" -RequestsPerInstance 150
-docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
+$env:Kafka__BootstrapServers = ""
+foreach ($port in 5226,5227) {
+  $env:ASPNETCORE_URLS = "http://localhost:$port"
+  Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile","--no-build" -WindowStyle Minimized
+}
+$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null; $env:Kafka__BootstrapServers = $null
+foreach ($port in 5226,5227) { do { Start-Sleep -Seconds 2; try { $c = [int](Invoke-WebRequest "http://localhost:$port/health" -UseBasicParsing -TimeoutSec 3).StatusCode } catch { $c = 0 } } until ($c -eq 200); "port $port is up" }
 ```
-**Captured live, and read this before you promise a failure on stage.** Whether the *direct* run shows failed requests is **not deterministic**. In earlier runs 3-4 of 300 requests failed with Npgsql's `"sorry, too many clients already"` (surfaced as HTTP 500); on a later, warmer run the same load returned 300/300 and even 600/600 with zero failures. What *was* deterministic, every time: after the direct bursts the two instances held **100 of 100** allowed connections (`pg_stat_activity` = 100 against `max_connections` = 100), so the server was sitting at its ceiling and any further connection attempt would be refused. Via PgBouncer the same load returned **300/300** with only **13** real connections open. So the lesson to show is the connection count (100 of 100 vs 13), with request failures as a bonus when they happen. If you want more pressure, raise `-RequestsPerInstance` or run the direct case right after starting the instances.
 
-`Pooling=false` is what a real service ships with once it is behind PgBouncer, per `connection-pooling-guide.md`. The captured comparison used the same `Maximum Pool Size=60` string on both legs for an apples-to-apples run; mention the difference if a student asks why the two commands differ. Full numbers: ADR-015.
+### Step 5. Run B: the same burst, the same measurement
+```bash
+( m=0; end=$((SECONDS+14)); while [ $SECONDS -lt $end ]; do n=$(docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"); [ "$n" -gt "$m" ] && m=$n; done; echo "$m" > /tmp/peak.txt ) &
+WATCH=$!
+sleep 1
+powershell.exe -NoProfile -Command "& './docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1' -Urls @('http://localhost:5226','http://localhost:5227') -Label 'B: VIA PGBOUNCER :6432' -RequestsPerInstance 150"
+wait $WATCH; echo "Peak real Postgres connections during the burst: $(cat /tmp/peak.txt)"
+```
+```powershell
+$watch = Start-Job { $m = 0; $end = (Get-Date).AddSeconds(14); while ((Get-Date) -lt $end) { $n = [int](docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"); if ($n -gt $m) { $m = $n } }; $m }
+Start-Sleep -Seconds 1
+.\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "B: VIA PGBOUNCER :6432" -RequestsPerInstance 150
+"Peak real Postgres connections during the burst: " + (Receive-Job $watch -Wait)
+```
+
+### Step 6. See PgBouncer itself (the "where can I see it" part)
+PgBouncer has its own admin console. This asks it how its pool looks right now (works in either shell, since it just calls `docker exec`):
+```bash
+docker exec -e PGPASSWORD=tadka_local tadka-postgres psql -h pgbouncer -p 5432 -U tadka pgbouncer -c "SHOW POOLS"
+docker exec -e PGPASSWORD=tadka_local tadka-postgres psql -h pgbouncer -p 5432 -U tadka pgbouncer -c "SHOW STATS"
+```
+In the `SHOW POOLS` row for database `tadka`: `pool_mode` is `transaction`, `cl_active` / `cl_waiting` are the **client** (app) connections PgBouncer is serving or holding, and `sv_active` / `sv_idle` are the few **real** connections to Postgres. Run it *during* a burst (start the burst, then run this in another terminal) to see `cl_active` jump far above `sv_active`. `SHOW STATS` has the totals (`total_xact_count`, `avg_wait_time`). To see the real connections on the Postgres side, by state: `docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT usename, state, count(*) FROM pg_stat_activity GROUP BY 1,2"`.
+
+### Step 7. Clean up
+Run the Step 3 command again to stop the two extra copies. Nothing else needs restarting: the normal stack never changed.
+
+### What you should see
+Measured on this branch (Windows, Docker Desktop), 150 requests at each of two copies:
+
+| | A. Direct to `:5432` | B. Via PgBouncer `:6432` |
+|---|---|---|
+| Requests that succeeded | 295 to 300 of 300 | 300 of 300 |
+| Peak real Postgres connections | about 55 to 100 | about 12 |
+| `SHOW POOLS`, real (`sv_*`) connections | n/a | about 8, capped by `default_pool_size=20` |
+
+**Read this before you promise a failure on stage.** Failures on the direct run are **not deterministic**. One run saw 5 of 300 requests fail with HTTP 500 (Npgsql `"sorry, too many clients already"`); the next runs returned 300/300 and even 800/800 with zero failures. The peak on the direct run also varies with how warm the stack is and how much of `/api/v1/restaurants` is served from the Redis cache (cached reads need no database connection): an earlier capture showed `100 of 100` allowed connections, the latest showed 57. What does **not** vary is the shape: direct connections grow with `instances x pool size` and with concurrency until they hit `max_connections` (100), while through PgBouncer they stay near a small fixed number no matter how many clients connect. So the lesson to show is the peak connection count, with failed requests as a bonus when they happen. For more pressure, raise `-RequestsPerInstance` or run Step 2 immediately after starting the copies, before their caches warm.
+
+`Pooling=false` is what a real service ships with once it is behind PgBouncer, per `connection-pooling-guide.md`. The first run used `Maximum Pool Size=60` on the direct leg and `Pooling=false` on the PgBouncer leg; mention that if a student asks why the two connection strings differ. Full numbers: ADR-015.
 
 ### How this is actually implemented
 Two pieces. In [`docker-compose.yml`](../../docker-compose.yml) a `pgbouncer` service runs in **transaction** pooling mode on `:6432` with `default_pool_size=20`, so at most about 20 real backend connections regardless of how many clients connect. The apps change nothing except the port in their connection string (and `Pooling=false`). The load generator, [`docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1`](../../docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1), fires the requests; which port each instance's pool points at is decided at instance startup by `ConnectionStrings__TadkaDb`.
