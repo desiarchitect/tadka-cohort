@@ -129,17 +129,34 @@ curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $T
 ```
 **Captured live: `total: 598.00`.**
 
+**Log in again after every monolith restart.** The monolith keeps its JWT signing keys in memory, so a restart makes every earlier token return `401`. A `401` here would look like the wound but prove nothing, so each block below logs in first.
+
 **The wound.** Stop the Restaurant service (Ctrl+C), restart the monolith with the lever forcing a synchronous HTTP price read, then place an order:
 ```bash
 Ordering__RestaurantReadMode=SyncHttp dotnet run --project src/Tadka.Api
 # then, in another terminal:
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
 curl -s -o /dev/null -w "POST /orders (SyncHttp, Restaurant down): %{http_code}\n" -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY"
 ```
 ```powershell
 $env:Ordering__RestaurantReadMode = "SyncHttp"
 dotnet run --project src/Tadka.Api
 # after you stop it (Ctrl+C), clear the lever: $env:Ordering__RestaurantReadMode = $null
-# then, in another terminal:
+# then, in another terminal (any window):
+# Self-contained: defines the helper and $BODY only if this window does not have them yet.
+if (-not (Get-Command Get-StatusCode -ErrorAction SilentlyContinue)) {
+    function Get-StatusCode {
+        param($Uri, $Method = "GET", $Headers = @{}, $Body = $null, $ContentType = "application/json")
+        try {
+            $params = @{ Uri = $Uri; Method = $Method; Headers = $Headers; UseBasicParsing = $true }
+            if ($Body) { $params.Body = $Body; $params.ContentType = $ContentType }
+            return [int](Invoke-WebRequest @params).StatusCode
+        } catch { if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode } else { throw } }
+    }
+}
+if (-not $BODY) { $BODY = '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":2}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.93,"longitude":77.61}}' }
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
 "POST /orders (SyncHttp, Restaurant down): " + (Get-StatusCode -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -Body $BODY)
 ```
 **Captured live: `500 Internal Server Error`.** With the lever forcing a synchronous HTTP call to price the order, a dead Restaurant service takes the order path down with it: the exact Day-8 shape, now on pricing.
@@ -148,11 +165,14 @@ dotnet run --project src/Tadka.Api
 ```bash
 dotnet run --project src/Tadka.Api
 # then:
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
 curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/.*"status":"([^"]+)".*"totalAmount":\{"amount":([0-9.]+).*/status: \1  total: \2/'
 ```
 ```powershell
 dotnet run --project src/Tadka.Api
-# then:
+# then (log in again, the monolith restarted):
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
 $o = Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY
 "status: " + $o.status + "  total: " + $o.totalAmount.amount
 ```
@@ -273,14 +293,17 @@ $env:Restaurant__AcceptMode = "Reject"; dotnet run --project src/Tadka.Restauran
 $env:Restaurant__DecisionMode = "Service"; dotnet run --project src/Tadka.Api
 # after you stop it: $env:Restaurant__DecisionMode = $null
 ```
-Ordering always confirms; Restaurant.Api decides on `order-confirmed`. Place an order and poll until it settles:
+Ordering always confirms; Restaurant.Api decides on `order-confirmed`. Both restarts invalidated your tokens, so log in again, then place an order and poll until it settles:
 ```bash
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
 ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 for i in $(seq 1 60); do S=$(curl -s http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); P=$(curl -s http://localhost:5240/api/v1/payments/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && [ "$P" = "Refunded" ] && break; sleep 2; done
 echo "order: $S  payment: $P"
 curl -s http://localhost:5240/api/v1/payments/$ORDER -H "Authorization: Bearer $TOKEN"
 ```
 ```powershell
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
 $ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
 $sw = [Diagnostics.Stopwatch]::StartNew()
 do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$ORDER" -Headers $H).status; $p = (Invoke-RestMethod -Uri "http://localhost:5240/api/v1/payments/$ORDER" -Headers $H -ErrorAction SilentlyContinue).status } until (($s -eq "Cancelled" -and $p -eq "Refunded") -or $sw.Elapsed.TotalSeconds -gt 120)

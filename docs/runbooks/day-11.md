@@ -51,7 +51,19 @@ do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.St
 docker compose ps
 ```
 
-**Kafka requires a login on this branch.** The broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. Payment, Delivery and the monolith already carry the demo credentials (`appsettings.Development.json`), and so does Kafka UI (`docker-compose.yml`). Nothing in this runbook talks to Kafka through its command-line tools, but if you do (for example `docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh ...`), add `--command-config /etc/kafka/docker/client.properties`; the console producer and consumer take `--producer.config` and `--consumer.config` instead. Without credentials a Kafka command hangs and prints nothing. Details are in the Day 9 runbook and ADR-027's security addendum.
+**Kafka requires a login on this branch.** The broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. Payment, Delivery and the monolith already carry the demo credentials (`appsettings.Development.json`), and so does Kafka UI (`docker-compose.yml`). The Kafka command-line tools you run through `docker exec` are clients too, so each one takes `--command-config /etc/kafka/docker/client.properties` (`kafka-topics.sh`, `kafka-consumer-groups.sh`), or `--producer.config` / `--consumer.config` for the console producer and consumer. Without credentials a Kafka command hangs and prints nothing. Details are in the Day 9 runbook and ADR-027's security addendum.
+
+**Pre-create the six Kafka topics this branch uses** (once per fresh broker, right after the containers are healthy). On a broker with no topics yet, each service subscribes the moment it starts, and a consumer that starts before anyone has published to its topic logs `Confluent.Kafka.ConsumeException: Subscribed topic not available` once a second. It is harmless (the consumer keeps retrying and picks the topic up once it exists), but it looks alarming on a first run. Auto-create is on, so skipping this step breaks nothing. The `*.dlq` topics are not in the list on purpose: nothing subscribes to them, and they appear on their own the first time a poison message is parked.
+```bash
+for t in order-placed payment-results order-confirmed delivery-assigned refund-requested payment-refunded; do
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+done
+```
+```powershell
+foreach ($t in "order-placed","payment-results","order-confirmed","delivery-assigned","refund-requested","payment-refunded") {
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+}
+```
 
 Four processes, four terminals (identical command in either shell). The gateway goes last, since it only has something to route to once the other three are listening:
 
@@ -199,19 +211,24 @@ dotnet run --project src/Tadka.Api
 # after you stop it (Ctrl+C), clear the levers so later sections behave normally:
 Remove-Item Env:Restaurant__AcceptMode, Env:Restaurant__RefundOnReject
 ```
-Then, in another terminal (your `$TOKEN` normally survives the restart on this branch; if you get a 401, log in again as in section 2):
+**Log in again after every monolith restart.** The monolith keeps its JWT signing keys in memory only (ADR-067), so a restart creates new keys and every token you issued before it now returns `401`. That is why each block below starts with a fresh login. `$BODY` is the order body from section 2 (if this is a new terminal, set it again first). The orders in this section go into `$REJECTED` on purpose, so `$ORDER` from section 2 (the one with a rider) is still intact for sections 4.5 and 4.6.
+
+Then, in another terminal:
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
-for i in $(seq 1 45); do S=$(curl -s http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); P=$(curl -s http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && [ "$P" = "Refunded" ] && break; sleep 2; done
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+REJECTED=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
+for i in $(seq 1 45); do S=$(curl -s http://localhost:5224/api/v1/orders/$REJECTED -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); P=$(curl -s http://localhost:5240/payments/$REJECTED -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && [ "$P" = "Refunded" ] && break; sleep 2; done
 echo "order: $S  payment: $P"
-curl -s http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN"   # {"status":"Refunded","gatewayReference":"FAKEREF-..."}
+curl -s http://localhost:5240/payments/$REJECTED -H "Authorization: Bearer $TOKEN"   # {"status":"Refunded","gatewayReference":"FAKEREF-..."}
 ```
 ```powershell
-$ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+$REJECTED = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
 $sw = [Diagnostics.Stopwatch]::StartNew()
-do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$ORDER" -Headers $H).status; $p = (Invoke-RestMethod -Uri "http://localhost:5240/payments/$ORDER" -Headers $H).status } until (($s -eq "Cancelled" -and $p -eq "Refunded") -or $sw.Elapsed.TotalSeconds -gt 90)
+do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$REJECTED" -Headers $H).status; $p = (Invoke-RestMethod -Uri "http://localhost:5240/payments/$REJECTED" -Headers $H).status } until (($s -eq "Cancelled" -and $p -eq "Refunded") -or $sw.Elapsed.TotalSeconds -gt 90)
 "order: $s  payment: $p"
-Invoke-RestMethod -Uri "http://localhost:5240/payments/$ORDER" -Headers $H
+Invoke-RestMethod -Uri "http://localhost:5240/payments/$REJECTED" -Headers $H
 ```
 **Captured live:** order `Cancelled`, payment **`Refunded`** with its own gateway reference (`FAKEREF-…`, different from the original `FAKEPAY-…` charge, proving a real second gateway call happened and not a status flip). On a monolith restarted seconds earlier the order stayed `Created`/`Completed` for over 12 seconds before the refund chain ran, then finished about 10 seconds later. Give the first order after a restart up to a minute; warm ones are much faster.
 
@@ -226,22 +243,32 @@ dotnet run --project src/Tadka.Api
 # after you stop it: Remove-Item Env:Restaurant__AcceptMode, Env:Restaurant__RefundOnReject
 ```
 ```bash
-ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
-for i in $(seq 1 45); do S=$(curl -s http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && break; sleep 2; done
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+REJECTED=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
+for i in $(seq 1 45); do S=$(curl -s http://localhost:5224/api/v1/orders/$REJECTED -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'); [ "$S" = "Cancelled" ] && break; sleep 2; done
 sleep 5; echo "order: $S"
-curl -s http://localhost:5240/payments/$ORDER -H "Authorization: Bearer $TOKEN"   # {"status":"Completed", ...}: STILL Completed
+curl -s http://localhost:5240/payments/$REJECTED -H "Authorization: Bearer $TOKEN"   # {"status":"Completed", ...}: STILL Completed
 ```
 ```powershell
-$ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+$REJECTED = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id
 $sw = [Diagnostics.Stopwatch]::StartNew()
-do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$ORDER" -Headers $H).status } until ($s -eq "Cancelled" -or $sw.Elapsed.TotalSeconds -gt 90)
+do { Start-Sleep -Seconds 2; $s = (Invoke-RestMethod -Uri "http://localhost:5224/api/v1/orders/$REJECTED" -Headers $H).status } until ($s -eq "Cancelled" -or $sw.Elapsed.TotalSeconds -gt 90)
 Start-Sleep -Seconds 5
 "order: $s"
-Invoke-RestMethod -Uri "http://localhost:5240/payments/$ORDER" -Headers $H   # status: Completed, STILL
+Invoke-RestMethod -Uri "http://localhost:5240/payments/$REJECTED" -Headers $H   # status: Completed, STILL
 ```
 **Captured live:** order `Cancelled` after 36 seconds on a freshly restarted monolith, payment stayed **`Completed`**: money genuinely stuck, until someone flips the lever back and reconciles by hand. The monolith's log says so out loud: `Order {id} cancelled after restaurant rejection, but Restaurant:RefundOnReject is OFF, the completed payment is NOT refunded.` This is a real gap shown on purpose, not hidden behind a passing test.
 
-Restart the monolith with no env overrides (`AcceptMode` defaults to `Auto`) before continuing. Every section after this one assumes orders confirm normally.
+Restart the monolith with no env overrides (`AcceptMode` defaults to `Auto`) before continuing. Every section after this one assumes orders confirm normally. That restart invalidates your tokens again, so log in once more and put the result back in `$TOKEN` / `$H` (and `$RAHUL` / `$RIDER` if a later section uses them):
+```bash
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+```
+```powershell
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+```
 
 ### How this is actually implemented
 [`RefundSagaOrchestrator.cs`](../../src/Tadka.Api/Infrastructure/Messaging/RefundSagaOrchestrator.cs) is the one named place that sequences the compensation: cancel the order, then (if `RefundOnReject`) write a `refund-requested` row to the Outbox in the same transaction as the cancellation:
@@ -270,10 +297,26 @@ Two things juniors miss: a **timeout is not "didn't charge"**, so a refund needs
 
 Stop the Delivery service (Ctrl+C in its terminal), then:
 ```bash
+TOKEN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
 curl -s -o /dev/null -w "POST /orders: %{http_code}\n" -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY"   # 201
 curl -s -o /dev/null -w "menu: %{http_code}\n" http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu   # 200
 ```
 ```powershell
+# Self-contained: run this in ANY PowerShell window. It defines the helper, logs in and sets $BODY only if they are missing.
+if (-not (Get-Command Get-StatusCode -ErrorAction SilentlyContinue)) {
+    function Get-StatusCode {
+        param($Uri, $Method = "GET", $Headers = @{}, $Body = $null, $ContentType = "application/json")
+        try {
+            $params = @{ Uri = $Uri; Method = $Method; Headers = $Headers; UseBasicParsing = $true }
+            if ($Body) { $params.Body = $Body; $params.ContentType = $ContentType }
+            return [int](Invoke-WebRequest @params).StatusCode
+        } catch { if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode } else { throw } }
+    }
+}
+$TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$H = @{ Authorization = "Bearer $TOKEN" }
+if (-not $BODY) { $BODY = '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":1}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.93,"longitude":77.61}}' }
+
 "POST /orders: " + (Get-StatusCode -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -Body $BODY)   # 201
 "menu: " + (Get-StatusCode -Uri http://localhost:5224/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu)   # 200
 ```
@@ -521,52 +564,116 @@ The route table is data (`ReverseProxy` in `appsettings.json`), not code, so add
 
 Day 5 showed that one `Tadka.Api` instance cannot truly exhaust a pool on a laptop. Day 11 is the first day with **2+ instances**, so this is where the real demo lands. Each instance keeps its own Npgsql pool (`Maximum Pool Size=60`), the pools know nothing about each other, and 2 x 60 = 120 is more than Postgres's `max_connections` of 100.
 
-Start two instances, both **direct** to Postgres on `:5432`:
+**What this section is.** A side experiment, separate from your normal stack. You do **not** stop or restart any of your normal services (Postgres, PgBouncer, Kafka, Payment, Delivery, Gateway, and the monolith on `:5224` all keep running). You start **two extra copies** of the monolith on ports `5226` and `5227`, fire the same burst of requests at them twice, and compare how many real Postgres connections each run used:
+
+| Run | The two extra copies connect to | What to look at |
+|---|---|---|
+| A. Direct | Postgres `:5432` (each copy keeps its own 60-connection pool) | peak real connections, any failed requests |
+| B. Via PgBouncer | PgBouncer `:6432` (many app connections share a few real ones) | peak real connections, and `SHOW POOLS` |
+
+**Before you start:** run `docker compose ps` and confirm `tadka-pgbouncer` is `healthy` (it was added to `docker-compose.yml` on this branch; `docker compose up -d` starts it). Your normal stack already holds about 4 to 6 Postgres connections, so every number below includes that baseline.
+
+> **Windows: `--no-build` is required.** Your running monolith has `Tadka.Api.exe` open. A plain `dotnet run` tries to rebuild it, cannot overwrite the locked file, and fails with `MSB3021 ... file is locked by Tadka.Api`. `--no-build` reuses the binaries you already built. (Run `dotnet build Tadka.slnx` once first if you have not built this branch yet.) The extra copies also get `Kafka__BootstrapServers=` (empty), which switches Kafka off for them, so they do not join the monolith's consumer group and disturb your normal stack.
+
+### Step 1. Start the two extra copies, connected directly to Postgres
 ```bash
-ASPNETCORE_URLS=http://localhost:5226 ConnectionStrings__TadkaDb="Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60" dotnet run --project src/Tadka.Api --no-launch-profile &
-ASPNETCORE_URLS=http://localhost:5227 ConnectionStrings__TadkaDb="Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60" dotnet run --project src/Tadka.Api --no-launch-profile &
+Kafka__BootstrapServers= ASPNETCORE_URLS=http://localhost:5226 ConnectionStrings__TadkaDb="Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60" dotnet run --project src/Tadka.Api --no-launch-profile --no-build &
+Kafka__BootstrapServers= ASPNETCORE_URLS=http://localhost:5227 ConnectionStrings__TadkaDb="Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60" dotnet run --project src/Tadka.Api --no-launch-profile --no-build &
+until curl -sf http://localhost:5226/health >/dev/null && curl -sf http://localhost:5227/health >/dev/null; do sleep 2; done; echo "both copies are up"
 ```
 ```powershell
 $env:ConnectionStrings__TadkaDb = "Host=localhost;Port=5432;Database=tadka;Username=tadka;Password=tadka_local;Minimum Pool Size=5;Maximum Pool Size=60"
-$env:ASPNETCORE_URLS = "http://localhost:5226"
-Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-$env:ASPNETCORE_URLS = "http://localhost:5227"
-Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null
+$env:Kafka__BootstrapServers = ""
+foreach ($port in 5226,5227) {
+  $env:ASPNETCORE_URLS = "http://localhost:$port"
+  Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile","--no-build" -WindowStyle Minimized
+}
+$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null; $env:Kafka__BootstrapServers = $null
+foreach ($port in 5226,5227) { do { Start-Sleep -Seconds 2; try { $c = [int](Invoke-WebRequest "http://localhost:$port/health" -UseBasicParsing -TimeoutSec 3).StatusCode } catch { $c = 0 } } until ($c -eq 200); "port $port is up" }
 ```
-> **`--no-launch-profile` matters here.** Without it, `dotnet run` applies `launchSettings.json`'s own `applicationUrl` (`:5224`) *after* your `ASPNETCORE_URLS`, so both instances silently try to bind the same port and crash.
+> `--no-launch-profile` still matters: without it `dotnet run` applies `launchSettings.json`'s own `applicationUrl` (`:5224`) *after* your `ASPNETCORE_URLS`, and both copies would try to take the same port and crash. In PowerShell, `Start-Process` opens a minimized window for each copy; you will see them in the taskbar.
 
-Fire 150 concurrent requests at each instance, then look at how many real connections the database is holding:
+### Step 2. Run A: fire the burst and measure the peak
+The number that matters is the **peak** count of real Postgres connections *during* the burst. Postgres closes idle connections within moments, so a count taken after the burst is too low. This starts a watcher that samples the count for about 14 seconds, then fires 150 requests at each copy:
 ```bash
-powershell.exe -NoProfile -Command "& './docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1' -Urls @('http://localhost:5226','http://localhost:5227') -Label 'DIRECT :5432' -RequestsPerInstance 150"
-docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
+( m=0; end=$((SECONDS+14)); while [ $SECONDS -lt $end ]; do n=$(docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"); [ "$n" -gt "$m" ] && m=$n; done; echo "$m" > /tmp/peak.txt ) &
+WATCH=$!
+sleep 1
+powershell.exe -NoProfile -Command "& './docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1' -Urls @('http://localhost:5226','http://localhost:5227') -Label 'A: DIRECT :5432' -RequestsPerInstance 150"
+wait $WATCH; echo "Peak real Postgres connections during the burst: $(cat /tmp/peak.txt)"
 ```
 ```powershell
-.\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "DIRECT :5432" -RequestsPerInstance 150
-docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
+$watch = Start-Job { $m = 0; $end = (Get-Date).AddSeconds(14); while ((Get-Date) -lt $end) { $n = [int](docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"); if ($n -gt $m) { $m = $n } }; $m }
+Start-Sleep -Seconds 1
+.\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "A: DIRECT :5432" -RequestsPerInstance 150
+"Peak real Postgres connections during the burst: " + (Receive-Job $watch -Wait)
 ```
-> The script is PowerShell either way (`pwsh` is not installed on a stock Windows machine, so the bash line calls `powershell.exe`). Pass `-Urls` as an array; a single comma-joined string binds as one bad URI.
+> The load script is PowerShell either way (`pwsh` is not on a stock Windows machine, so the bash line calls `powershell.exe`). Pass `-Urls` as an array; a single comma-joined string binds as one bad URI.
 
-Now stop both instances and restart them pointed at PgBouncer `:6432`. In transaction-pooling mode a physical connection can be handed to a different client between statements, so .NET's own client-side pooling must be turned off (`Pooling=false`), otherwise Npgsql may reuse session state PgBouncer has already wiped (see `docs/database/connection-pooling-guide.md`):
+Write down two numbers: **Failed** (from the script's `RESULTS` box) and the **peak connections** line.
+
+### Step 3. Stop the two extra copies
+Only these two. Your normal stack on `:5224`, `:5240`, `:5250` and `:8080` is not touched. This works from any PowerShell window (on macOS or Linux use `kill $(lsof -ti :5226 :5227)`):
+```powershell
+foreach ($p in 5226,5227) { Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force } }
+```
+
+### Step 4. Start the two copies again, this time through PgBouncer
+Only the port in the connection string changes (`5432` becomes `6432`), plus `Pooling=false`. In transaction-pooling mode a physical connection can be handed to a different client between statements, so .NET's own client-side pooling must be off. Otherwise Npgsql may reuse session state PgBouncer has already wiped (see `docs/database/connection-pooling-guide.md`).
 ```bash
-ASPNETCORE_URLS=http://localhost:5226 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api --no-launch-profile &
-ASPNETCORE_URLS=http://localhost:5227 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api --no-launch-profile &
-powershell.exe -NoProfile -Command "& './docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1' -Urls @('http://localhost:5226','http://localhost:5227') -Label 'VIA PGBOUNCER :6432' -RequestsPerInstance 150"
-docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
+Kafka__BootstrapServers= ASPNETCORE_URLS=http://localhost:5226 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api --no-launch-profile --no-build &
+Kafka__BootstrapServers= ASPNETCORE_URLS=http://localhost:5227 ConnectionStrings__TadkaDb="Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false" dotnet run --project src/Tadka.Api --no-launch-profile --no-build &
+until curl -sf http://localhost:5226/health >/dev/null && curl -sf http://localhost:5227/health >/dev/null; do sleep 2; done; echo "both copies are up"
 ```
 ```powershell
 $env:ConnectionStrings__TadkaDb = "Host=localhost;Port=6432;Database=tadka;Username=tadka;Password=tadka_local;Pooling=false"
-$env:ASPNETCORE_URLS = "http://localhost:5226"
-Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-$env:ASPNETCORE_URLS = "http://localhost:5227"
-Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile"
-$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null
-.\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "VIA PGBOUNCER :6432" -RequestsPerInstance 150
-docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"
+$env:Kafka__BootstrapServers = ""
+foreach ($port in 5226,5227) {
+  $env:ASPNETCORE_URLS = "http://localhost:$port"
+  Start-Process dotnet -ArgumentList "run","--project","src/Tadka.Api","--no-launch-profile","--no-build" -WindowStyle Minimized
+}
+$env:ConnectionStrings__TadkaDb = $null; $env:ASPNETCORE_URLS = $null; $env:Kafka__BootstrapServers = $null
+foreach ($port in 5226,5227) { do { Start-Sleep -Seconds 2; try { $c = [int](Invoke-WebRequest "http://localhost:$port/health" -UseBasicParsing -TimeoutSec 3).StatusCode } catch { $c = 0 } } until ($c -eq 200); "port $port is up" }
 ```
-**Captured live, and read this before you promise a failure on stage.** Whether the *direct* run shows failed requests is **not deterministic**. In earlier runs 3-4 of 300 requests failed with Npgsql's `"sorry, too many clients already"` (surfaced as HTTP 500); on a later, warmer run the same load returned 300/300 and even 600/600 with zero failures. What *was* deterministic, every time: after the direct bursts the two instances held **100 of 100** allowed connections (`pg_stat_activity` = 100 against `max_connections` = 100), so the server was sitting at its ceiling and any further connection attempt would be refused. Via PgBouncer the same load returned **300/300** with only **13** real connections open. So the lesson to show is the connection count (100 of 100 vs 13), with request failures as a bonus when they happen. If you want more pressure, raise `-RequestsPerInstance` or run the direct case right after starting the instances.
 
-`Pooling=false` is what a real service ships with once it is behind PgBouncer, per `connection-pooling-guide.md`. The captured comparison used the same `Maximum Pool Size=60` string on both legs for an apples-to-apples run; mention the difference if a student asks why the two commands differ. Full numbers: ADR-015.
+### Step 5. Run B: the same burst, the same measurement
+```bash
+( m=0; end=$((SECONDS+14)); while [ $SECONDS -lt $end ]; do n=$(docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"); [ "$n" -gt "$m" ] && m=$n; done; echo "$m" > /tmp/peak.txt ) &
+WATCH=$!
+sleep 1
+powershell.exe -NoProfile -Command "& './docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1' -Urls @('http://localhost:5226','http://localhost:5227') -Label 'B: VIA PGBOUNCER :6432' -RequestsPerInstance 150"
+wait $WATCH; echo "Peak real Postgres connections during the burst: $(cat /tmp/peak.txt)"
+```
+```powershell
+$watch = Start-Job { $m = 0; $end = (Get-Date).AddSeconds(14); while ((Get-Date) -lt $end) { $n = [int](docker exec tadka-postgres psql -U tadka -d tadka -t -A -c "SELECT count(*) FROM pg_stat_activity WHERE usename='tadka';"); if ($n -gt $m) { $m = $n } }; $m }
+Start-Sleep -Seconds 1
+.\docs\demo-scripts\02-pgbouncer-connection-exhaustion.ps1 -Urls @("http://localhost:5226","http://localhost:5227") -Label "B: VIA PGBOUNCER :6432" -RequestsPerInstance 150
+"Peak real Postgres connections during the burst: " + (Receive-Job $watch -Wait)
+```
+
+### Step 6. See PgBouncer itself (the "where can I see it" part)
+PgBouncer has its own admin console. This asks it how its pool looks right now (works in either shell, since it just calls `docker exec`):
+```bash
+docker exec -e PGPASSWORD=tadka_local tadka-postgres psql -h pgbouncer -p 5432 -U tadka pgbouncer -c "SHOW POOLS"
+docker exec -e PGPASSWORD=tadka_local tadka-postgres psql -h pgbouncer -p 5432 -U tadka pgbouncer -c "SHOW STATS"
+```
+In the `SHOW POOLS` row for database `tadka`: `pool_mode` is `transaction`, `cl_active` / `cl_waiting` are the **client** (app) connections PgBouncer is serving or holding, and `sv_active` / `sv_idle` are the few **real** connections to Postgres. Run it *during* a burst (start the burst, then run this in another terminal) to see `cl_active` jump far above `sv_active`. `SHOW STATS` has the totals (`total_xact_count`, `avg_wait_time`). To see the real connections on the Postgres side, by state: `docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT usename, state, count(*) FROM pg_stat_activity GROUP BY 1,2"`.
+
+### Step 7. Clean up
+Run the Step 3 command again to stop the two extra copies. Nothing else needs restarting: the normal stack never changed.
+
+### What you should see
+Measured on this branch (Windows, Docker Desktop), 150 requests at each of two copies:
+
+| | A. Direct to `:5432` | B. Via PgBouncer `:6432` |
+|---|---|---|
+| Requests that succeeded | 295 to 300 of 300 | 300 of 300 |
+| Peak real Postgres connections | about 55 to 100 | about 12 |
+| `SHOW POOLS`, real (`sv_*`) connections | n/a | about 8, capped by `default_pool_size=20` |
+
+**Read this before you promise a failure on stage.** Failures on the direct run are **not deterministic**. One run saw 5 of 300 requests fail with HTTP 500 (Npgsql `"sorry, too many clients already"`); the next runs returned 300/300 and even 800/800 with zero failures. The peak on the direct run also varies with how warm the stack is and how much of `/api/v1/restaurants` is served from the Redis cache (cached reads need no database connection): an earlier capture showed `100 of 100` allowed connections, the latest showed 57. What does **not** vary is the shape: direct connections grow with `instances x pool size` and with concurrency until they hit `max_connections` (100), while through PgBouncer they stay near a small fixed number no matter how many clients connect. So the lesson to show is the peak connection count, with failed requests as a bonus when they happen. For more pressure, raise `-RequestsPerInstance` or run Step 2 immediately after starting the copies, before their caches warm.
+
+`Pooling=false` is what a real service ships with once it is behind PgBouncer, per `connection-pooling-guide.md`. The first run used `Maximum Pool Size=60` on the direct leg and `Pooling=false` on the PgBouncer leg; mention that if a student asks why the two connection strings differ. Full numbers: ADR-015.
 
 ### How this is actually implemented
 Two pieces. In [`docker-compose.yml`](../../docker-compose.yml) a `pgbouncer` service runs in **transaction** pooling mode on `:6432` with `default_pool_size=20`, so at most about 20 real backend connections regardless of how many clients connect. The apps change nothing except the port in their connection string (and `Pooling=false`). The load generator, [`docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1`](../../docs/demo-scripts/02-pgbouncer-connection-exhaustion.ps1), fires the requests; which port each instance's pool points at is decided at instance startup by `ConnectionStrings__TadkaDb`.
@@ -642,7 +749,7 @@ dotnet test
 - [ ] Delivery **down** → orders 201 + menu 200 (fault isolation).
 - [ ] Live-tracking SSE stream: the order's owner gets events; a different customer's token on the same order id gets **403**.
 - [ ] All services reachable via **one host** `:8080`; payment-no-token via gateway still **401**; a dead route's target returns **502**.
-- [ ] PgBouncer: direct-to-Postgres leaves the instances holding **100 of 100** connections; via `:6432` the same load runs on about **13**.
+- [ ] PgBouncer: the peak of real Postgres connections during the burst is clearly higher direct to `:5432` (about 55 to 100) than via `:6432` (about **12**), and `SHOW POOLS` shows `pool_mode = transaction`.
 - [ ] Delivery ownership: Rahul on Priya's `track` gets **403**; Priya's token on `PUT location` gets **403**; the rider's own token gets **204**.
 - [ ] Rider lifecycle: `PickedUp` then `Delivered` returns the rider to `Available`; a 4th order on a fresh stack waits in `pending_assignments` and gets that rider on the next sweep.
 - [ ] RS256: `/.well-known/jwks.json` lists the public keys; tokens verify in all three services with no shared secret; one rotation keeps old tokens valid, a second rejects them.
@@ -660,6 +767,7 @@ dotnet test
 - **SSE stream returns 403 for the order's real owner:** wrong token. Re-login and confirm the `sub` claim matches the order's `customerId`.
 - **Gateway 502 on a route:** the target service is down; start all three before the gateway demo.
 - **Both `Tadka.Api` instances crash on startup in the PgBouncer demo:** you forgot `--no-launch-profile`; `launchSettings.json`'s `applicationUrl` overrides `ASPNETCORE_URLS` and both fight over `:5224`.
+- **The two extra copies in section 6 fail with MSB3021 ... file is locked by Tadka.Api (Windows):** your running monolith has Tadka.Api.exe open and dotnet run tried to rebuild it. Add --no-build (run dotnet build Tadka.slnx once first if the branch was never built).
 - **The demo script says every request failed with "Invalid URI":** `-Urls` was passed as one comma-joined string. Pass a real array (`@("http://…","http://…")`).
 - **`pwsh: command not found`:** `pwsh` (PowerShell 7) is not installed by default. The demo script runs fine under Windows PowerShell 5.1: use `powershell.exe` as shown above.
 - **PgBouncer `SHOW POOLS` fails with "not allowed":** connect as the `tadka` user (set via `ADMIN_USERS` in `docker-compose.yml`), not `postgres`; or just count `pg_stat_activity` as this runbook does.
