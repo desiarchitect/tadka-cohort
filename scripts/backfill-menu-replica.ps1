@@ -9,13 +9,15 @@
   system is live, so we must NOT lock it or saturate the replica. This script demonstrates the discipline:
 
     * CHUNKED        — keyset pagination (WHERE "Id" > lastId ORDER BY "Id" LIMIT N); commit per batch.
-    * SKIP LOCKED    — the source rows are claimed with FOR UPDATE SKIP LOCKED so multiple workers take
-                       DISJOINT batches and never block each other or live traffic (same primitive as the
-                       Outbox relay, ADR-028 / CTO review #2).
+    * PARTITIONED    — with -Workers N, worker i only takes rows where hash(Id) % N = i, so N copies of this
+                       script (-Worker 0 .. N-1) take DISJOINT slices of the table and never touch the same row.
+                       (This is a copy between two databases, so no row lock can be held across the read and the
+                       upsert; disjointness comes from the partition, not from a lock.)
     * THROTTLED      — sleep between batches and WATCH REPLICATION LAG; back off when it grows (protect the
                        read replica, ADR-016).
     * IDEMPOTENT     — INSERT ... ON CONFLICT DO UPDATE (upsert), so a re-run resumes, never duplicates.
-    * NEVER LOCKS    — additive upserts only; reads never block.
+    * RESUMABLE      — every batch prints its high-water mark; pass it as -StartAfterId to resume after a crash.
+    * NEVER LOCKS    — plain reads on the source and additive upserts on the target; nothing blocks live traffic.
 
   Runs entirely through `docker exec psql`, so no host psql client is needed.
 
@@ -24,15 +26,29 @@
 .PARAMETER LagCeilingMs  If replication lag exceeds this, back off (default 1000).
 .PARAMETER SeedExtra     Optionally generate N synthetic menu items in restaurant-db first, to make the
                          backfill sizeable for the demo (default 0 = use the real seeded menu only).
+.PARAMETER Workers       Total number of parallel workers (default 1 = a single worker takes everything).
+.PARAMETER Worker        This worker's index, 0 .. Workers-1 (default 0).
+.PARAMETER StartAfterId  Resume point: only rows with Id greater than this are copied (default: from the start).
 .EXAMPLE
   ./scripts/backfill-menu-replica.ps1 -SeedExtra 50000 -ChunkSize 1000 -ThrottleMs 100
+.EXAMPLE
+  # two workers, in two terminals, taking disjoint halves of the table
+  ./scripts/backfill-menu-replica.ps1 -Workers 2 -Worker 0
+  ./scripts/backfill-menu-replica.ps1 -Workers 2 -Worker 1
 #>
 param(
   [int]$ChunkSize = 500,
   [int]$ThrottleMs = 200,
   [int]$LagCeilingMs = 1000,
-  [int]$SeedExtra = 0
+  [int]$SeedExtra = 0,
+  [int]$Workers = 1,
+  [int]$Worker = 0,
+  [string]$StartAfterId = "00000000-0000-0000-0000-000000000000"
 )
+
+if ($Workers -lt 1 -or $Worker -lt 0 -or $Worker -ge $Workers) {
+  throw "-Worker must be between 0 and -Workers minus 1 (got Worker=$Worker, Workers=$Workers)."
+}
 
 $ErrorActionPreference = "Stop"
 $srcContainer = "tadka-restaurant-db"   # Restaurant service DB (own DB, ADR-036)
@@ -52,7 +68,7 @@ function Lag() {
 
 Write-Host "== Online backfill: restaurant.menu_items -> ordering.menu_replica (ADR-038) ==" -ForegroundColor Cyan
 
-if ($SeedExtra -gt 0) {
+if ($SeedExtra -gt 0 -and $Worker -eq 0) {
   Write-Host "Seeding $SeedExtra synthetic menu items into restaurant-db (to make the backfill sizeable)..." -ForegroundColor Yellow
   $seedSql = @"
 INSERT INTO restaurant.menu_items ("Id","RestaurantId","Name","Category","IsAvailable","IsVeg","price","currency")
@@ -65,21 +81,22 @@ FROM generate_series(1, $SeedExtra) g;
   $seedSql | docker exec -i $srcContainer psql -U $usr -d $srcDb -f - | Out-Null
 }
 
-$total = [int]((Src "SELECT count(*) FROM restaurant.menu_items;").Trim())
-Write-Host "Source rows to backfill: $total  (chunk=$ChunkSize, throttle=${ThrottleMs}ms, lag-ceiling=${LagCeilingMs}ms)`n"
+# This worker's slice of the table: every row whose hashed Id lands in bucket $Worker of $Workers.
+$slice = "abs(hashtext(mi.`"Id`"::text)::bigint) % $Workers = $Worker"
+$total = [int]((Src "SELECT count(*) FROM restaurant.menu_items mi WHERE $slice AND mi.`"Id`" > '$StartAfterId';").Trim())
+Write-Host "Worker $Worker of $Workers : source rows to backfill: $total  (chunk=$ChunkSize, throttle=${ThrottleMs}ms, lag-ceiling=${LagCeilingMs}ms)`n"
 
-$lastId = "00000000-0000-0000-0000-000000000000"
+$lastId = $StartAfterId
 $done = 0; $batchNo = 0; $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
 while ($true) {
-  # Claim a DISJOINT chunk from the source with FOR UPDATE SKIP LOCKED (multi-worker safe), keyset-paged.
+  # Next keyset page of THIS worker's slice. Plain read, no row lock: the slice is what keeps workers disjoint.
   $rows = Src @"
 SELECT mi."Id", mi."RestaurantId", mi."Name", mi."price", mi."currency", mi."IsAvailable"
 FROM restaurant.menu_items mi
-WHERE mi."Id" > '$lastId'
+WHERE $slice AND mi."Id" > '$lastId'
 ORDER BY mi."Id"
-LIMIT $ChunkSize
-FOR UPDATE SKIP LOCKED;
+LIMIT $ChunkSize;
 "@
   $rows = @($rows | Where-Object { $_ -and $_.Trim() -ne "" })
   if ($rows.Count -eq 0) { break }
@@ -104,7 +121,7 @@ ON CONFLICT ("MenuItemId") DO UPDATE
   # Throttle + watch replication lag; back off if the replica is falling behind (ADR-016).
   $lag = Lag
   $pct = if ($total -gt 0) { [int]($done * 100 / $total) } else { 100 }
-  Write-Host ("batch {0,4}  +{1,-4} rows  total {2,7}/{3} ({4,3}%)  replica-lag {5,5}ms" -f $batchNo, $rows.Count, $done, $total, $pct, $lag)
+  Write-Host ("batch {0,4}  +{1,-4} rows  total {2,7}/{3} ({4,3}%)  replica-lag {5,5}ms  high-water {6}" -f $batchNo, $rows.Count, $done, $total, $pct, $lag, $lastId)
 
   if ($lag -gt $LagCeilingMs) {
     $backoff = $ThrottleMs * 5
@@ -117,6 +134,6 @@ ON CONFLICT ("MenuItemId") DO UPDATE
 
 $sw.Stop()
 $replicaCount = [int]((docker exec $dstContainer psql -U $usr -d $dstDb -t -A -c "SELECT count(*) FROM ordering.menu_replica;").Trim())
-Write-Host "`nDone. Backfilled $done row(s) in $batchNo batch(es) over $([int]$sw.Elapsed.TotalSeconds)s." -ForegroundColor Green
+Write-Host "`nWorker $Worker of $Workers done. Backfilled $done row(s) in $batchNo batch(es) over $([int]$sw.Elapsed.TotalSeconds)s." -ForegroundColor Green
 Write-Host "ordering.menu_replica now holds $replicaCount row(s). Reads never blocked; table never locked." -ForegroundColor Green
 Write-Host "From here, menu-updated events keep the replica fresh (ADR-037)." -ForegroundColor Green

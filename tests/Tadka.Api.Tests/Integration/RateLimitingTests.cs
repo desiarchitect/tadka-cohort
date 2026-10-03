@@ -57,11 +57,11 @@ public class RateLimitingTests(TadkaApiFactory factory) : IClassFixture<TadkaApi
     [Fact]
     public async Task Lockout_clears_itself_once_the_cooldown_passes()
     {
-        // Short lockout window (3s, not 1s: under a loaded full-suite run five password hashes plus JIT can take over a second, and the test would see the lock already expired) + loosened rate limit, isolated to THIS test's own host.
+        // Short lockout window (6s, not 1s: under a loaded full-suite run five password hashes plus JIT can take over a second, and the test would see the lock already expired) + loosened rate limit, isolated to THIS test's own host.
         var client = _factory.WithWebHostBuilder(b =>
         {
             b.UseSetting("Auth:RateLimit:PermitLimit", "1000");
-            b.UseSetting("Auth:Lockout:LockoutSeconds", "3");
+            b.UseSetting("Auth:Lockout:LockoutSeconds", "6");
         }).CreateClient();
         const string email = "owner1@tadka.test"; // a DIFFERENT seeded account from the other tests in this class
 
@@ -71,7 +71,7 @@ public class RateLimitingTests(TadkaApiFactory factory) : IClassFixture<TadkaApi
         var whileLocked = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password = AuthSeeder.DefaultPassword });
         Assert.Equal(HttpStatusCode.Unauthorized, whileLocked.StatusCode);
 
-        await Task.Delay(3300);
+        await Task.Delay(6500);
 
         var afterCooldown = await client.PostAsJsonAsync("/api/v1/auth/login", new { email, password = AuthSeeder.DefaultPassword });
         Assert.Equal(HttpStatusCode.OK, afterCooldown.StatusCode);

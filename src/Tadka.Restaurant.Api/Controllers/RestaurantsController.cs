@@ -29,8 +29,10 @@ public class RestaurantsController(RestaurantDbContext db, ICacheService cache, 
     // Resource-ownership (ADR-031): an owner may only touch THEIR restaurant; Admin may touch any.
     private bool OwnsOrAdmin(Guid restaurantId) => User.IsAdmin() || User.OwnedRestaurantId() == restaurantId;
 
-    /// <summary>Expand-contract dual-write lever (ADR-038): when true, Name writes also fill DisplayName.</summary>
-    private bool DualWriteDisplayName => config.GetValue("Demo:DualWriteDisplayName", false);
+    /// <summary>Expand-contract dual-write (ADR-038): while both columns exist, every Name write also fills
+    /// DisplayName, because reads already prefer DisplayName (<see cref="MapItem"/>). ON by default; the lever
+    /// exists so the divergence you get without it can be demonstrated.</summary>
+    private bool DualWriteDisplayName => config.GetValue("Demo:DualWriteDisplayName", true);
 
     [HttpGet]
     [ETagFilter] // ADR-048/054: conditional GET — 304 when body unchanged

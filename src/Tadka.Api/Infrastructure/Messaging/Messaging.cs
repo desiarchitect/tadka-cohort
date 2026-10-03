@@ -10,6 +10,7 @@ public static class Topics
     public const string PaymentResultsDlq = "payment-results.dlq";
     public const string OrderConfirmed = "order-confirmed";   // → Delivery assigns a rider (ADR-033)
     public const string MenuUpdated = "menu-updated";         // ← Restaurant publishes; Ordering updates its price replica (ADR-037)
+    public const string MenuUpdatedDlq = "menu-updated.dlq";
     public const string RefundRequested = "refund-requested"; // → the restaurant rejected an already-paid order (ADR-045)
     public const string PaymentRefunded = "payment-refunded"; // ← the compensating refund settled (ADR-045)
     public const string PaymentRefundedDlq = "payment-refunded.dlq";

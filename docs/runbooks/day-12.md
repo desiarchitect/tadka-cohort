@@ -250,7 +250,7 @@ Cross-stack: the consumer is a listener plus an upsert in any stack (Spring Kafk
 
 ## 4. Demo 3: Online data backfill (zero-downtime)
 
-**What you're proving:** events only carry *future* changes, so the replica starts empty and the *current* menu has to be backfilled. In production that table is huge and the system is live, so you cannot lock it or saturate the replica. This demo shows the discipline: chunked, `SKIP LOCKED`, throttled, lag-watched, idempotent.
+**What you're proving:** events only carry *future* changes, so the replica starts empty and the *current* menu has to be backfilled. In production that table is huge and the system is live, so you cannot lock it or saturate the replica. This demo shows the discipline: chunked, partitioned across workers, throttled, lag-watched, idempotent, resumable.
 
 ```bash
 powershell.exe -NoProfile -File ./scripts/backfill-menu-replica.ps1 -SeedExtra 5000 -ChunkSize 1000 -ThrottleMs 50
@@ -263,13 +263,14 @@ powershell.exe -NoProfile -File ./scripts/backfill-menu-replica.ps1 -SeedExtra 5
 **Captured live, twice:** `5016 row(s)` backfilled in **`6 batches over 7s`**, replica lag staying at **`1-10 ms`** throughout, the table never locked. (5016 = the 16 real seeded items plus 5000 synthetic ones.) Strategy in class, not script: the LLD lives in the repo, not on the slide.
 
 ### How this is actually implemented
-[`scripts/backfill-menu-replica.ps1`](../../scripts/backfill-menu-replica.ps1) claims a keyset-paged chunk of the source with `FOR UPDATE SKIP LOCKED`, upserts it with `INSERT ... ON CONFLICT ("MenuItemId") DO UPDATE`, sleeps `-ThrottleMs`, reads replication lag from `pg_stat_replication`, and backs off if it exceeds `-LagCeilingMs`. Each batch is its own transaction, so there is never a giant lock.
+[`scripts/backfill-menu-replica.ps1`](../../scripts/backfill-menu-replica.ps1) reads a keyset-paged chunk of the source (`WHERE Id > lastId ORDER BY Id LIMIT N`, a plain read with no row lock), upserts it with `INSERT ... ON CONFLICT ("MenuItemId") DO UPDATE`, sleeps `-ThrottleMs`, reads replication lag from `pg_stat_replication`, and backs off if it exceeds `-LagCeilingMs`. Each batch is its own transaction, so there is never a giant lock, and every batch prints its **high-water mark**: after a crash, pass the last one as `-StartAfterId` and it carries on from there. To run several workers, start the script once per worker (`-Workers 2 -Worker 0` and `-Workers 2 -Worker 1`): worker *i* only takes rows where `abs(hashtext("Id"::text)::bigint) % Workers = i`, so the slices are disjoint and complete. Because this is a copy between two databases, no row lock can be held across the read and the upsert; the **partition** is what keeps workers from colliding.
 
 ### Option space: moving data on a live table
 | Technique | What it buys | Watch |
 |---|---|---|
 | Chunked keyset paging | No giant transaction | Page on the primary key; track a high-water mark |
-| `FOR UPDATE SKIP LOCKED` | N workers take disjoint batches; live traffic is not blocked | The same primitive as the Outbox relay |
+| Hash partition per worker (`-Workers N -Worker i`) | N workers take disjoint slices with no coordination | Every worker must be started with the same N |
+| `FOR UPDATE SKIP LOCKED` | When claim and update happen in one statement on one database, workers take disjoint batches without blocking each other (the `Name` to `DisplayName` backfill in Demo 5, the Outbox relay) | Needs the claim and the write in the same transaction, which a cross-database copy cannot have |
 | Throttle + lag watch | Protects the read replica (ADR-016) | If lag grows, back off |
 | Idempotent upsert | Resumable: a re-run never duplicates | Needs a natural id |
 | **CDC (Debezium)** | A continuous stream instead of a one-off copy | A separate pipeline; the answer at scale |
@@ -338,7 +339,7 @@ There is **no automatic timeout-then-reject** in the teaching build; an order wh
 
 **What you're proving:** renaming a column on a live table without downtime. Add the new column (expand), write to **both** during the transition (dual-write), backfill the historical rows in chunks, switch reads, and only later drop the old column (contract). Every step is its own deploy, and no app version ever runs against a schema it cannot handle.
 
-Restart Restaurant with the dual-write lever and change a menu item's name:
+Dual-write is **on by default** (`Demo:DualWriteDisplayName`, default `true`), because reads already prefer `DisplayName`: if a rename wrote only `Name`, the API would keep showing the old name. The `=true` below just makes it explicit. To watch what it protects you from, start Restaurant with `Demo__DualWriteDisplayName=false`, rename an item, and compare the two columns: `Name` changes, `DisplayName` stays behind (this variation is covered by `ExpandContractDualWriteTests`, not re-run live). Restart Restaurant with dual-write on and change a menu item's name:
 ```bash
 Demo__DualWriteDisplayName=true dotnet run --project src/Tadka.Restaurant.Api
 # then:
@@ -377,7 +378,7 @@ powershell.exe -NoProfile -File ./scripts/expand-contract-demo.ps1 -BreakGiantUp
 > **Two real bugs fixed in `expand-contract-demo.ps1` while verifying this runbook.** (1) It failed to *parse* under Windows PowerShell 5.1, with a cascade of confusing errors (`An expression was expected after '('`): its em dashes had been corrupted into mojibake bytes, and every embedded SQL identifier used Bash's `\"` escape, which PowerShell does not understand. (2) After the backfill was complete the loop **never terminated**: `psql` prints a command tag (`UPDATE 200`, or `UPDATE 0`) after the returned rows, the loop counted output lines, so an empty batch still counted as 1 and the loop spun forever printing `batch wrote ~1 rows`. It now counts only the rows it returned (`Where-Object { $_ -eq "1" }`).
 
 ### How this is actually implemented
-Restaurant's migration added a nullable `DisplayName` column (the additive, non-breaking *expand*). With `Demo:DualWriteDisplayName=true`, PATCH and POST fill both `Name` and `DisplayName`. The API's `MapItem` reads `DisplayName ?? Name`, which is the *switch-read*. The script backfills history in `SKIP LOCKED` chunks, with a 50 ms pause between batches. The *contract* step (stop writing `Name`, drop the column) is deliberately **not** done by the script: that is a later deploy.
+Restaurant's migration added a nullable `DisplayName` column (the additive, non-breaking *expand*). With `Demo:DualWriteDisplayName` on (the default), PATCH and POST fill both `Name` and `DisplayName` in the same `SaveChanges`. The API's `MapItem` reads `DisplayName ?? Name`, which is the *switch-read*. The script backfills history in `SKIP LOCKED` chunks, with a 50 ms pause between batches. The *contract* step (stop writing `Name`, drop the column) is deliberately **not** done by the script: that is a later deploy.
 
 ### Option space: schema change on a live table
 | Approach | Downtime | Risk |
@@ -605,7 +606,7 @@ The teaching script's Segment 7 walks a *real*, currently deployed Azure Contain
 ```
 dotnet test
 ```
-**174/174** on this branch at the time of writing: monolith 93, Payment 31, Delivery 17, Restaurant 18, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. That includes 16 Kafka authentication tests (4 per service, no broker needed), and the real-Kafka integration tests (Testcontainers) that run against an unauthenticated broker: their fixtures blank `Kafka:SaslUsername`, because the test host runs in the `Development` environment and would otherwise inherit the compose broker's credentials. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
+**177/177** on this branch at the time of writing: monolith 95, Payment 31, Delivery 17, Restaurant 19, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. That includes 16 Kafka authentication tests (4 per service, no broker needed), and the real-Kafka integration tests (Testcontainers) that run against an unauthenticated broker: their fixtures blank `Kafka:SaslUsername`, because the test host runs in the `Development` environment and would otherwise inherit the compose broker's credentials. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
 
 ---
 
@@ -659,7 +660,7 @@ monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway
 - [ ] Rahul reading Priya's payment or tracking her order gets **403**; Priya gets **200**; a customer POSTing `/api/v1/payments/charge` gets **403**.
 - [ ] `/.well-known/jwks.json` lists the public key; `rotate-signing-key` (Admin) adds a new one and the old token still verifies once (**200**).
 - [ ] The rider on an order can `PATCH` it `PickedUp` then `Delivered` (**204**, **204**) and is `Available` again; a fourth order on a fresh stack is parked in `pending_assignments` and assigned once a rider frees up.
-- [ ] `dotnet test` is green (**174/174** at the time of writing).
+- [ ] `dotnet test` is green (**177/177** at the time of writing).
 - [ ] A Kafka command with no credentials hangs; with `--command-config /etc/kafka/docker/client.properties` it answers.
 
 ## Troubleshooting

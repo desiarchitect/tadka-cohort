@@ -23,9 +23,9 @@ We will adopt the **Expand & Contract** pattern for schema changes, and **Chunke
 
 2. **Online Data Backfill (For Data Seeding):**
    - *Chunked Processing:* Data is migrated in small, discrete batches (e.g., 500-1000 rows per transaction) to avoid long table locks and transaction log bloat.
-   - *Concurrency Control:* Background workers use `FOR UPDATE SKIP LOCKED` to safely claim batches of rows without blocking live traffic or other workers.
+   - *Concurrency Control:* The cross-database copy (`scripts/backfill-menu-replica.ps1`) splits the table into disjoint hash partitions, one per worker (`hash(Id) mod N`), so workers never touch the same row and never block live traffic. Where the claim and the update are one statement on one database (the `Name` to `DisplayName` backfill, the Outbox relay), `FOR UPDATE SKIP LOCKED` gives the same guarantee.
    - *Throttling:* Migration scripts dynamically monitor database health (specifically `pg_stat_replication` for replica lag) and inject artificial pauses between batches to prevent I/O saturation.
-   - *Idempotency:* Backfill batches are applied as upserts (`INSERT ... ON CONFLICT DO UPDATE`), so re-processing an already-applied row is a no-op, not a duplicate or a corruption. The shipped demo (`scripts/backfill-menu-replica.ps1`) tracks its keyset cursor in an in-memory script variable, not a persisted checkpoint — a crash mid-run loses the cursor, and a restart re-scans from the beginning rather than resuming past what was already applied. That is **safe** (idempotent upserts make redoing already-done batches harmless) but **not an efficient resume** — a genuinely large backfill that crashes near the end would redo the full pass. A persisted high-water mark (a small "last id processed" row/table, updated per batch) is the natural next step if backfills grow large enough for that inefficiency to matter.
+   - *Idempotency:* Backfill batches are applied as upserts (`INSERT ... ON CONFLICT DO UPDATE`), so re-processing an already-applied row is a no-op, not a duplicate or a corruption. The shipped demo (`scripts/backfill-menu-replica.ps1`) pages by keyset, prints its high-water mark after every batch, and accepts it back as `-StartAfterId`, so a crash resumes past what was already applied instead of re-scanning from the start.
 
 ## Consequences
 

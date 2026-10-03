@@ -1,12 +1,12 @@
 ﻿<#
 .SYNOPSIS
-  Day 12 / ADR-038 expand-contract dual-write demo for menu item Name â†’ DisplayName.
+  Day 12 / ADR-038 expand-contract dual-write demo for menu item Name -> DisplayName.
 
 .DESCRIPTION
   Shows the production rename path WITHOUT downtime:
     1. Expand    -  DisplayName column already exists (migration AddDisplayName).
     2. Dual-write  -  Demo:DualWriteDisplayName=true; PATCH/POST name fills both columns.
-    3. Backfill  -  this script copies Name â†’ DisplayName for historical rows (chunked).
+    3. Backfill  -  this script copies Name -> DisplayName for historical rows (chunked).
     4. Switch-read  -  API already prefers DisplayName when set (MapItem).
     5. Contract   -  (documented only) stop writing Name, drop column in a later deploy.
 
