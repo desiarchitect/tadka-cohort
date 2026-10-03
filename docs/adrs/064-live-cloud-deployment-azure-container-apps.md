@@ -20,7 +20,7 @@ Constraints that shape the choice:
 2. **"Results, not HCL."** Students must see the architecture working (CDN hit, one public entry, autoscale,
    failover, the bill). Nobody is taught Terraform syntax.
 3. **Same code as local.** No cloud-only code paths. Everything is configuration.
-4. **Facts found at build time on `main`:** 14 Kafka topics (8 + 6 DLQs); all four services call
+4. **Facts found at build time on `main`:** 14 Kafka topics at the time (8 + 6 DLQs; 16 on `day-12`, 8 + 8, after later consumers each got a DLQ); all four services call
    `Database.Migrate()` on startup; no `EnableRetryOnFailure` anywhere; 8 explicit transactions (3 Outbox
    relays with `FOR UPDATE SKIP LOCKED`, 4 Inbox consumers/handlers, 1 pessimistic coupon redeem);
    the gateway's rate limiter is in-memory per replica; `src/Tadka.Api/Dockerfile` did not build (it
@@ -43,7 +43,7 @@ plan-only reference in `terraform/`.
 | Autoscaling | HTTP concurrency rule on gateway + api, 1..5. Optional: KEDA Kafka-lag rule on Payment, 1..4 | Visible under the existing k6 scripts on Day 16 |
 | Postgres | Flexible Server, ONE server, 4 databases, **private access** (delegated subnet + private DNS zone, no public endpoint). `basic` B1ms; `ha` GP D2ds_v5 + zone-redundant HA + read replica | 4 servers = 4 bills; B1ms cannot fail over, so `ha` exists for one session only; the data tier is never public (Day 10) |
 | Redis | `basic`: one container. `ha`: primary + replica + 3 Sentinels | See "Redis HA" below |
-| Kafka | Single KRaft broker container app (TCP ingress, VNet environment) | 14 topics > Event Hubs Standard's 10 per namespace |
+| Kafka | Single KRaft broker container app (TCP ingress, VNet environment) | 14 topics (16 on `day-12`) > Event Hubs Standard's 10 per namespace |
 | Observability | OTEL Collector (contrib) exporting to Application Insights | The Day-13 seam: only the collector config changes |
 | Secrets | `random_password` into Container App secrets | Key Vault named as the production upgrade |
 | Images | GHCR, built by `.github/workflows/images.yml` after `dotnet test` (flag off AND on) | Outside the resource group, so images survive teardown |

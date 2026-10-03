@@ -45,16 +45,16 @@ Prereqs, timings, costs and the per-session checklist: [`docs/runbooks/cloud-dep
 | Autoscaling | HTTP concurrency rule on gateway + api (1..`max_replicas`, default 5) | same |
 | Postgres | Flexible Server **B1ms**, 4 databases, read string = primary | **GP D2ds_v5**, zone-redundant HA, **+ read replica** wired to `TadkaDbReplica` |
 | Redis | one Redis container | **redis-a + redis-b + 3 Sentinels** (quorum 2) |
-| Kafka | KRaft container app (14 topics > Event Hubs Standard's 10) | same |
+| Kafka | KRaft container app (16 topics > Event Hubs Standard's 10) | same |
 | Observability | OTEL Collector → Application Insights | same |
 | Secrets | `random_password` → Container App secrets | same |
 | Budget alert | 1000 (billing currency) on the resource group | same |
 
 ## Decisions made at build time (details in ADR-064)
 
-- **Kafka container, not Event Hubs.** `main` has 14 topics (`order-placed`, `payment-results`,
+- **Kafka container, not Event Hubs.** `day-12` has 16 topics (`order-placed`, `payment-results`,
   `order-confirmed`, `menu-updated`, `refund-requested`, `payment-refunded`, `restaurant-response`,
-  `delivery-assigned` + 6 `.dlq`). Event Hubs Standard caps at 10 per namespace. TCP ingress for Kafka is why
+  `delivery-assigned` + 8 `.dlq`, one per consumer including Delivery's `payment-refunded.delivery.dlq`). Event Hubs Standard caps at 10 per namespace. TCP ingress for Kafka is why
   the environment is VNet-integrated.
 - **Cloud Kafka is not authenticated, unlike local.** The apps can log in to Kafka with SASL/SCRAM
   (`Kafka:SaslUsername`, set only in `appsettings.Development.json` for the local docker-compose broker). In

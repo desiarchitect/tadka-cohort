@@ -1,6 +1,6 @@
 # Kafka: single-node KRaft broker as a container app (ADR-064).
 #
-# Why not Event Hubs (the plan's first choice): Tadka uses 14 topics on main (8 main + 6 DLQs), and Event
+# Why not Event Hubs (the plan's first choice): Tadka uses 16 topics on day-12 (8 main + 8 DLQs), and Event
 # Hubs Standard allows 10 event hubs per namespace. Premium/Dedicated fixes that at many times the price.
 # So this mirrors docker-compose's `kafka` service: same image, same KRaft combined mode, auto-create topics,
 # no persistent volume (the session is thrown away at the end, and the Outbox makes Kafka replayable).

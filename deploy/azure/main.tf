@@ -47,7 +47,7 @@ resource "azurerm_application_insights" "appi" {
 
 # ── Network ──────────────────────────────────────────────────────────────────────────────────────
 # A VNet-integrated environment is needed only because Kafka and Redis are container apps with TCP
-# ingress (TCP ingress requires a custom VNet). 14 Kafka topics > Event Hubs Standard's 10 per namespace,
+# ingress (TCP ingress requires a custom VNet). 16 Kafka topics > Event Hubs Standard's 10 per namespace,
 # so Kafka runs as a container here (ADR-064). The same VNet also gives Postgres private access below:
 # the data tier has no public IP (Day 10).
 resource "azurerm_virtual_network" "vnet" {

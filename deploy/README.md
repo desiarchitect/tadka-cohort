@@ -49,7 +49,7 @@ product names change.
 | Realtime (SSE) | gateway :8080 | gateway URL directly, not through Front Door (the CDN cuts long-lived responses) | not split in the reference (same pattern: a realtime hostname on the ALB that skips CloudFront) |
 | Origin lockdown | none | gateway 403s requests without our `X-Azure-FDID` (except health probes and SSE) | not built (CloudFront custom header or AWS-managed prefix list is the equivalent) |
 | Redis | `redis` container | Redis container; `ha`: primary + replica + 3 Sentinels | ElastiCache (1 node) |
-| Kafka | KRaft container | KRaft container app (14 topics > Event Hubs Standard's 10) | KRaft ECS task by default; MSK behind `enable_msk` |
+| Kafka | KRaft container | KRaft container app (16 topics > Event Hubs Standard's 10) | KRaft ECS task by default; MSK behind `enable_msk` |
 | Observability | OTEL Collector → Jaeger/Prometheus/Grafana (`observability` profile) | OTEL Collector → Application Insights | CloudWatch Logs (+ any OTLP backend) |
 | Secrets | `appsettings.Development.json` | `random_password` → Container App secrets | `random_password` → SSM Parameter Store SecureString |
 | Images | built locally | GHCR (`.github/workflows/images.yml`) | ECR repositories (5) |
