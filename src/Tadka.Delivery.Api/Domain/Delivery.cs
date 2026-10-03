@@ -53,6 +53,17 @@ public class PendingAssignment
     public DateTime? LastAttemptAt { get; set; }
 }
 
+/// <summary>
+/// "This order was cancelled" (its compensating refund settled). It does two jobs: the rider assigned to the
+/// order is released, and if <c>order-confirmed</c> for it is still waiting in Kafka (this service was down, or
+/// the two topics are read at different speeds) it is never given a rider at all. One row per order.
+/// </summary>
+public class CancelledOrder
+{
+    public Guid OrderId { get; set; }
+    public DateTime CancelledAt { get; set; }
+}
+
 /// <summary>Inbox row (ADR-028): processed message-id → idempotent consumer (a redelivery assigns once).</summary>
 public class InboxMessage
 {

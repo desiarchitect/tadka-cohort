@@ -60,6 +60,7 @@ if (kafka?.Enabled == true)
 {
     builder.Services.AddSingleton<KafkaProducer>();
     builder.Services.AddHostedService<OrderConfirmedConsumer>();
+    builder.Services.AddHostedService<PaymentRefundedConsumer>(); // a cancelled order gives its rider back
 }
 
 // Per-service JWT validation (ADR-031, defense in depth): this service verifies the SAME token the monolith

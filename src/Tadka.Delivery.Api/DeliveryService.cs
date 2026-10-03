@@ -55,6 +55,14 @@ public sealed class DeliveryService(DeliveryDbContext db, ILogger<DeliveryServic
             return new AssignmentResult(orderId, existing.AgentId, existingAgent?.Name ?? "", existing.Status.ToString());
         }
 
+        // Cancelled before we got to it (the refund beat order-confirmed here): no rider, and don't park it.
+        if (await db.CancelledOrders.AsNoTracking().AnyAsync(c => c.OrderId == orderId, ct))
+        {
+            await db.PendingAssignments.Where(p => p.OrderId == orderId).ExecuteDeleteAsync(ct);
+            logger.LogInformation("Order {OrderId} was already cancelled — not assigning a rider.", orderId);
+            return null;
+        }
+
         await using var tx = await db.Database.BeginTransactionAsync(ct);
 
         // Still first-available (not nearest; see Day 11 Part 12), but each candidate is CLAIMED atomically.
@@ -113,6 +121,16 @@ public sealed class DeliveryService(DeliveryDbContext db, ILogger<DeliveryServic
             var winner = await db.Assignments.AsNoTracking().FirstAsync(a => a.OrderId == orderId, ct);
             var winnerAgent = await db.Agents.AsNoTracking().FirstOrDefaultAsync(a => a.Id == winner.AgentId, ct);
             return new AssignmentResult(orderId, winner.AgentId, winnerAgent?.Name ?? "", winner.Status.ToString());
+        }
+
+        // The cancellation may have been recorded between the check above and this commit. Cancel writes its row
+        // BEFORE it looks for an assignment, and we look for its row AFTER committing ours, so at least one of
+        // the two sees the other and the rider is released either way.
+        if (await db.CancelledOrders.AsNoTracking().AnyAsync(c => c.OrderId == orderId, ct))
+        {
+            await ChangeStatusAsync(orderId, AssignmentStatus.Cancelled, ct);
+            logger.LogInformation("Order {OrderId} was cancelled while being assigned — rider {Agent} released.", orderId, claimed.Value.Name);
+            return null;
         }
 
         logger.LogInformation("🛵 Order {OrderId} assigned to rider {Agent} ({AgentId}).", orderId, claimed.Value.Name, claimed.Value.Id);
@@ -177,6 +195,22 @@ public sealed class DeliveryService(DeliveryDbContext db, ILogger<DeliveryServic
         await db.SaveChangesAsync(ct);
         logger.LogInformation("Delivery for order {OrderId} is now {Status}.", orderId, next);
         return (StatusChangeOutcome.Ok, null);
+    }
+
+    /// <summary>
+    /// The order was cancelled (the restaurant rejected it and the refund settled). Free whatever it was holding:
+    /// remember the cancellation, drop it from the waiting list, and release its rider if one was assigned.
+    /// Idempotent: a redelivered message, or an order that was never confirmed here, changes nothing more.
+    /// </summary>
+    public async Task CancelOrderAsync(Guid orderId, CancellationToken ct = default)
+    {
+        await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""INSERT INTO delivery.cancelled_orders ("OrderId", "CancelledAt") VALUES ({orderId}, NOW()) ON CONFLICT DO NOTHING""", ct);
+        await db.PendingAssignments.Where(p => p.OrderId == orderId).ExecuteDeleteAsync(ct);
+
+        var assignment = await db.Assignments.AsNoTracking().FirstOrDefaultAsync(a => a.OrderId == orderId, ct);
+        if (assignment is { Status: AssignmentStatus.Assigned or AssignmentStatus.PickedUp })
+            await ChangeStatusAsync(orderId, AssignmentStatus.Cancelled, ct);
     }
 
     private async Task ParkAsync(Guid orderId, Guid? customerId, double latitude, double longitude, CancellationToken ct)

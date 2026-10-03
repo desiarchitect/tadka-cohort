@@ -384,6 +384,15 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \`"SagaType\`",\`"C
 **Captured live:** `refund-compensation | refund-requested | Completed | Restaurant rejected; starting compensation`. The step moves `cancel-order` to `request-refund` to `refund-requested` while `Status` goes `Running` to `Completed`.
 
 ### How this is actually implemented
+**The rider goes back too.** The monolith sent `order-confirmed` to Delivery as well, so a rider was assigned before the restaurant said no. When `payment-refunded` arrives, Delivery's [`PaymentRefundedConsumer`](../../src/Tadka.Delivery.Api/Messaging/PaymentRefundedConsumer.cs) calls [`DeliveryService.CancelOrderAsync`](../../src/Tadka.Delivery.Api/DeliveryService.cs): it writes the order into `delivery.cancelled_orders` (so an `order-confirmed` that is still waiting in Kafka cannot hand the order a rider later), drops it from `pending_assignments`, and sets the assignment to `Cancelled`, which frees the rider. Check the rider count once the order shows `Cancelled` (reset the riders first with the SQL in Section 9.1 if earlier demos used them up); `$ORDER` is the rejected order's id:
+```bash
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c 'SELECT "Status", count(*) FROM delivery.agents GROUP BY 1;' -c "SELECT \"Status\" FROM delivery.assignments WHERE \"OrderId\" = '$ORDER';"
+```
+```powershell
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \`"Status\`", count(*) FROM delivery.agents GROUP BY 1;" -c "SELECT \`"Status\`" FROM delivery.assignments WHERE \`"OrderId\`" = '$ORDER';"
+```
+**Captured live:** with warm services the order read `Cancelled` about 6 seconds after placing; at that point all three riders were `Available` and the assignment read `Cancelled`. Pinned by `CancelledOrderTests` and `PaymentRefundedConsumerKafkaTests`.
+
 In `Service` mode the monolith stops deciding: it publishes `order-confirmed`, and Restaurant.Api consumes it and replies on `restaurant-response` (`Rejected` here). The monolith's `RestaurantResponseConsumer` receives that and runs the *same* `RefundSagaOrchestrator` from Day 11 (cancel + `refund-requested` via the Outbox), so only the *trigger* moved between processes. The refund half (Payment's `RefundRequestedConsumer`, `PaymentService.RefundAsync`) is unchanged.
 
 ### Option space: where the accept/reject decision lives
@@ -570,7 +579,7 @@ The first call lists restaurants, the second reads one restaurant's menu; neithe
 
 **What you're proving:** with four services each verifying tokens and each holding its own data, *how* they verify and *who may touch what* matters more than it did with one. Nothing in this section shares a secret, and every ownership rule lives in the service that owns the data.
 
-**First, free the riders.** There are only three riders, and every confirmed order from the earlier demos took one and nothing gave it back (a rider is released only when their delivery is marked `Delivered` or `Cancelled`, Section 9.1 below). If you ran the demos in order, all three are busy and the next order would simply be parked. This resets the demo database so the set-up below can assign a rider ([`DeliveryDbContext`](../../src/Tadka.Delivery.Api/Data/DeliveryDbContext.cs) seeds the three riders; `delivery.agents.Status` is their availability):
+**First, free the riders.** There are only three riders, and every confirmed order from the earlier demos took one, and a rider comes back only when their delivery is marked `Delivered` or `Cancelled` (Section 9.1 below) or when the refund of a rejected order settles (Demo 4). Orders from Demos 1 to 3 were accepted and never delivered, so if you ran the demos in order their riders are still busy and the next order would simply be parked. This resets the demo database so the set-up below can assign a rider ([`DeliveryDbContext`](../../src/Tadka.Delivery.Api/Data/DeliveryDbContext.cs) seeds the three riders; `delivery.agents.Status` is their availability):
 ```bash
 docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c 'UPDATE delivery.agents SET "Status" = '"'"'Available'"'"';' -c 'DELETE FROM delivery.pending_assignments;'
 ```
@@ -721,7 +730,7 @@ The teaching script's Segment 7 walks a *real*, currently deployed Azure Contain
 dotnet test
 ```
 Run from the repository root, `dotnet test` finds [`Tadka.slnx`](../../Tadka.slnx) and runs the five test projects under [`tests/`](../../tests): the monolith's, Payment's, Delivery's, Restaurant's and the gateway's. Many of them start real Postgres and Kafka containers with Testcontainers, so Docker must be running, and they use their own throwaway containers (they do not touch the stack you started above). To run just one area, add a filter, for example `dotnet test tests/Tadka.Restaurant.Api.Tests` or `dotnet test --filter "FullyQualifiedName~ExpandContract"`.
-**177/177** on this branch at the time of writing: monolith 95, Payment 31, Delivery 17, Restaurant 19, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. That includes 16 Kafka authentication tests (4 per service, no broker needed), and the real-Kafka integration tests (Testcontainers) that run against an unauthenticated broker: their fixtures blank `Kafka:SaslUsername`, because the test host runs in the `Development` environment and would otherwise inherit the compose broker's credentials. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
+**183/183** on this branch at the time of writing: monolith 95, Payment 31, Delivery 23, Restaurant 19, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. That includes 16 Kafka authentication tests (4 per service, no broker needed), and the real-Kafka integration tests (Testcontainers) that run against an unauthenticated broker: their fixtures blank `Kafka:SaslUsername`, because the test host runs in the `Development` environment and would otherwise inherit the compose broker's credentials. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
 
 ---
 
@@ -750,7 +759,7 @@ Run from the repository root, `dotnet test` finds [`Tadka.slnx`](../../Tadka.sln
 ---
 
 ## 13. Demo vs. Production: named gaps, not overclaimed features
-- **In Service decision mode a rejected order still takes a rider.** Ordering publishes `order-confirmed` to both Restaurant and Delivery at the same moment, so Delivery assigns a rider before the restaurant's `Rejected` arrives, and nothing releases that rider when the order is then cancelled; only a rider marking `Cancelled` or `Delivered` does. In the demos this is why the three riders run out. A real system would have Delivery wait for the restaurant's `Accepted`, or release the rider on `payment-refunded`/order cancellation.
+- **In Service decision mode the rider is held until the refund settles.** Ordering publishes `order-confirmed` to Restaurant and Delivery at the same moment, so Delivery assigns a rider before the restaurant answers. If the answer is `Rejected`, the rider is released when `payment-refunded` arrives ([`PaymentRefundedConsumer`](../../src/Tadka.Delivery.Api/Messaging/PaymentRefundedConsumer.cs) calls `DeliveryService.CancelOrderAsync`), a few seconds later (the length of the refund chain), not at the moment of rejection. A production system would hold the rider back until the restaurant says `Accepted`.
 - **No automatic timeout-reject in Service decision mode.** If Restaurant.Api never responds, the order sits `Confirmed` forever. Named as a revisit in ADR-062.
 - **The replica-lag metric has no alert.** A stalled replica is visible if someone looks at the gauge, not paged on (ADR-063).
 - **The SSE stream cap is a single in-memory counter per process.** With N replicas the effective per-user cap is N x 3. A shared counter (Redis) is the real answer at scale.
@@ -777,7 +786,7 @@ monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway
 - [ ] Rahul reading Priya's payment or tracking her order gets **403**; Priya gets **200**; a customer POSTing `/api/v1/payments/charge` gets **403**.
 - [ ] `/.well-known/jwks.json` lists the public key; `rotate-signing-key` (Admin) adds a new one and the old token still verifies once (**200**).
 - [ ] The rider on an order can `PATCH` it `PickedUp` then `Delivered` (**204**, **204**) and is `Available` again; a fourth order on a fresh stack is parked in `pending_assignments` and assigned once a rider frees up.
-- [ ] `dotnet test` is green (**177/177** at the time of writing).
+- [ ] `dotnet test` is green (**183/183** at the time of writing).
 - [ ] A Kafka command with no credentials hangs; with `--command-config /etc/kafka/docker/client.properties` it answers.
 
 ## Troubleshooting

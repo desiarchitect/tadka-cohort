@@ -11,6 +11,7 @@ public class DeliveryDbContext(DbContextOptions<DeliveryDbContext> options) : Db
     public DbSet<DeliveryAssignment> Assignments => Set<DeliveryAssignment>();
     public DbSet<InboxMessage> InboxMessages => Set<InboxMessage>();
     public DbSet<PendingAssignment> PendingAssignments => Set<PendingAssignment>();
+    public DbSet<CancelledOrder> CancelledOrders => Set<CancelledOrder>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -31,6 +32,12 @@ public class DeliveryDbContext(DbContextOptions<DeliveryDbContext> options) : Db
             b.HasKey(x => x.OrderId); // one waiting row per order: parking the same order twice is a no-op
             b.Property(x => x.CreatedAt).HasDefaultValueSql("NOW()");
             b.HasIndex(x => x.CreatedAt); // the sweeper serves the oldest waiting order first
+        });
+        modelBuilder.Entity<CancelledOrder>(b =>
+        {
+            b.ToTable("cancelled_orders", "delivery");
+            b.HasKey(x => x.OrderId); // one row per order: cancelling twice is a no-op
+            b.Property(x => x.CancelledAt).HasDefaultValueSql("NOW()");
         });
         modelBuilder.Entity<InboxMessage>(b =>
         {
