@@ -57,9 +57,15 @@ Pricing reads Ordering's **own** replica → order path stays up when Restaurant
 
 ```mermaid
 flowchart LR
-  src[(restaurant.menu_items)] -->|"keyset chunk\nFOR UPDATE SKIP LOCKED"| worker[backfill worker]
+  src[(restaurant.menu_items)] -->|"keyset chunk\nhash-partitioned per worker"| worker[backfill workers]
   worker -->|"idempotent upsert\nON CONFLICT"| dst[(ordering.menu_replica)]
   worker -->|watch replay_lag\nback off if high| lag[[replica lag gauge]]
 ```
 
-Chunked + throttled + SKIP-LOCKED + lag-watched → table never locks, reads never block. At scale → CDC (Debezium).
+Chunked + throttled + hash-partitioned workers (`-Workers N -Worker i`) + lag-watched → table never locks, reads never block. At scale → CDC (Debezium).
+
+---
+
+## 4. The same system on Azure
+
+Basic and HA deployment diagrams with every Azure component: [`day-12-azure-deployment.md`](day-12-azure-deployment.md).

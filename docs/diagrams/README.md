@@ -1,6 +1,6 @@
 # Architecture Diagrams (student-facing)
 
-Mermaid diagrams for every teaching day. Follow [`style-guide.md`](style-guide.md) for colours and shapes.
+Mermaid diagrams for every teaching day (the Azure deployment is two SVGs, too detailed for Mermaid). Follow [`style-guide.md`](style-guide.md) for colours and shapes.
 
 **In class:** the instructor draws the *before → after* view live on the whiteboard first. These files are the **post-class handout** — polished reference, not a substitute for the live sketch.
 
@@ -17,7 +17,7 @@ Mermaid diagrams for every teaching day. Follow [`style-guide.md`](style-guide.m
 | 9 | `day-09-outbox-inbox.md`, `day-09-saga-choreography.md` | 027–029 Kafka, Outbox, Saga |
 | 10 | `day-10-auth.md` | 030–032 JWT, RBAC, PII |
 | 11 | `day-11-geohash.md`, `day-11-rate-limiting.md` | 033–035 Delivery, gateway, rate limits |
-| 12 | `day-12-topology.md` | 036–038 Restaurant extraction, read model, backfill |
+| 12 | `day-12-topology.md`, `day-12-azure-deployment.md` | 036–038 Restaurant extraction, read model, backfill; 064 Azure deployment (basic and HA) |
 | 13 | `day-13-observability.md` | 040–042 OTEL, trace propagation, cardinality |
 | 14 | `day-14-circuit-breaker.md` | 043–044 breaker, dependency classification |
 | 15 | `day-15-swiggy-hld-blueprint.md` | teardown / interview blueprint |

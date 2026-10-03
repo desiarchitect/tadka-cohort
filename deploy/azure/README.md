@@ -11,6 +11,7 @@ bill), not this HCL. Run it through the scripts, not by hand:
 ```
 
 Prereqs, timings, costs and the per-session checklist: [`docs/runbooks/cloud-deploy.md`](../../docs/runbooks/cloud-deploy.md).
+Architecture diagrams (basic and HA, every component): [`docs/diagrams/day-12-azure-deployment.md`](../../docs/diagrams/day-12-azure-deployment.md).
 
 > **Status: `terraform validate` passes (checked with Terraform 1.16.2), but nothing has been through `plan` or
 > `apply` against a real Azure subscription yet.** The first real run is the real test. Expect to fix small
