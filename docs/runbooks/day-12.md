@@ -6,7 +6,9 @@ Tadka reaches the canonical **4 services + a gateway**. Restaurant is the *last*
 
 > Demo password `Password123!`.
 
-Every command below is given twice, bash first and PowerShell second, wherever the two shells differ. They are not the same commands with `curl` swapped for `curl.exe`: bash's `VAR=$(...)`, `sed -E`, and inline `VAR=value command` syntax do not run in plain PowerShell at all. Windows PowerShell 5.1 also cannot read an HTTP status code off a 4xx/5xx response without the call throwing, so one small helper is defined once in section 1 and reused. Every PowerShell block here was run live against this branch before being written down.
+Every command below is given twice, bash first and PowerShell second, wherever the two shells differ. They are not the same commands with `curl` swapped for `curl.exe`: bash's `VAR=$(...)`, `sed -E`, and inline `VAR=value command` syntax do not run in plain PowerShell at all. Windows PowerShell 5.1 also cannot read an HTTP status code off a 4xx/5xx response without the call throwing, so one small helper is defined once in section 1 and reused. Every bash and PowerShell block here was run live against this branch (the five services, Postgres, Kafka, Redis and Keycloak all up) before being written down.
+
+> **Using Git Bash on Windows?** Git Bash rewrites any argument that looks like a Unix path, so `docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh ...` fails with `C:/Program Files/Git/opt/kafka/...: no such file`. Run `export MSYS_NO_PATHCONV=1` once per terminal first (WSL, macOS and Linux do not need it). Git Bash's `curl` may also exit with code 23 after printing the right answer when you use `-o /dev/null`; the printed status is still correct.
 
 ---
 
@@ -38,6 +40,7 @@ docker compose ps
 ### Standard Launch
 If starting existing containers without wiping data:
 
+**What this does.** [`docker-compose.yml`](../../docker-compose.yml) defines the infrastructure the services need: the monolith's Postgres (5432) and its read replica (5433), `payment-db` (5434), `delivery-db` (5435), the new `restaurant-db` (5436), Redis, Kafka, Kafka UI and PgBouncer. `up -d` starts them in the background. Postgres, Kafka and the three service databases declare a Docker **healthcheck**, so the two `until` loops simply poll `docker inspect` until Docker reports them `healthy`; starting the apps before that gives connection errors.
 ```bash
 git checkout day-12
 docker compose up -d                          # + restaurant-db (5436)
@@ -58,6 +61,8 @@ docker compose ps
 dotnet build Tadka.slnx
 ```
 
+Why the topics must exist: a consumer subscribes the moment its service starts, and Kafka only creates a topic when someone first publishes to it. `--if-not-exists` makes the loop safe to run again, `--partitions 1 --replication-factor 1` is right for a single local broker, and `--command-config` carries the SASL login described next. The eight names are the cross-service contract in each service's `Messaging.cs` (for example [`Tadka.Api/Infrastructure/Messaging/Messaging.cs`](../../src/Tadka.Api/Infrastructure/Messaging/Messaging.cs)).
+
 **Kafka requires a login on this branch.** The local broker only accepts clients that authenticate with SASL/SCRAM-SHA-256. All four services and Kafka UI already carry the demo credentials (`appsettings.Development.json`, `docker-compose.yml`). The Kafka command-line tools you run through `docker exec` are clients too: pass `--command-config /etc/kafka/docker/client.properties` to `kafka-topics.sh` and `kafka-consumer-groups.sh`, `--producer.config` to the console producer and `--consumer.config` to the console consumer (the helper scripts under `scripts/` already do). Without credentials a Kafka command hangs and prints nothing. Details are in the Day 9 runbook and ADR-027's security addendum. **The Azure/cloud Kafka is not covered** (see section 13).
 
 **Pre-create the eight Kafka topics this branch uses** (once per fresh broker, right after the containers are healthy). On a broker with no topics yet, each service subscribes the moment it starts, and a consumer that starts before anyone has published to its topic logs `Confluent.Kafka.ConsumeException: Subscribed topic not available` once a second. It is harmless (the consumer keeps retrying and picks the topic up once it exists), but it looks alarming on a first run. Auto-create is on, so skipping this step breaks nothing. The `*.dlq` topics are not in the list on purpose: nothing subscribes to them, and they appear on their own the first time a poison message is parked.
@@ -72,7 +77,7 @@ foreach ($t in "order-placed","payment-results","order-confirmed","delivery-assi
 }
 ```
 
-Five processes, five terminals (identical in either shell):
+Five processes, five terminals (identical in either shell). Each one reads its port from its own `Properties/launchSettings.json` (for example [`Tadka.Restaurant.Api`](../../src/Tadka.Restaurant.Api/Properties/launchSettings.json) uses 5260), connects to its own database as set in its `appsettings.Development.json`, and applies its own EF migrations on start-up, which is why each service owns its schema:
 ```
 dotnet run --project src/Tadka.Payment.Api    # :5240
 dotnet run --project src/Tadka.Delivery.Api   # :5250
@@ -102,6 +107,8 @@ function Get-StatusCode {
 ```
 
 > **Timing on a cold start.** After a service (re)starts, the first request can be slow (JIT) and Kafka consumers need a few seconds to join their group. Every wait below is a poll with a timeout, not a fixed `sleep`.
+
+**What the shared setup does.** `POST /api/v1/auth/login` ([`AuthController`](../../src/Tadka.Api/Auth/AuthController.cs)) returns an RS256 access token for the seeded customer Priya. `$BODY` is an order for 2 x Chicken Biryani at Meghana Foods (the ids come from the seed in [`MenuReplica.cs`](../../src/Tadka.Api/Data/ReadModel/MenuReplica.cs)): the client sends *what it wants*, never a price, and the server prices it (Section 2). Each block below that restarts the monolith logs in again, because its signing keys live in memory.
 
 Shared setup used by the demos below:
 ```bash
@@ -159,6 +166,8 @@ $TOKEN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method
 $H = @{ Authorization = "Bearer $TOKEN" }
 "POST /orders (SyncHttp, Restaurant down): " + (Get-StatusCode -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -Body $BODY)
 ```
+**What this proved.** `Ordering__RestaurantReadMode=SyncHttp` swaps the pricing source to [`HttpRestaurantPricingSource`](../../src/Tadka.Api/Infrastructure/RestaurantReadModel/HttpRestaurantPricingSource.cs), which calls Restaurant over HTTP with a 2 second timeout. With Restaurant stopped the call throws and the whole order fails.
+
 **Captured live: `500 Internal Server Error`.** With the lever forcing a synchronous HTTP call to price the order, a dead Restaurant service takes the order path down with it: the exact Day-8 shape, now on pricing.
 
 **The fix.** Restaurant is *still stopped*. Restart the monolith with no override (the default is `LocalReplica`) and place the same order:
@@ -176,6 +185,8 @@ $H = @{ Authorization = "Bearer $TOKEN" }
 $o = Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY
 "status: " + $o.status + "  total: " + $o.totalAmount.amount
 ```
+**What this proved.** With no override, `Program.cs` registers [`LocalReplicaPricingSource`](../../src/Tadka.Api/Infrastructure/RestaurantReadModel/LocalReplicaPricingSource.cs), which reads `ordering.menu_replica` from Ordering's own database. No network call, so a dead Restaurant is invisible to checkout.
+
 **Captured live: `201`, status `Created`, `₹598`.** Pricing came from `ordering.menu_replica`, not a live call. Restaurant being down only blocks *menu edits*. Ordering, payment and browsing are untouched. Restart Restaurant before Demo 2.
 
 ### How this is actually implemented
@@ -233,6 +244,22 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \`"Name\`",\`"Price
 
 **Captured live:** the PATCH returned `204`; the replica showed `Chicken Biryani | 349.00` within about a second on a warm stack (up to a few seconds cold); a fresh 2x order totalled **`₹698`**. The event carried the full new price, so the monolith never called back to Restaurant to fetch it.
 
+**What each command does.** The `PATCH` goes to the **Restaurant** service ([`RestaurantsController.UpdateMenuItem`](../../src/Tadka.Restaurant.Api/Controllers/RestaurantsController.cs)): it changes the price, calls `StageSnapshot` (an Outbox row in the same `SaveChanges`) and clears the menu cache. The `psql` line reads Ordering's own table, never Restaurant's. The last line proves checkout now uses the new price.
+
+### What if a snapshot cannot be applied?
+A consumer must never skip a message it failed to apply: committing the next offset would silently commit past it, and the replica would stay stale until that restaurant changed again. [`MenuUpdatedConsumer`](../../src/Tadka.Api/Infrastructure/Messaging/MenuUpdatedConsumer.cs) (`HandlePoisonAsync`) seeks back to the failed offset, retries it 3 times, then publishes it to `menu-updated.dlq` with the original payload and commits. Send it a deliberately broken message and read it back from the dead-letter topic (the console tools need the SASL config, as above):
+```bash
+echo '{ this is not valid json' | docker exec -i tadka-kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --producer.config /etc/kafka/docker/client.properties --topic menu-updated
+sleep 8
+docker exec tadka-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --consumer.config /etc/kafka/docker/client.properties --topic menu-updated.dlq --from-beginning --max-messages 1 --timeout-ms 20000
+```
+```powershell
+'{ this is not valid json' | docker exec -i tadka-kafka /opt/kafka/bin/kafka-console-producer.sh --bootstrap-server localhost:9092 --producer.config /etc/kafka/docker/client.properties --topic menu-updated
+Start-Sleep -Seconds 8
+docker exec tadka-kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --consumer.config /etc/kafka/docker/client.properties --topic menu-updated.dlq --from-beginning --max-messages 1 --timeout-ms 20000
+```
+**Captured live:** the message arrives on `menu-updated.dlq` as `{"OriginalTopic":"menu-updated","OriginalPayload":"{ this is not valid json","Error":"...","Attempts":3,...}`. (Windows PowerShell 5.1 prepends a byte-order mark to piped text, so its copy shows up as `\uFEFF{ ...` and fails the same way. It also prints the tool's final "Processed a total of 1 messages" line as a red error because that line goes to stderr; it is not a failure.) The test `MenuUpdatedConsumerKafkaTests` pins the other half: a good snapshot sent *after* the poison one is still applied.
+
 ### How this is actually implemented
 Restaurant writes the menu row and a full-snapshot `menu-updated` message to its Outbox in the **same transaction**, and the relay publishes it to Kafka. [`MenuUpdatedConsumer`](../../src/Tadka.Api/Infrastructure/Messaging/MenuUpdatedConsumer.cs) upserts the restaurant and menu rows in `ordering`. It is **idempotent by design (last write wins), so it needs no Inbox**: a redelivery just re-applies the same state. The message carries the whole snapshot, not a diff, precisely so the monolith never has to call back (ADR-008).
 
@@ -260,7 +287,36 @@ powershell.exe -NoProfile -File ./scripts/backfill-menu-replica.ps1 -SeedExtra 5
 ```
 (The script is PowerShell either way, and it drives everything through `docker exec psql`, so no host `psql` is needed.)
 
+**What the flags do.** `-SeedExtra 5000` inserts 5,000 synthetic menu items into `restaurant-db` first so the copy is sizeable; `-ChunkSize 1000` is rows per batch and per transaction; `-ThrottleMs 50` is the pause between batches. Each line it prints is one batch: how many rows, the running total, the replica lag read from `pg_stat_replication`, and the **high-water mark** (the last id copied).
+
 **Captured live, twice:** `5016 row(s)` backfilled in **`6 batches over 7s`**, replica lag staying at **`1-10 ms`** throughout, the table never locked. (5016 = the 16 real seeded items plus 5000 synthetic ones.) Strategy in class, not script: the LLD lives in the repo, not on the slide.
+
+**Several workers.** Start the same script once per worker, each with the same `-Workers` and its own `-Worker` index. Worker *i* only reads rows where `abs(hashtext("Id"::text)::bigint) % Workers = i`, so the slices are disjoint and together cover the table (no coordination is needed except agreeing on N):
+```bash
+powershell.exe -NoProfile -File ./scripts/backfill-menu-replica.ps1 -Workers 2 -Worker 0 -ChunkSize 1000 -ThrottleMs 50 &
+powershell.exe -NoProfile -File ./scripts/backfill-menu-replica.ps1 -Workers 2 -Worker 1 -ChunkSize 1000 -ThrottleMs 50
+wait
+```
+```powershell
+$j = Start-Job { Set-Location $using:PWD; .\scripts\backfill-menu-replica.ps1 -Workers 2 -Worker 1 -ChunkSize 1000 -ThrottleMs 50 }
+.\scripts\backfill-menu-replica.ps1 -Workers 2 -Worker 0 -ChunkSize 1000 -ThrottleMs 50
+Receive-Job -Wait $j
+```
+**Captured live:** worker 0 copied 2,481 rows and worker 1 copied 2,535, which add up to exactly 5,016, and `ordering.menu_replica` held 5,016 rows afterwards. Compare the counts yourself (this is the "verify" step before switching reads):
+```bash
+docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -t -A -c 'select count(*) from restaurant.menu_items;'
+docker exec tadka-postgres psql -U tadka -d tadka -t -A -c 'select count(*) from ordering.menu_replica;'
+```
+```powershell
+docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -t -A -c 'select count(*) from restaurant.menu_items;'
+docker exec tadka-postgres psql -U tadka -d tadka -t -A -c 'select count(*) from ordering.menu_replica;'
+```
+
+**Resuming after a crash.** Every batch prints its high-water mark. If a run dies, pass the last one you saw as `-StartAfterId` and it carries on from there (the upserts are idempotent, so overlap is harmless):
+```
+./scripts/backfill-menu-replica.ps1 -StartAfterId 99601cfb-695c-4f6a-9f25-719f73c4d2fc
+```
+**Captured live:** resuming from the third batch's mark copied the remaining 2,016 rows.
 
 ### How this is actually implemented
 [`scripts/backfill-menu-replica.ps1`](../../scripts/backfill-menu-replica.ps1) reads a keyset-paged chunk of the source (`WHERE Id > lastId ORDER BY Id LIMIT N`, a plain read with no row lock), upserts it with `INSERT ... ON CONFLICT ("MenuItemId") DO UPDATE`, sleeps `-ThrottleMs`, reads replication lag from `pg_stat_replication`, and backs off if it exceeds `-LagCeilingMs`. Each batch is its own transaction, so there is never a giant lock, and every batch prints its **high-water mark**: after a crash, pass the last one as `-StartAfterId` and it carries on from there. To run several workers, start the script once per worker (`-Workers 2 -Worker 0` and `-Workers 2 -Worker 1`): worker *i* only takes rows where `abs(hashtext("Id"::text)::bigint) % Workers = i`, so the slices are disjoint and complete. Because this is a copy between two databases, no row lock can be held across the read and the upsert; the **partition** is what keeps workers from colliding.
@@ -313,12 +369,19 @@ Invoke-RestMethod -Uri "http://localhost:5240/api/v1/payments/$ORDER" -Headers $
 ```
 > **Note the path: `/api/v1/payments/{orderId}`.** Payment's routes were versioned on this branch; the Day-11 `/payments/{orderId}` path returns a bare `404` here (no body, which is how you tell a routing miss from a "no such payment" `404`).
 
+**What each step does.** `Restaurant__AcceptMode=Reject` makes Restaurant answer `Rejected` ([`OrderConfirmedConsumer`](../../src/Tadka.Restaurant.Api/Messaging/OrderConfirmedConsumer.cs)); `Restaurant__DecisionMode=Service` tells the monolith not to decide itself ([`RestaurantAcceptanceOptions`](../../src/Tadka.Api/Domain/Restaurants/RestaurantAcceptanceOptions.cs)). The polling loop re-reads the order from Ordering and the payment from Payment every 2 seconds until the saga has finished or the timeout passes.
+
 **Captured live:** order `Cancelled` and payment **`Refunded`** with a fresh gateway reference (`FAKEREF-…`), about **39 seconds** after services had just restarted. Give it real time: this is a 3-hop Kafka chain (`order-confirmed` → `restaurant-response` → `refund-requested` → `payment-refunded`), longer than Demo 1's single hop or Day 11's 2-hop refund.
+Stuck `Confirmed`? Restaurant.Api or Kafka is down: see [decision-mode-matrix.md](decision-mode-matrix.md).
+
+**See the saga as data.** Start the monolith with `Saga__Mode=Orchestration` as well (`Restaurant__DecisionMode=Service Saga__Mode=Orchestration dotnet run --project src/Tadka.Api`, or `$env:Saga__Mode = "Orchestration"` in PowerShell), place another order, and the refund steps are recorded in `ordering.saga_instances` ([`RefundSagaOrchestrator`](../../src/Tadka.Api/Infrastructure/Messaging/RefundSagaOrchestrator.cs)). The writes and events are identical in both modes; only the bookkeeping differs:
+```bash
+docker exec tadka-postgres psql -U tadka -d tadka -c 'SELECT "SagaType","CurrentStep","Status","Detail" FROM ordering.saga_instances ORDER BY "StartedAt" DESC LIMIT 3;'
 ```
-# Stuck Confirmed? Restaurant.Api or Kafka is down: see decision-mode-matrix.md.
-# With Saga__Mode=Orchestration you can also query the saga state:
-#   SELECT * FROM ordering.saga_instances ORDER BY "StartedAt" DESC LIMIT 5;
+```powershell
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \`"SagaType\`",\`"CurrentStep\`",\`"Status\`",\`"Detail\`" FROM ordering.saga_instances ORDER BY \`"StartedAt\`" DESC LIMIT 3;"
 ```
+**Captured live:** `refund-compensation | refund-requested | Completed | Restaurant rejected; starting compensation`. The step moves `cancel-order` to `request-refund` to `refund-requested` while `Status` goes `Running` to `Completed`.
 
 ### How this is actually implemented
 In `Service` mode the monolith stops deciding: it publishes `order-confirmed`, and Restaurant.Api consumes it and replies on `restaurant-response` (`Rejected` here). The monolith's `RestaurantResponseConsumer` receives that and runs the *same* `RefundSagaOrchestrator` from Day 11 (cancel + `refund-requested` via the Outbox), so only the *trigger* moved between processes. The refund half (Payment's `RefundRequestedConsumer`, `PaymentService.RefundAsync`) is unchanged.
@@ -339,7 +402,14 @@ There is **no automatic timeout-then-reject** in the teaching build; an order wh
 
 **What you're proving:** renaming a column on a live table without downtime. Add the new column (expand), write to **both** during the transition (dual-write), backfill the historical rows in chunks, switch reads, and only later drop the old column (contract). Every step is its own deploy, and no app version ever runs against a schema it cannot handle.
 
-Dual-write is **on by default** (`Demo:DualWriteDisplayName`, default `true`), because reads already prefer `DisplayName`: if a rename wrote only `Name`, the API would keep showing the old name. The `=true` below just makes it explicit. To watch what it protects you from, start Restaurant with `Demo__DualWriteDisplayName=false`, rename an item, and compare the two columns: `Name` changes, `DisplayName` stays behind (this variation is covered by `ExpandContractDualWriteTests`, not re-run live). Restart Restaurant with dual-write on and change a menu item's name:
+Dual-write is **on by default** (`Demo:DualWriteDisplayName`, default `true`), because reads already prefer `DisplayName`: if a rename wrote only `Name`, the API would keep showing the old name. The `=true` below just makes it explicit. To watch what it protects you from, start Restaurant with `Demo__DualWriteDisplayName=false`, rename an item, and compare the two columns: `Name` changes, `DisplayName` stays behind (this variation is covered by `ExpandContractDualWriteTests`, not re-run live). To see the drift for yourself, start Restaurant with it off, rename an item and read both columns back (bash shown; in PowerShell set `$env:Demo__DualWriteDisplayName = "false"` first and use the backtick-backslash quoting from Demo 2):
+```bash
+Demo__DualWriteDisplayName=false dotnet run --project src/Tadka.Restaurant.Api
+# then, as admin:
+curl -s -o /dev/null -w "PATCH name (dual-write OFF): %{http_code}\n" -X PATCH http://localhost:5260/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu/b1b2c3d4-0001-4000-8000-000000000001 -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" -d '{"name":"Offline Rename"}'
+docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -c 'SELECT "Name","DisplayName" FROM restaurant.menu_items WHERE "Id"='"'"'b1b2c3d4-0001-4000-8000-000000000001'"'"';'
+```
+**Captured live:** `Name` became `Offline Rename` while `DisplayName` stayed empty (for a row that had already been backfilled it would keep the *old* name, and because reads prefer `DisplayName`, the API would keep showing the old name). That is the divergence the next step prevents. Restart Restaurant with dual-write on and change a menu item's name:
 ```bash
 Demo__DualWriteDisplayName=true dotnet run --project src/Tadka.Restaurant.Api
 # then:
@@ -364,7 +434,7 @@ powershell.exe -NoProfile -File ./scripts/expand-contract-demo.ps1
 ```powershell
 .\scripts\expand-contract-demo.ps1
 ```
-**Captured live:** `4815` rows with a NULL `DisplayName` backfilled in **25 batches** (24 x 200, then 15) in about **11 seconds**, ending with `remaining NULL DisplayName: 0`.
+**Captured live:** the rows with a NULL `DisplayName` (5,015 on this run: the 5,016 rows from Demo 3 minus the one just dual-written) were backfilled in **26 batches** (25 x 200, then 15), ending with `remaining NULL DisplayName: 0`. Running the script again right away finds nothing to do and reports `rows with NULL DisplayName: 0`, which is what "idempotent and resumable" looks like.
 
 And the contrast, one giant unthrottled `UPDATE`:
 ```bash
@@ -373,7 +443,15 @@ powershell.exe -NoProfile -File ./scripts/expand-contract-demo.ps1 -BreakGiantUp
 ```powershell
 .\scripts\expand-contract-demo.ps1 -BreakGiantUpdate
 ```
-**Captured live, and be honest about it:** on 20,000 rows the giant `UPDATE` finished in **519 ms**. That is instant on a laptop. The script's own message says it "locks and blows replica lag on a 50M-row hot table", which is the *shape* of the failure, not something this small demo reproduces. Say so if a student asks why nothing broke.
+**Captured live, and be honest about it:** on 20,000 rows the giant `UPDATE` finished in about **500 ms** (519 ms and 486 ms on two runs). That is instant on a laptop. The script's own message says it "locks and blows replica lag on a 50M-row hot table", which is the *shape* of the failure, not something this small demo reproduces. Say so if a student asks why nothing broke.
+
+The `-BreakGiantUpdate` run leaves 20,000 synthetic `LoadTest` rows in `restaurant-db`. Remove them before repeating Demo 3 (otherwise the next backfill copies them too):
+```bash
+docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -c "DELETE FROM restaurant.menu_items WHERE \"Category\" = 'LoadTest';"
+```
+```powershell
+docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -c "DELETE FROM restaurant.menu_items WHERE \`"Category\`" = 'LoadTest';"
+```
 
 > **Two real bugs fixed in `expand-contract-demo.ps1` while verifying this runbook.** (1) It failed to *parse* under Windows PowerShell 5.1, with a cascade of confusing errors (`An expression was expected after '('`): its em dashes had been corrupted into mojibake bytes, and every embedded SQL identifier used Bash's `\"` escape, which PowerShell does not understand. (2) After the backfill was complete the loop **never terminated**: `psql` prints a command tag (`UPDATE 200`, or `UPDATE 0`) after the returned rows, the loop counted output lines, so an empty batch still counted as 1 and the loop spun forever printing `batch wrote ~1 rows`. It now counts only the rows it returned (`Where-Object { $_ -eq "1" }`).
 
@@ -407,6 +485,8 @@ $ORDER = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/orders -Method Pos
 $RAHUL = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"rahul@tadka.test","password":"Password123!"}').accessToken
 "Rahul streams Priya's order: " + (Get-StatusCode -Uri "http://localhost:5224/api/v1/orders/$ORDER/events" -Headers @{ Authorization = "Bearer $RAHUL" })   # 403
 ```
+**What each command does.** `GET /api/v1/orders/{id}/events` ([`OrderTrackingController.GetEvents`](../../src/Tadka.Api/Controllers/OrderTrackingController.cs)) is a Server-Sent Events stream: the connection stays open and the server writes an event whenever the order changes. `-N` tells curl not to buffer, so you see events as they arrive. The three background streams occupy Priya's three slots, so the fourth request is refused.
+
 **Captured live: `403`**, before the stream ever opens.
 
 Now open three concurrent streams as Priya (the default cap), then a fourth:
@@ -450,6 +530,8 @@ This is not a full dashboard demo. Day 13 has not happened yet in the taught seq
 ```
 dotnet test tests/Tadka.Api.Tests --filter "FullyQualifiedName~ReplicaLag"
 ```
+`--filter "FullyQualifiedName~ReplicaLag"` runs only the tests whose name contains `ReplicaLag` ([`ReplicaLagTests`](../../tests/Tadka.Api.Tests/Telemetry/ReplicaLagTests.cs) for the arithmetic, [`ReplicaLagGaugeWiringTests`](../../tests/Tadka.Api.Tests/Telemetry/ReplicaLagGaugeWiringTests.cs) for the wiring).
+
 **Captured live: 5/5 passed.** With `OTEL_EXPORTER_OTLP_ENDPOINT` set (Day 13's existing gate) the gauge flows to Grafana like every other `tadka.*` metric; unset, it is simply never scraped.
 
 ### How this is actually implemented
@@ -478,6 +560,8 @@ curl -s -o /dev/null -w "menu via gateway: %{http_code}\n" http://localhost:8080
 "restaurants via gateway: " + (Get-StatusCode -Uri http://localhost:8080/api/v1/restaurants)   # 200 -> Restaurant
 "menu via gateway: " + (Get-StatusCode -Uri http://localhost:8080/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu)   # 200 -> Restaurant
 ```
+The first call lists restaurants, the second reads one restaurant's menu; neither carries a token because reads are public. The gateway matched the path against the `restaurants` route and forwarded to `localhost:5260`.
+
 **Captured live: 200 and 200.** The route is data, not code: [`src/Tadka.Gateway/appsettings.json`](../../src/Tadka.Gateway/appsettings.json) matches `/api/v1/restaurants/{**remainder}`. That completes the canonical **4 services + gateway**. Each service still validates the JWT itself; the gateway is a router, not a trust boundary.
 
 ---
@@ -486,7 +570,15 @@ curl -s -o /dev/null -w "menu via gateway: %{http_code}\n" http://localhost:8080
 
 **What you're proving:** with four services each verifying tokens and each holding its own data, *how* they verify and *who may touch what* matters more than it did with one. Nothing in this section shares a secret, and every ownership rule lives in the service that owns the data.
 
-Set up once (a fresh order that flows through payment, confirmation and rider assignment, plus Rahul and the rider on that order):
+**First, free the riders.** There are only three riders, and every confirmed order from the earlier demos took one and nothing gave it back (a rider is released only when their delivery is marked `Delivered` or `Cancelled`, Section 9.1 below). If you ran the demos in order, all three are busy and the next order would simply be parked. This resets the demo database so the set-up below can assign a rider ([`DeliveryDbContext`](../../src/Tadka.Delivery.Api/Data/DeliveryDbContext.cs) seeds the three riders; `delivery.agents.Status` is their availability):
+```bash
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c 'UPDATE delivery.agents SET "Status" = '"'"'Available'"'"';' -c 'DELETE FROM delivery.pending_assignments;'
+```
+```powershell
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "UPDATE delivery.agents SET \`"Status\`" = 'Available'; DELETE FROM delivery.pending_assignments;"
+```
+
+**Then** set up once (a fresh order that flows through payment, confirmation and rider assignment, plus Rahul and the rider on that order). The rider's email is the rider's name in lower case plus `.rider@tadka.test` ([`AuthSeeder`](../../src/Tadka.Api/Auth/AuthSeeder.cs) seeds the three rider logins), and the credential endpoints allow only 5 requests per 10 seconds per IP, so if a script of yours logs several people in back to back, pause between them:
 ```bash
 ORDER=$(curl -s -X POST http://localhost:5224/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
 until [ "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN")" = "200" ]; do sleep 2; done   # rider assigned
@@ -511,15 +603,20 @@ $HR = @{ Authorization = "Bearer $RIDER" }
 curl -s http://localhost:5224/.well-known/jwks.json           # the public keys (kty, kid, n, e)
 ADMIN=$(curl -s -X POST http://localhost:5224/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"admin@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
 curl -s -X POST http://localhost:5224/api/v1/auth/rotate-signing-key -H "Authorization: Bearer $ADMIN"   # Admin only; a fresh key becomes current
-curl -s -o /dev/null -w "old token after one rotation: %{http_code}\n" http://localhost:5250/api/v1/deliveries/$ORDER/track -H "Authorization: Bearer $TOKEN"
+curl -s -o /dev/null -w "old token after one rotation: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN"                 # 200
+curl -s -X POST http://localhost:5224/api/v1/auth/rotate-signing-key -H "Authorization: Bearer $ADMIN" > /dev/null                                                  # a second rotation
+curl -s -o /dev/null -w "old token after a second rotation: %{http_code}\n" http://localhost:5224/api/v1/orders/$ORDER -H "Authorization: Bearer $TOKEN"            # 401
 ```
 ```powershell
 Invoke-RestMethod -Uri http://localhost:5224/.well-known/jwks.json
 $ADMIN = (Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"admin@tadka.test","password":"Password123!"}').accessToken
 Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/rotate-signing-key -Method Post -Headers @{ Authorization = "Bearer $ADMIN" }
-"old token after one rotation: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/track" -Headers $H)
+"old token after one rotation: " + (Get-StatusCode -Uri "http://localhost:5224/api/v1/orders/$ORDER" -Headers $H)   # 200
+Invoke-RestMethod -Uri http://localhost:5224/api/v1/auth/rotate-signing-key -Method Post -Headers @{ Authorization = "Bearer $ADMIN" } | Out-Null   # a second rotation
+"old token after a second rotation: " + (Get-StatusCode -Uri "http://localhost:5224/api/v1/orders/$ORDER" -Headers $H)   # 401
 ```
-The monolith keeps the current key plus one previous, so a token signed before ONE rotation still verifies (the `track` call returns 200, not 401); after a second rotation that token is 401. A monolith restart generates new keys, so every token signed before the restart is rejected until the client refreshes.
+**What this shows.** The JWKS document lists the public keys ([`Jwks.cs`](../../src/Tadka.Api/Auth/Jwks.cs)); every token's header names the `kid` of the key that signed it. [`SigningKeyStore`](../../src/Tadka.Api/Auth/SigningKeyStore.cs) keeps the current key plus **one** previous, so a token signed before ONE rotation still verifies (200), and after a second rotation the key that signed it has been dropped (401). We check this on the monolith itself, which always uses its live key set. Payment, Delivery and Restaurant behave the same way but **cache** the fetched keys for 5 minutes (`Jwt:JwksCacheMinutes`, [`JwksClient`](../../src/Tadka.Delivery.Api/Auth/JwksClient.cs)), so a retired key can keep verifying at a downstream service for up to five minutes. That is the trade of not calling the monolith on every request. A monolith restart generates new keys, so every token signed before the restart is rejected until the client refreshes.
+> **Captured live:** `200` after one rotation, `401` after two, on the monolith. Calling Delivery's `/track` with the same old token straight after the second rotation still returned `200` because of that cache.
 
 **More than one monolith replica (the `scale-out` profile) needs the same key everywhere.** A key generated in one process is unknown to its siblings, so a token signed by `api-1` would be rejected by `api-2`. The compose `scale-out` profile therefore sets `Jwt__SigningKeyPem` (a dev-only key) on all three replicas: every replica signs with, and publishes, the same key, and the `kid` is derived from the public key so it matches everywhere. In that mode `rotate-signing-key` answers **409**, because rotation means deploying a new key (new key in the secret, old one as `Jwt:PreviousSigningKeyPem`), not calling one replica. The Terraform and Azure stacks generate an RSA key and give it to the monolith only.
 > Pinned by `SharedSigningKeyTests` (two replicas, one key: same `kid`, cross-verify, 409 on rotate); the multi-replica compose run itself was not exercised here.
@@ -559,40 +656,57 @@ docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"Order
 ```powershell
 "picked up: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/status" -Method Patch -Headers $HR -Body '{"status":"PickedUp"}')    # 204
 "delivered: " + (Get-StatusCode -Uri "http://localhost:5250/api/v1/deliveries/$ORDER/status" -Method Patch -Headers $HR -Body '{"status":"Delivered"}')   # 204
-docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"Name\",\"Status\" FROM delivery.agents;"
-docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \"OrderId\",\"Attempts\",\"CreatedAt\" FROM delivery.pending_assignments;"
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \`"Name\`",\`"Status\`" FROM delivery.agents;"
+docker exec tadka-delivery-db psql -U tadka -d tadka_delivery -c "SELECT \`"OrderId\`",\`"Attempts\`",\`"CreatedAt\`" FROM delivery.pending_assignments;"
 ```
-To see the parking itself: place four orders on a fresh stack (the three riders take the first three); the fourth appears in `pending_assignments` with the log line `No available rider for order ... parked`. Deliver one of the first three as above, and within `PendingRetrySeconds` the log shows `Waiting order ... finally got rider ...` and the row is gone. The rider claim is atomic (`UPDATE ... WHERE Status = 'Available'`, run inside the execution strategy so the failover demo's retrying DB strategy can replay it), because a sweeper now assigns at the same time as the Kafka consumer. Assignment is still **first-available**, not nearest.
-> Pinned by `PendingAssignmentTests`, `DeliveryServiceTests` and the concurrent-assignment test; not re-run against a live stack.
+**What each command does.** The rider's token (`$RIDER`) is the only one `PATCH .../status` and `PUT .../location` accept besides Admin ([`Tadka.Delivery.Api/Program.cs`](../../src/Tadka.Delivery.Api/Program.cs), `IsAssignedRider`). Marking `Delivered` is what frees the rider ([`DeliveryService.ChangeStatusAsync`](../../src/Tadka.Delivery.Api/DeliveryService.cs)); the two `psql` lines show the riders' availability and any parked orders.
+> **Captured live:** `skip pickup` (sending `Delivered` first) returns `422`; `PickedUp` then `Delivered` return `204, 204`; the rider is `Available` again and `pending_assignments` is empty.
+
+To see the parking itself: place four orders on a fresh stack (the three riders take the first three); the fourth appears in `pending_assignments` with the log line `No available rider for order ... parked`. Deliver one of the first three as above, and within `PendingRetrySeconds` the log shows `Waiting order ... finally got rider ...` and the row is gone. **Captured live:** four orders left three riders `OnDelivery` and the fourth in `pending_assignments`; after one `Delivered` the Delivery log printed `Waiting order ... finally got rider Suresh.` and that row left the table. The rider claim is atomic (`UPDATE ... WHERE Status = 'Available'`, run inside the execution strategy so the failover demo's retrying DB strategy can replay it), because a sweeper now assigns at the same time as the Kafka consumer. Assignment is still **first-available**, not nearest.
+> Pinned by `PendingAssignmentTests`, `DeliveryServiceTests` and the concurrent-assignment test.
 
 ### PII at rest and card tokens (ADR-052, ADR-053)
 `identity.users.Phone` is AES-GCM encrypted in the database (random nonce, so it is not searchable) and decrypted transparently for the owner; the card number becomes a **keyed HMAC** token the instant it reaches Payment (`payment.payments` has `CardToken` and `CardLast4`, no PAN column). The key (`Demo:CardTokenizationKey`) is a secret held only by the Payment service: an unkeyed hash of a card number can be brute-forced from a leaked table, because the BIN and last four digits are already known. `Demo:EncryptPiiAtRest=false` turns field encryption off; flipping it on an existing volume fails with `FormatException`, so reset volumes when you change it.
+The phone column holds ciphertext ([`FieldCipher`](../../src/Tadka.Api/Infrastructure/Security/FieldCipher.cs): nonce + tag + ciphertext, base64). Orders placed through the order flow carry no card number, so to see a card token, charge one as Admin (`POST /api/v1/payments/charge` is Admin-only, [`Tadka.Payment.Api/Program.cs`](../../src/Tadka.Payment.Api/Program.cs)); [`CardTokenizer`](../../src/Tadka.Payment.Api/Infrastructure/CardTokenizer.cs) turns the number into a keyed token before anything is stored:
 ```bash
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \"Name\", \"Phone\" FROM identity.users LIMIT 3;"     # ciphertext, not phone numbers
+OID=$(python -c "import uuid;print(uuid.uuid4())")                                                                        # any new order id
+curl -s -X POST http://localhost:5240/api/v1/payments/charge -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" -d "{\"orderId\":\"$OID\",\"amount\":299,\"currency\":\"INR\",\"cardNumber\":\"4111 1111 1111 1111\"}"
 docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \"CardToken\",\"CardLast4\" FROM payment.payments WHERE \"CardToken\" IS NOT NULL;"
 ```
+```powershell
+docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT \`"Name\`", \`"Phone\`" FROM identity.users LIMIT 3;"
+$charge = @{ orderId = [guid]::NewGuid(); amount = 299; currency = "INR"; cardNumber = "4111 1111 1111 1111" } | ConvertTo-Json
+Invoke-RestMethod -Uri http://localhost:5240/api/v1/payments/charge -Method Post -Headers @{ Authorization = "Bearer $ADMIN" } -ContentType "application/json" -Body $charge
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -c "SELECT \`"CardToken\`",\`"CardLast4\`" FROM payment.payments WHERE \`"CardToken\`" IS NOT NULL;"
+```
+**Captured live:** phones are base64 ciphertext; the card `4111 1111 1111 1111` is stored as `TOK-B98C07776E30E28A` with last four `1111` (the same card always gives the same token, a different card gives a different one, and there is no column that holds the card number).
 
 ### Swap the issuer for a real identity provider (Keycloak, optional)
 Because Payment, Delivery and Restaurant verify through the JWKS contract, pointing them at Keycloak is configuration only. Keycloak listens on **host port 8081** here, because the gateway owns 8080.
+**What the steps do.** The `auth-prod` profile starts one extra container, Keycloak, with the realm imported from [`infra/keycloak/tadka-realm.json`](../../infra/keycloak/tadka-realm.json) (first start takes about a minute). `.well-known/openid-configuration` is the standard discovery document; its `jwks_uri` is where the public keys live. The token request logs Priya in at Keycloak instead of at the monolith. Then Payment is restarted with the `Keycloak` launch profile ([`Properties/launchSettings.json`](../../src/Tadka.Payment.Api/Properties/launchSettings.json) sets `ASPNETCORE_ENVIRONMENT=Keycloak`, which layers [`appsettings.Keycloak.json`](../../src/Tadka.Payment.Api/appsettings.Keycloak.json) on top): only the issuer, audience and JWKS address change, no code. **Stop the normal Payment first** (Ctrl+C in its terminal), or both fight for port 5240. Use the order id of one of Priya's orders that Payment has charged.
 ```bash
 docker compose --profile auth-prod up -d keycloak
 curl -s http://localhost:8081/realms/tadka/.well-known/openid-configuration | grep jwks_uri
 KC=$(curl -s -X POST http://localhost:8081/realms/tadka/protocol/openid-connect/token -d "client_id=tadka-api" -d "username=priya@tadka.test" -d "password=Password123!" -d "grant_type=password" | sed -E 's/.*"access_token":"([^"]+)".*/\1/')
 dotnet run --project src/Tadka.Payment.Api --launch-profile Keycloak     # Delivery and Restaurant have the same profile name
 curl -s -o /dev/null -w "Payment with a Keycloak token: %{http_code}\n" http://localhost:5240/api/v1/payments/$ORDER -H "Authorization: Bearer $KC"
-docker compose --profile auth-prod down
+docker compose --profile auth-prod stop keycloak
 ```
 ```powershell
 docker compose --profile auth-prod up -d keycloak
-curl.exe -s http://localhost:8081/realms/tadka/.well-known/openid-configuration
+curl.exe -s http://localhost:8081/realms/tadka/.well-known/openid-configuration | Select-String -Pattern '"jwks_uri":"[^"]*"' -AllMatches | ForEach-Object { $_.Matches.Value }
 $KC = (Invoke-RestMethod -Uri http://localhost:8081/realms/tadka/protocol/openid-connect/token -Method Post -Body @{ client_id = "tadka-api"; username = "priya@tadka.test"; password = "Password123!"; grant_type = "password" }).access_token
 dotnet run --project src/Tadka.Payment.Api --launch-profile Keycloak
 "Payment with a Keycloak token: " + (Get-StatusCode -Uri "http://localhost:5240/api/v1/payments/$ORDER" -Headers @{ Authorization = "Bearer $KC" })
-docker compose --profile auth-prod down
+docker compose --profile auth-prod stop keycloak
 ```
+> **Do not use `docker compose --profile auth-prod down` to stop Keycloak.** `down` removes *every* container of the project, so it would take Postgres, Kafka and Redis down with it. `stop keycloak` stops only Keycloak.
+
+**Captured live:** a Keycloak-issued token for Priya returned `200` from Payment on the `Keycloak` profile, and a token from the monolith returned `401` there (its issuer is no longer trusted). Put the normal Payment back afterwards.
 The realm (`infra/keycloak/tadka-realm.json`) also defines the three riders (`suresh.rider@`, `lakshmi.rider@`, `imran.rider@tadka.test`) with role `DeliveryAgent`. Full walkthrough: [`docs/learn/keycloak-integration-showcase.md`](../learn/keycloak-integration-showcase.md); the token lifecycle: [`docs/learn/token-and-refresh-flow.md`](../learn/token-and-refresh-flow.md).
 
-> **Not re-run against a live stack on this branch:** the commands in this section were adapted from the ones run live on the earlier branches (new ports, the gateway, the four-service topology). The behaviour itself is pinned by the test suites: `JwksTests`, `SharedSigningKeyTests`, `RefreshTokenTests`, `RateLimitingTests`, `AuthorizationTests`, `FieldCipherTests` (monolith); `JwksValidationTests`, `PaymentServiceTests`, `CardTokenizerTests` (Payment); `DeliveryOwnershipTests`, `PendingAssignmentTests`, `RealJwtAuthorizationTests` (Delivery); `JwksValidationTests` (Restaurant).
+> **Run live on this branch** in both shells, section by section, with the five services, Postgres, Redis, Kafka and Keycloak up. The behaviour is also pinned by the test suites: `JwksTests`, `SharedSigningKeyTests`, `RefreshTokenTests`, `RateLimitingTests`, `AuthorizationTests`, `FieldCipherTests` (monolith); `JwksValidationTests`, `PaymentServiceTests`, `CardTokenizerTests` (Payment); `DeliveryOwnershipTests`, `PendingAssignmentTests`, `RealJwtAuthorizationTests` (Delivery); `JwksValidationTests` (Restaurant).
 
 ---
 
@@ -606,6 +720,7 @@ The teaching script's Segment 7 walks a *real*, currently deployed Azure Contain
 ```
 dotnet test
 ```
+Run from the repository root, `dotnet test` finds [`Tadka.slnx`](../../Tadka.slnx) and runs the five test projects under [`tests/`](../../tests): the monolith's, Payment's, Delivery's, Restaurant's and the gateway's. Many of them start real Postgres and Kafka containers with Testcontainers, so Docker must be running, and they use their own throwaway containers (they do not touch the stack you started above). To run just one area, add a filter, for example `dotnet test tests/Tadka.Restaurant.Api.Tests` or `dotnet test --filter "FullyQualifiedName~ExpandContract"`.
 **177/177** on this branch at the time of writing: monolith 95, Payment 31, Delivery 17, Restaurant 19, and a `Tadka.Gateway.Tests` project (15) that no earlier count in this file included. That includes 16 Kafka authentication tests (4 per service, no broker needed), and the real-Kafka integration tests (Testcontainers) that run against an unauthenticated broker: their fixtures blank `Kafka:SaslUsername`, because the test host runs in the `Development` environment and would otherwise inherit the compose broker's credentials. `day-12` stays fast-forwarded to `main`, so **this number will move again**: `dotnet test` is the source of truth, not a number in a doc. The integration tests use Testcontainers, so Docker must be running.
 
 ---
@@ -635,6 +750,7 @@ dotnet test
 ---
 
 ## 13. Demo vs. Production: named gaps, not overclaimed features
+- **In Service decision mode a rejected order still takes a rider.** Ordering publishes `order-confirmed` to both Restaurant and Delivery at the same moment, so Delivery assigns a rider before the restaurant's `Rejected` arrives, and nothing releases that rider when the order is then cancelled; only a rider marking `Cancelled` or `Delivered` does. In the demos this is why the three riders run out. A real system would have Delivery wait for the restaurant's `Accepted`, or release the rider on `payment-refunded`/order cancellation.
 - **No automatic timeout-reject in Service decision mode.** If Restaurant.Api never responds, the order sits `Confirmed` forever. Named as a revisit in ADR-062.
 - **The replica-lag metric has no alert.** A stalled replica is visible if someone looks at the gauge, not paged on (ADR-063).
 - **The SSE stream cap is a single in-memory counter per process.** With N replicas the effective per-user cap is N x 3. A shared counter (Redis) is the real answer at scale.
@@ -651,7 +767,8 @@ monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway
 ## ✅ Done when
 - [ ] Baseline order totals **₹598**; with `SyncHttp` and Restaurant down `POST /orders` fails (**500**); with `LocalReplica` and Restaurant still down it succeeds (**Created, ₹598**).
 - [ ] PATCH price 299 to 349 returns **204**; the replica shows **349.00**; a new 2x order totals **₹698**.
-- [ ] The backfill completes (**5016 rows, 6 batches**) with replica lag in single-digit milliseconds and no lock.
+- [ ] The backfill completes (**5016 rows, 6 batches**) with replica lag in single-digit milliseconds and no lock; two workers (`-Workers 2`) copy 2,481 + 2,535 rows, and the replica count equals the source count.
+- [ ] A broken `menu-updated` message appears on `menu-updated.dlq` after 3 attempts.
 - [ ] Service mode: order **Cancelled**, payment **Refunded** (`/api/v1/payments/{orderId}`).
 - [ ] Dual-write PATCH fills both `Name` and `DisplayName`; `expand-contract-demo.ps1` ends with `remaining NULL DisplayName: 0` (and stops on its own).
 - [ ] SSE: a non-owner gets **403**; a 4th concurrent stream for one user gets **429**.
@@ -664,6 +781,11 @@ monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway
 - [ ] A Kafka command with no credentials hangs; with `--command-config /etc/kafka/docker/client.properties` it answers.
 
 ## Troubleshooting
+- **Docker commands fail with `C:/Program Files/Git/...: no such file` in Git Bash:** run `export MSYS_NO_PATHCONV=1` first (see the note at the top).
+- **Section 9.1 hangs waiting for a rider:** all three riders are busy from earlier demos. Run the "free the riders" step at the start of 9.1.
+- **`docker compose down` took my databases and Kafka away:** `down` removes every container of the project, including with `--profile`. Use `docker compose stop <service>` to stop one.
+- **PowerShell prints `syntax error` or `unterminated quoted identifier` from `psql`:** a quoted column name lost its quotes on the way to the native program. Write it as `\`"Name\`"` inside a double-quoted PowerShell string, as in Demo 2.
+- **The `Keycloak` launch profile fails with "address already in use":** the normal Payment is still running on 5240. Stop it first.
 - **Baseline order is not ₹598:** a prior run already did Demo 2's PATCH and the restaurant-db volume kept ₹349. Run `docker compose down -v` and restart.
 - **`Cannot open ...Tadka.Telemetry.dll for writing` when starting the apps:** you started several `dotnet run` at once on a fresh checkout. Run `dotnet build Tadka.slnx` once first, then start them.
 - **Menu PATCH returns 401 or 403:** you are using a customer token. Log in as `admin@tadka.test`.
