@@ -22,8 +22,17 @@ function Assert-AzureLogin {
 }
 
 function Invoke-Terraform([string[]]$TfArgs) {
-    & terraform "-chdir=$script:AzureDir" @TfArgs
-    if ($LASTEXITCODE -ne 0) { throw "terraform $($TfArgs[0]) failed (exit $LASTEXITCODE)." }
+    # Terraform writes its error text to stderr. Under $ErrorActionPreference = "Stop" (the scripts' default)
+    # PowerShell 5.1 turns the FIRST stderr line into a terminating error, so the real message is cut off and
+    # only "terraform apply failed" survives. Run it with Continue and print every line, then check the exit
+    # code ourselves.
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        & terraform "-chdir=$script:AzureDir" @TfArgs 2>&1 | ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host $_.Exception.Message } else { Write-Host "$_" } }
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $prev }
+    if ($code -ne 0) { throw "terraform $($TfArgs[0]) failed (exit $code). The error text is printed above." }
 }
 
 function Get-TfOutputs {
@@ -136,4 +145,18 @@ function Wait-Until([scriptblock]$Condition, [int]$TimeoutSec, [int]$EverySec = 
         Start-Sleep -Seconds $EverySec
     }
     return $false
+}
+# Azure needs each resource provider registered once per subscription. A fresh Free Trial has Microsoft.App
+# (Container Apps) and Microsoft.Cdn (Front Door) unregistered, which fails apply with
+# MissingSubscriptionRegistration. Registering is free and idempotent.
+function Ensure-ResourceProviders {
+    $namespaces = "Microsoft.App", "Microsoft.Cdn", "Microsoft.OperationalInsights", "Microsoft.DBforPostgreSQL",
+                  "Microsoft.Insights", "Microsoft.Network", "Microsoft.Consumption"
+    foreach ($ns in $namespaces) {
+        $state = (az provider show --namespace $ns --query registrationState -o tsv 2>$null)
+        if ($state -ne "Registered") {
+            Write-Host "Registering resource provider $ns (was '$state')..." -ForegroundColor Yellow
+            az provider register --namespace $ns --wait | Out-Null
+        }
+    }
 }

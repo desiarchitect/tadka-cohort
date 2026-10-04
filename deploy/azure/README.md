@@ -13,9 +13,11 @@ bill), not this HCL. Run it through the scripts, not by hand:
 Prereqs, timings, costs and the per-session checklist: [`docs/runbooks/cloud-deploy.md`](../../docs/runbooks/cloud-deploy.md).
 Architecture diagrams (basic and HA, every component): [`docs/diagrams/day-12-azure-deployment.md`](../../docs/diagrams/day-12-azure-deployment.md).
 
-> **Status: `terraform validate` passes (checked with Terraform 1.16.2), but nothing has been through `plan` or
-> `apply` against a real Azure subscription yet.** The first real run is the real test. Expect to fix small
-> schema, quota or naming details.
+> **Status: applied once against a real Azure Free Trial subscription (2026-10-04, `-Mode basic
+> -NoFrontDoor`): `cloud-up` ended with SMOKE OK.** Front Door, `ha` mode and Redis Sentinel have not been
+> applied yet. The first real run found and fixed three things: unregistered resource providers, Front Door
+> refused on Free Trial (now optional), and the azurerm provider crashing on an empty-string container arg
+> (Redis now starts through `sh -c`).
 
 ## What it builds (one resource group, region `centralindia`)
 
@@ -85,12 +87,13 @@ Architecture diagrams (basic and HA, every component): [`docs/diagrams/day-12-az
 | `waf_rate_limit_per_minute` | `3000` | k6 from one laptop is one client IP; the Day 16 room sees it block first |
 | `load_test_mode` | `false` | `cloud-up -LoadTest`: WAF threshold -> `waf_load_test_rate_limit_per_minute` (60000) |
 | `kafka_consumer_scaling` | `false` | `cloud-up -KafkaScaling`: Payment KEDA Kafka-lag rule 1..4, topics auto-created with 3 partitions |
+| `enable_front_door` | `true` | `cloud-up -NoFrontDoor` sets it false: needed on a Free Trial or Student subscription, where Azure refuses Front Door. The gateway becomes the public entry point (no CDN cache, WAF limit or origin lock) |
 | `ghcr_username` / `ghcr_token` | empty | only if the GHCR packages are private |
 | `budget_alert_emails` | required | a forgotten teardown must reach a human |
 
 ## Known rough edges (fix on the first dry run)
 
-- `terraform validate` passes, but `plan` and `apply` have never run against real Azure.
+- `basic` without Front Door has been applied; `ha`, Front Door and the Sentinel topology have not.
 - Front Door route/cache-rule interplay (caching enabled only by a rule override) needs a real check of the
   `x-cache` header.
 - SSE uses the gateway URL by design (ADR-064 "Realtime split"), not Front Door.

@@ -121,7 +121,7 @@ locals {
   # YARP destinations -> internal service names (appsettings.json points at localhost ports).
   gateway_env = {
     # Origin lockdown (frontdoor.tf): 403 unless X-Azure-FDID matches this profile. Empty = off (local).
-    "Gateway__RequiredFrontDoorId"                                      = azurerm_cdn_frontdoor_profile.fd.resource_guid
+    "Gateway__RequiredFrontDoorId"                                      = var.enable_front_door ? azurerm_cdn_frontdoor_profile.fd[0].resource_guid : ""
     "Gateway__RateLimitPerMinute"                                       = local.proxy_safe_rate_limit
     "ReverseProxy__Clusters__monolith__Destinations__d1__Address"       = "http://api/"
     "ReverseProxy__Clusters__payment__Destinations__d1__Address"        = "http://payment/"

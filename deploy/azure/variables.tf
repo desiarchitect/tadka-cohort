@@ -82,6 +82,11 @@ variable "budget_amount" {
   default     = 1000
 }
 
+variable "enable_front_door" {
+  description = "true = Azure Front Door Standard (CDN + WAF + TLS + origin lock) in front of the gateway. false (cloud-up.ps1 -NoFrontDoor) = the gateway is the public entry point. Needed because Azure refuses Front Door on Free Trial and Student subscriptions."
+  type        = bool
+  default     = true
+}
 variable "load_test_mode" {
   description = "Day 16 only (cloud-up.ps1 -LoadTest). false keeps the WAF at waf_rate_limit_per_minute so the room first SEES the edge block its own k6 run. true raises the threshold to waf_load_test_rate_limit_per_minute."
   type        = bool

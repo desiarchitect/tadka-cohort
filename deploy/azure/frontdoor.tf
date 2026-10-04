@@ -16,8 +16,13 @@
 #
 # Dependency direction (no cycle): profile -> gateway app (env var) -> origin (host_name). The profile
 # itself depends only on the resource group.
+#
+# var.enable_front_door = false (cloud-up -NoFrontDoor) creates none of this. Azure refuses Front Door on a
+# Free Trial or Student subscription. The gateway is then the public entry point: no CDN cache, no WAF
+# rate limit and no origin lock.
 
 resource "azurerm_cdn_frontdoor_profile" "fd" {
+  count               = var.enable_front_door ? 1 : 0
   name                = "afd-tadka"
   resource_group_name = azurerm_resource_group.session.name
   sku_name            = "Standard_AzureFrontDoor"
@@ -25,14 +30,16 @@ resource "azurerm_cdn_frontdoor_profile" "fd" {
 }
 
 resource "azurerm_cdn_frontdoor_endpoint" "fd" {
+  count                    = var.enable_front_door ? 1 : 0
   name                     = "tadka-${random_string.suffix.result}"
-  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.fd.id
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.fd[0].id
   tags                     = local.tags
 }
 
 resource "azurerm_cdn_frontdoor_origin_group" "gateway" {
+  count                    = var.enable_front_door ? 1 : 0
   name                     = "gateway"
-  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.fd.id
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.fd[0].id
   session_affinity_enabled = false
 
   load_balancing {
@@ -49,8 +56,9 @@ resource "azurerm_cdn_frontdoor_origin_group" "gateway" {
 }
 
 resource "azurerm_cdn_frontdoor_origin" "gateway" {
+  count                          = var.enable_front_door ? 1 : 0
   name                           = "gateway"
-  cdn_frontdoor_origin_group_id  = azurerm_cdn_frontdoor_origin_group.gateway.id
+  cdn_frontdoor_origin_group_id  = azurerm_cdn_frontdoor_origin_group.gateway[0].id
   enabled                        = true
   host_name                      = azurerm_container_app.gateway.ingress[0].fqdn
   origin_host_header             = azurerm_container_app.gateway.ingress[0].fqdn
@@ -63,13 +71,15 @@ resource "azurerm_cdn_frontdoor_origin" "gateway" {
 
 # Rule set: short-TTL cache for the public restaurant/menu reads only.
 resource "azurerm_cdn_frontdoor_rule_set" "cache" {
+  count                    = var.enable_front_door ? 1 : 0
   name                     = "tadkacache"
-  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.fd.id
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.fd[0].id
 }
 
 resource "azurerm_cdn_frontdoor_rule" "restaurants_short_ttl" {
+  count                     = var.enable_front_door ? 1 : 0
   name                      = "CacheRestaurantReads"
-  cdn_frontdoor_rule_set_id = azurerm_cdn_frontdoor_rule_set.cache.id
+  cdn_frontdoor_rule_set_id = azurerm_cdn_frontdoor_rule_set.cache[0].id
   order                     = 1
   behavior_on_match         = "Continue"
 
@@ -99,11 +109,12 @@ resource "azurerm_cdn_frontdoor_rule" "restaurants_short_ttl" {
 }
 
 resource "azurerm_cdn_frontdoor_route" "all" {
+  count                         = var.enable_front_door ? 1 : 0
   name                          = "all-to-gateway"
-  cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.fd.id
-  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.gateway.id
-  cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.gateway.id]
-  cdn_frontdoor_rule_set_ids    = [azurerm_cdn_frontdoor_rule_set.cache.id]
+  cdn_frontdoor_endpoint_id     = azurerm_cdn_frontdoor_endpoint.fd[0].id
+  cdn_frontdoor_origin_group_id = azurerm_cdn_frontdoor_origin_group.gateway[0].id
+  cdn_frontdoor_origin_ids      = [azurerm_cdn_frontdoor_origin.gateway[0].id]
+  cdn_frontdoor_rule_set_ids    = [azurerm_cdn_frontdoor_rule_set.cache[0].id]
   enabled                       = true
 
   patterns_to_match      = ["/*"]
@@ -116,9 +127,10 @@ resource "azurerm_cdn_frontdoor_route" "all" {
 
 # ── WAF: per-client-IP rate limit (custom rule, Standard tier) ──────────────────────────────────────
 resource "azurerm_cdn_frontdoor_firewall_policy" "waf" {
+  count               = var.enable_front_door ? 1 : 0
   name                = "tadkawaf${random_string.suffix.result}"
   resource_group_name = azurerm_resource_group.session.name
-  sku_name            = azurerm_cdn_frontdoor_profile.fd.sku_name
+  sku_name            = azurerm_cdn_frontdoor_profile.fd[0].sku_name
   enabled             = true
   mode                = "Prevention"
   tags                = local.tags
@@ -144,17 +156,18 @@ resource "azurerm_cdn_frontdoor_firewall_policy" "waf" {
 }
 
 resource "azurerm_cdn_frontdoor_security_policy" "waf" {
+  count                    = var.enable_front_door ? 1 : 0
   name                     = "tadka-waf"
-  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.fd.id
+  cdn_frontdoor_profile_id = azurerm_cdn_frontdoor_profile.fd[0].id
 
   security_policies {
     firewall {
-      cdn_frontdoor_firewall_policy_id = azurerm_cdn_frontdoor_firewall_policy.waf.id
+      cdn_frontdoor_firewall_policy_id = azurerm_cdn_frontdoor_firewall_policy.waf[0].id
 
       association {
         patterns_to_match = ["/*"]
         domain {
-          cdn_frontdoor_domain_id = azurerm_cdn_frontdoor_endpoint.fd.id
+          cdn_frontdoor_domain_id = azurerm_cdn_frontdoor_endpoint.fd[0].id
         }
       }
     }

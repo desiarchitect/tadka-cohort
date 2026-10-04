@@ -36,6 +36,9 @@
                         prints the plan; time it on the dry run).
 .PARAMETER KafkaScaling  Optional: Payment scales 1..4 on order-placed consumer lag (KEDA) and auto-created
                         topics get 3 partitions. Off by default.
+.PARAMETER NoFrontDoor  Skip Azure Front Door. Needed on a Free Trial or Student subscription, where Azure refuses it
+                        (BadRequest: Free Trial and Student account is forbidden for Azure Frontdoor resources). The gateway
+                        URL becomes the public entry point: no CDN cache, no WAF rate limit, no origin lock.
 .PARAMETER AutoDownAfterHours  Backstop for a forgotten teardown: registers a one-time Windows scheduled task
                         (current user) that runs cloud-down.ps1 -Force this many hours from now. A
                         successful cloud-down removes the task. The budget alert lags 8-24 h; this doesn't.
@@ -54,6 +57,7 @@ param(
     [switch]$WithManagedRedis,
     [switch]$LoadTest,
     [switch]$KafkaScaling,
+    [switch]$NoFrontDoor,
     [ValidateRange(0.5, 24)]
     [double]$AutoDownAfterHours
 )
@@ -69,6 +73,10 @@ Assert-Tool "az" "Install the Azure CLI (winget install Microsoft.AzureCLI)"
 Assert-AzureLogin
 if (-not $AlertEmail) { throw "Pass -AlertEmail (or set TADKA_ALERT_EMAIL): the budget alert must reach a human." }
 if ($WithManagedRedis -and $Mode -ne "ha") { throw "-WithManagedRedis only applies to -Mode ha (the Day 14 comparison)." }
+if ($LoadTest -and $NoFrontDoor) { Write-Host "-LoadTest changes the Front Door WAF limit; with -NoFrontDoor there is no WAF, so it has no effect." -ForegroundColor Yellow }
+
+# Container Apps, Front Door and friends need their resource providers registered once per subscription.
+Ensure-ResourceProviders
 
 # Session variables live in a gitignored tfvars file so cloud-down/cloud-failover reuse them.
 @{
@@ -78,6 +86,7 @@ if ($WithManagedRedis -and $Mode -ne "ha") { throw "-WithManagedRedis only appli
     enable_managed_redis = [bool]$WithManagedRedis
     load_test_mode       = [bool]$LoadTest
     kafka_consumer_scaling = [bool]$KafkaScaling
+    enable_front_door    = -not $NoFrontDoor
     budget_alert_emails  = @($AlertEmail)
 } | ConvertTo-Json | Set-Content -Path $script:VarsFile -Encoding ascii
 
@@ -95,8 +104,10 @@ Invoke-Terraform @("apply", "-input=false", "-auto-approve")
 $applyDone = Get-Date
 
 $o = Get-TfOutputs
-$fd = $o["front_door_url"]
 $gw = $o["gateway_url"]
+# No Front Door (-NoFrontDoor): the gateway is the public entry point and the origin lock is off.
+$hasFd = [bool]$o["front_door_url"]
+$fd = if ($hasFd) { $o["front_door_url"] } else { $gw }
 $rg = $o["resource_group"]
 # The gateway URL is locked to Front Door (ADR-064). Direct checks below send the header like Front Door does.
 $origin = Get-OriginHeaders $o
@@ -109,7 +120,7 @@ if (-not (Wait-Until { (Invoke-Http -Url "$gw/health").Status -eq 200 } -Timeout
 if (-not (Wait-Until { (Invoke-Http -Url "$gw/api/v1/restaurants" -Headers $origin).Status -eq 200 } -TimeoutSec 600 -What "restaurants via gateway (services migrating)")) {
     throw "Restaurant service not answering via the gateway. Check: az containerapp logs show -g $rg -n restaurant"
 }
-if (-not (Wait-Until { (Invoke-Http -Url "$fd/health").Status -eq 200 } -TimeoutSec 1500 -EverySec 20 -What "Front Door route propagation")) {
+if ($hasFd -and -not (Wait-Until { (Invoke-Http -Url "$fd/health").Status -eq 200 } -TimeoutSec 1500 -EverySec 20 -What "Front Door route propagation")) {
     throw "Front Door never answered 200 on /health. Propagation can be slow; re-run with -SkipSmoke later or check the portal."
 }
 $healthyAt = Get-Date
@@ -176,9 +187,13 @@ if (-not $SkipSmoke) {
         Report "internal service unreachable" ($direct.Status -eq 0 -or $direct.Status -ge 400) "https://$internalFqdn -> $(if ($direct.Status -eq 0) { 'no route (good)' } else { "HTTP $($direct.Status)" })"
     }
 
-    # 9. origin lockdown: skipping Front Door is refused; the probe path is not.
-    $bypass = Invoke-Http -Url "$gw/api/v1/restaurants" -TimeoutSec 10
-    Report "gateway URL, no X-Azure-FDID -> 403" ($bypass.Status -eq 403) "HTTP $($bypass.Status)"
+    # 9. origin lockdown: skipping Front Door is refused; the probe path is not. (Only exists with Front Door.)
+    if ($hasFd) {
+        $bypass = Invoke-Http -Url "$gw/api/v1/restaurants" -TimeoutSec 10
+        Report "gateway URL, no X-Azure-FDID -> 403" ($bypass.Status -eq 403) "HTTP $($bypass.Status)"
+    } else {
+        Write-Host "  SKIP  origin lock, CDN hit and WAF checks      (-NoFrontDoor: no Front Door in this session)" -ForegroundColor DarkYellow
+    }
     $probe = Invoke-Http -Url "$gw/health" -TimeoutSec 10
     Report "gateway /health exempt -> 200" ($probe.Status -eq 200) "HTTP $($probe.Status)"
 
@@ -187,10 +202,14 @@ if (-not $SkipSmoke) {
 
 $end = Get-Date
 Write-Host "`n=== Tadka is live ($Mode) ===" -ForegroundColor Cyan
-Write-Host "  Front Door : $fd"
-Write-Host "  Gateway    : $gw  (realtime/SSE only; everything else 403s without Front Door)"
+if ($hasFd) {
+    Write-Host "  Front Door : $fd"
+    Write-Host "  Gateway    : $gw  (realtime/SSE only; everything else 403s without Front Door)"
+} else {
+    Write-Host "  Gateway    : $gw  (public entry point; no Front Door: no CDN cache, WAF or origin lock)"
+}
 Write-Host "  Resource group: $rg"
-Write-Host "  WAF limit  : $($o["waf_rate_limit_per_minute"]) requests/min per client IP$(if ($LoadTest) { ' (-LoadTest)' })"
+if ($hasFd) { Write-Host "  WAF limit  : $($o["waf_rate_limit_per_minute"]) requests/min per client IP$(if ($LoadTest) { ' (-LoadTest)' })" }
 if ($KafkaScaling) { Write-Host "  Kafka scaling: Payment 1..4 on order-placed lag, 3 partitions" }
 if ($autoDownAt) { Write-Host ("  Auto-teardown backstop: {0:yyyy-MM-dd HH:mm} (task {1})" -f $autoDownAt, $script:AutoDownTaskName) }
 if ($WithManagedRedis) { Write-Host "  Managed Redis (comparison only, apps use Sentinel): $($o["managed_redis"])" }

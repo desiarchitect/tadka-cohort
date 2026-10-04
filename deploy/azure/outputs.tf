@@ -1,6 +1,6 @@
 output "front_door_url" {
   description = "The public URL students hit (CDN + WAF + TLS)."
-  value       = "https://${azurerm_cdn_frontdoor_endpoint.fd.host_name}"
+  value       = var.enable_front_door ? "https://${azurerm_cdn_frontdoor_endpoint.fd[0].host_name}" : ""
 }
 
 output "gateway_url" {
@@ -10,7 +10,7 @@ output "gateway_url" {
 
 output "front_door_id" {
   description = "X-Azure-FDID value the gateway requires (origin lockdown). Not a secret from the edge's point of view; it only proves the request came through OUR Front Door profile."
-  value       = azurerm_cdn_frontdoor_profile.fd.resource_guid
+  value       = var.enable_front_door ? azurerm_cdn_frontdoor_profile.fd[0].resource_guid : ""
 }
 
 output "waf_rate_limit_per_minute" {

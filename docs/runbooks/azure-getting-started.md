@@ -124,10 +124,18 @@ Step 8's teardown is the real control.
   only, and costs several times more per hour — don't use it for this first run).
 - `-AutoDownAfterHours 4` registers a one-time Windows scheduled task that force-runs teardown 4 hours later
   if you forget — a backstop, not a plan. It only fires if your laptop is on and you're logged in.
+- **On a Free Trial or Student subscription, add `-NoFrontDoor`.** Azure refuses Front Door there
+  (`BadRequest: Free Trial and Student account is forbidden for Azure Frontdoor resources`). The session then
+  runs without Front Door: the gateway URL is the public entry point, so there is no CDN cache hit, no WAF
+  rate limit and no origin lock to show. Everything else works (4 services, Kafka, Postgres, Redis,
+  autoscaling, the saga). Upgrade the subscription to pay-as-you-go to get the full Front Door demo.
+- **Resource providers register themselves.** A fresh subscription has `Microsoft.App` (Container Apps) and
+  `Microsoft.Cdn` unregistered, which fails the apply with `MissingSubscriptionRegistration`. `cloud-up.ps1`
+  registers what it needs (free, one time, adds about a minute the first time).
 - **Expected time: ~15-25 minutes**, mostly Postgres Flexible Server and Front Door provisioning — this is
   the *planning estimate* from `cloud-deploy.md`, not a measured number yet. Time your own run with a
   stopwatch; you're about to produce the first real number for that table (see step 8).
-- The script ends by printing a Front Door URL and running its own smoke test. You want to see `SMOKE OK`
+- The script ends by printing a Front Door URL (or the gateway URL with `-NoFrontDoor`) and running its own smoke test. You want to see `SMOKE OK`
   at the end. If a check fails, the script names the failing app — get its logs with:
   ```powershell
   az containerapp logs show -g rg-tadka-session -n <app-name> --follow

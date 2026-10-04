@@ -41,12 +41,15 @@ resource "azurerm_container_app" "redis" {
     max_replicas = 1
 
     container {
-      name    = "redis"
-      image   = local.redis_image
-      cpu     = 0.25
-      memory  = "0.5Gi"
-      command = ["redis-server"]
-      args    = ["--save", "", "--appendonly", "no"]
+      name   = "redis"
+      image  = local.redis_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+      # --save "" (no RDB snapshots) cannot be an args element: the azurerm provider turns an empty string
+      # into nil and the apply dies with "interface conversion: interface {} is nil, not string". It goes
+      # through sh instead, like the Sentinels below.
+      command = ["sh", "-c"]
+      args    = ["exec redis-server --save '' --appendonly no"]
     }
   }
 
@@ -77,17 +80,18 @@ resource "azurerm_container_app" "redis_node" {
     max_replicas = 1 # a Redis node is a stateful singleton; never scale it
 
     container {
-      name    = "redis"
-      image   = local.redis_image
-      cpu     = 0.25
-      memory  = "0.5Gi"
-      command = ["redis-server"]
-      args = concat(
-        ["--port", "6379", "--save", "", "--appendonly", "no",
+      name   = "redis"
+      image  = local.redis_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+      # Through sh because --save "" cannot be an args element (see the single-Redis app above).
+      command = ["sh", "-c"]
+      args = [join(" ", concat(
+        ["exec redis-server --port 6379 --save '' --appendonly no",
         "--replica-announce-ip", each.key, "--replica-announce-port", tostring(each.value)],
         # redis-b starts as a replica of redis-a; after a failover Sentinel rewrites roles at runtime.
         each.key == "redis-b" ? ["--replicaof", "redis-a", "6379"] : []
-      )
+      ))]
     }
   }
 
