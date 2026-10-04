@@ -146,6 +146,16 @@ exact path has never been run — read the Terraform error text directly; it's u
 collision, or permission issue on your specific subscription, not a bug in this repo's HCL. `cloud-down.ps1`
 still works even after a partial/failed apply (Terraform tracks what it actually created).
 
+## 7a. Check that everything works (one command)
+
+```powershell
+./scripts/cloud-check.ps1            # about 1 minute: Azure resources, security, one real order end to end
+./scripts/cloud-check.ps1 -Burst     # also the autoscaling test (needs k6, about 4 more minutes)
+```
+
+It prints PASS, FAIL, WARN or SKIP per check and exits 1 if anything FAILED. It places one order and completes
+its delivery so the rider goes back to the pool (only three riders are seeded; an order that is never
+delivered keeps its rider busy and the next order waits). It works with or without Front Door.
 ## 7. Walk the results
 
 ```powershell
