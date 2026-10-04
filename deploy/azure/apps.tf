@@ -40,8 +40,11 @@ locals {
 
   # Settings every .NET app gets.
   common_env = {
-    "ASPNETCORE_ENVIRONMENT"         = "Production"
-    "OTEL_EXPORTER_OTLP_ENDPOINT"    = "http://otel-collector"
+    "ASPNETCORE_ENVIRONMENT" = "Production"
+    # The collector's full internal address, not the short name "otel-collector": from the services the short
+    # name did not resolve ("Name or service not known") while api/payment/... short names did. The FQDN
+    # always resolves inside the environment.
+    "OTEL_EXPORTER_OTLP_ENDPOINT"    = "http://${azurerm_container_app.otel.ingress[0].fqdn}"
     "OTEL_EXPORTER_OTLP_PROTOCOL"    = "http/protobuf"
     "Database__EnableRetryOnFailure" = tostring(var.db_retry_enabled)
     "Kafka__BootstrapServers"        = "kafka:9092"
