@@ -14,8 +14,16 @@ Never done any of this before — no Azure account, no Terraform/CLI installed, 
 Start at [`azure-getting-started.md`](azure-getting-started.md) instead; it covers everything before the
 "One-time prerequisites" section below.
 
-> **Status:** the Terraform and scripts have not been applied yet. The first dry run (below) is also
-> their validation run. Record real timings and the real bill; don't reuse the estimates here as facts.
+> **Status:** applied once (2026-10-04) on an Azure **Free Trial** subscription with `-Mode basic -NoFrontDoor`,
+> and `cloud-up` ended with SMOKE OK. Front Door, `ha` mode and Redis Sentinel have not been applied yet, and
+> the timings and the real bill below are still to be filled. Record them; don't reuse the estimates as facts.
+>
+> **Free Trial or Student subscription? Use `-NoFrontDoor`.** Azure refuses Front Door there (`BadRequest: Free
+> Trial and Student account is forbidden for Azure Frontdoor resources`). `./scripts/cloud-up.ps1 -Mode basic
+> -NoFrontDoor` skips Front Door: the gateway URL becomes the public entry point. You lose the CDN cache hit,
+> the WAF rate limit and the origin-lock demo (and the Day 16 "WAF blocks our own k6 burst" beat). The 4
+> services, Kafka, Postgres, Redis, autoscaling and the saga all work. Upgrade to pay-as-you-go for the full
+> Front Door demo. Why it is a switch and not the default: ADR-064, addendum "Front Door is optional".
 
 ## One-time prerequisites
 
@@ -42,7 +50,7 @@ Start at [`azure-getting-started.md`](azure-getting-started.md) instead; it cove
 **T-75 min for `ha` (Day 14) / T-45 min for `basic` (Day 12, Day 16)**
 - [ ] `az account show` shows the right subscription.
 - [ ] The `images` workflow on the latest `main` commit is green. Optionally pin it: `-ImageTag <sha>`.
-- [ ] `./scripts/cloud-up.ps1 -Mode basic -AutoDownAfterHours 7` (Day 12/16) or
+- [ ] `./scripts/cloud-up.ps1 -Mode basic -AutoDownAfterHours 7` (Day 12/16; add `-NoFrontDoor` on a Free Trial or Student subscription) or
       `-Mode ha -AutoDownAfterHours 8` (Day 14). Leave it running. `ha` (HA standby + replica) can take
       30+ minutes to provision, which is why it starts at T-75.
       `-AutoDownAfterHours` is the optional backstop: a one-time Windows scheduled task (current user) that
@@ -195,6 +203,10 @@ k6 run -e BASE_URL=$fd k6/stress.js     # watch: az containerapp replica list -g
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| `BadRequest: Free Trial and Student account is forbidden for Azure Frontdoor resources` | Azure does not allow Front Door on a Free Trial or Student subscription | re-run with `cloud-up.ps1 -NoFrontDoor` (no CDN, WAF or origin lock), or upgrade to pay-as-you-go |
+| `MissingSubscriptionRegistration ... namespace 'Microsoft.App'` | resource provider not registered on a new subscription | `cloud-up` now registers them; by hand: `az provider register --namespace Microsoft.App --wait` (also `Microsoft.Cdn`) |
+| Services log `Name or service not known (otel-collector)` | the short name did not resolve from the services | fixed: `OTEL_EXPORTER_OTLP_ENDPOINT` uses the collector's full internal address (`apps.tf`) |
+| `a resource with the ID ... rg-tadka-session already exists` | a group from an earlier run (often another clone, whose state Terraform cannot see) | delete it (`az group delete -n rg-tadka-session --yes`), then run `cloud-up` again; keep to one clone per environment |
 | Front Door returns 404 right after apply | route still propagating | wait; `cloud-up` polls up to 25 min |
 | An app restarts in a loop | migration/seed failure, or the DB host does not resolve to a private IP | `az containerapp logs show -g rg-tadka-session -n <app>`; check the private DNS zone `*.private.postgres.database.azure.com` has an A record and a link to `vnet-tadka` |
 | Gateway URL returns 403 | origin lockdown: no/wrong `X-Azure-FDID` (expected for anything but `/health`, `/health/ready` and SSE) | use the Front Door URL; scripts send `terraform output front_door_id` |

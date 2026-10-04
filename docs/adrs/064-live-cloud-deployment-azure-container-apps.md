@@ -253,6 +253,34 @@ monthly grant per subscription is 180,000 vCPU-seconds and 360,000 GiB-seconds. 
 - The grant covers Container Apps only. Front Door, Postgres, Log Analytics and Application Insights bill
   separately.
 
+### Addendum (2026-10-04): Front Door is optional (`enable_front_door`)
+
+**What happened.** The first real apply, on an Azure Free Trial subscription, was refused:
+`BadRequest: Free Trial and Student account is forbidden for Azure Frontdoor resources`. The Terraform and
+scripts had assumed Front Door was always available.
+
+**Decision.** Front Door stays the default (it is the Day 12 and Day 16 story: CDN, WAF, origin lock), but it
+is now a switch: `var.enable_front_door` in Terraform, `cloud-up.ps1 -NoFrontDoor` in the script. With it off,
+every Front Door resource gets `count = 0`, the gateway has no origin lock (`Gateway__RequiredFrontDoorId` is
+empty), the gateway URL is the public entry point, and the smoke test skips the CDN, WAF and origin-lock
+checks.
+
+**Why a switch and not "drop Front Door".** Students and the instructor often use a free account first, and
+that must work. The edge story (cache hit, WAF limit blocking our own k6 run) is worth keeping for anyone on
+a paid subscription.
+
+**What we lose without it.** No CDN cache hit on the menu, no per-client-IP rate limit (the gateway's
+in-memory limiter and the monolith's Redis limiter are raised out of the way because every request arrives
+from the proxy, so nothing limits a single client), no origin lock, no TLS offload at the edge (Container Apps
+still serves HTTPS on the gateway URL), and the Day 16 "WAF blocks our own burst" beat. What still works: the
+4 services, Kafka, Postgres, Redis, autoscaling, the saga, SSE.
+
+**Failure mode.** On a session without Front Door nothing rate-limits a single client, so a public gateway
+URL is more exposed. It is a per-session demo environment with a 4-hour teardown backstop, not a production
+setup.
+
+**Revisit when.** The subscription is pay-as-you-go: use the default (Front Door on) for Day 12 and Day 16.
+
 ## Alternatives Considered
 
 ### Option A: AWS ECS Fargate (make `terraform/` real and apply it)

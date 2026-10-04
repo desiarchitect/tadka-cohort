@@ -40,6 +40,13 @@ you're logged in.
 - `basic` only. `ha` costs several times more per hour and exists for the Day 14 failover demo.
 - `-AutoDownAfterHours 4` registers a Windows scheduled task that runs `cloud-down` 4 hours later, as a safety
   net. It only runs if your laptop is on and you are logged in. It is a backstop, not a plan.
+- **Free account? Add `-NoFrontDoor`.** Azure refuses Front Door on a Free Trial or Student subscription (the
+  error is `Free Trial and Student account is forbidden for Azure Frontdoor resources`), so on a free account run
+  `./scripts/cloud-up.ps1 -Mode basic -AlertEmail you@example.com -AutoDownAfterHours 4 -NoFrontDoor`. Your URL is
+  then the gateway URL. You still get the live API, the saga, Kafka and autoscaling; you do not get the CDN cache
+  hit or the WAF. Upgrading to pay-as-you-go brings Front Door back.
+- When it finishes, `./scripts/cloud-check.ps1` runs a one-minute end-to-end check (a real order, security
+  checks, rider delivery) and prints PASS or FAIL for each.
 - It takes a while (Postgres and Front Door are the slow parts). The script prints the Front Door URL at
   the end, runs a smoke test, and prints how long each step took.
 
