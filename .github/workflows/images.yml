@@ -60,8 +60,32 @@ jobs:
       - name: Restore
         run: dotnet restore Tadka.slnx
 
+      # The suite is Testcontainers-heavy (Postgres, Redis, Kafka) and a few tests wait on Kafka consumers, so
+      # a slow runner can fail one rarely (it failed once on a commit that changed no app code, and passed on
+      # the identical code before and after; 11 local runs, 5 of them pinned to 2 cores under load, never
+      # failed). Run once; if it fails, say so, upload the first attempt's TRX so the failing test can be
+      # named, and re-run ONCE to tell a flaky test from a real break. A real break fails both attempts.
       - name: Test
-        run: dotnet test Tadka.slnx --no-restore -c Release --logger "console;verbosity=normal"
+        id: test
+        shell: bash
+        run: |
+          set +e
+          dotnet test Tadka.slnx --no-restore -c Release --logger "console;verbosity=normal" --logger trx --results-directory TestResults/attempt1
+          first=$?
+          if [ "$first" -ne 0 ]; then
+            echo "first_failed=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::The first test run FAILED (exit $first). Re-running once to tell a flaky test from a real break. The first attempt's TRX files are uploaded as an artifact."
+            dotnet test Tadka.slnx --no-restore -c Release --logger "console;verbosity=normal" --logger trx --results-directory TestResults/attempt2
+            exit $?
+          fi
+
+      - name: Upload the first attempt's test results
+        if: always() && steps.test.outputs.first_failed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-first-attempt-db-retry-${{ matrix.db_retry }}
+          path: TestResults/attempt1/**/*.trx
+          retention-days: 14
 
   images:
     name: build + push ${{ matrix.svc }}
