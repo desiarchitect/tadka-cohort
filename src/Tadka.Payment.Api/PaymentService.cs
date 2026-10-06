@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Polly.CircuitBreaker;
+using Polly.Timeout;
 using Tadka.Payment.Api.Data;
 using Tadka.Payment.Api.Domain;
 using Tadka.Payment.Api.Gateway;
@@ -12,6 +14,15 @@ namespace Tadka.Payment.Api;
 
 /// <summary>The outcome of a charge attempt, returned to the HTTP caller (the monolith).</summary>
 public sealed record ChargeOutcome(PaymentStatus Status, string? GatewayReference, string? FailureReason);
+
+/// <summary>
+/// Thrown by <see cref="PaymentService.ChargeAsync"/> only in <see cref="GatewayUnavailableMode.Buffer"/>
+/// mode (fix 2 / ADR-043), when the gateway could not be reached at all (open circuit, transport
+/// failure, or timeout) - as opposed to a business decline. This is NOT a final outcome: no Payment
+/// row is left behind, and the caller (OrderPlacedConsumer) is expected to seek back and redeliver
+/// rather than commit the offset, so the order gets a real retry once the gateway recovers.
+/// </summary>
+public sealed class GatewayUnavailableRetryLaterException(string message, Exception inner) : Exception(message, inner);
 
 /// <summary>The outcome of a refund attempt (ADR-045).</summary>
 public sealed record RefundOutcome(PaymentStatus Status, bool Found);
@@ -110,9 +121,31 @@ public sealed class PaymentService(
         }
         catch (Exception ex)
         {
-            // Timeout (slow gateway), bulkhead rejection, or a decline — all land here as a fast, contained
-            // BUSINESS outcome (HTTP 200 with Failed). It is NOT a transport failure: the caller can cancel
-            // the order. (A DOWN service is a different thing — the caller's HTTP call throws.)
+            // Fix 2 / ADR-043: in Buffer mode, a "gateway unavailable" failure (open circuit, transport
+            // failure, or timeout - as opposed to a business decline) is NOT a final outcome. Compensate
+            // (the default) keeps today's fast-feedback behaviour: save Failed immediately.
+            if (options.CurrentValue.OnGatewayUnavailable == GatewayUnavailableMode.Buffer && IsGatewayUnavailable(ex))
+            {
+                // Ghost-row watch-out: the Pending row saved above must NOT survive this attempt, or a
+                // redelivery's idempotency check (top of this method) reads back that stale Pending
+                // forever and the order is stuck for good, never actually retried. Delete it explicitly
+                // rather than relying on an ambient transaction to roll it back - ChargeAsync is also
+                // called directly over HTTP with no wrapping transaction (Program.cs's /charge route).
+                db.Payments.Remove(payment);
+                await db.SaveChangesAsync(CancellationToken.None);
+
+                TadkaDiagnostics.PaymentResults.Add(1, new KeyValuePair<string, object?>("status", "buffered"));
+                activity?.SetTag("payment.status", "buffered");
+                activity?.SetStatus(ActivityStatusCode.Error, "Gateway unavailable — buffered for retry");
+
+                logger.LogWarning(ex, "⏳ Payment BUFFERED for order {OrderId} — gateway unavailable, will retry later (Buffer mode).", orderId);
+                throw new GatewayUnavailableRetryLaterException($"Gateway unavailable for order {orderId}; buffered for retry.", ex);
+            }
+
+            // Compensate: timeout (slow gateway), bulkhead rejection, an open circuit, or a decline — all
+            // land here as a fast, contained BUSINESS outcome (HTTP 200 with Failed). It is NOT a transport
+            // failure from the caller's point of view: the caller can cancel the order. (A DOWN Payment
+            // SERVICE itself is a different thing — the caller's HTTP call throws instead of returning 200.)
             payment.Status = PaymentStatus.Failed;
             payment.FailureReason = $"{ex.GetType().Name}: {ex.Message}";
             await db.SaveChangesAsync(CancellationToken.None);
@@ -125,6 +158,14 @@ public sealed class PaymentService(
             return new ChargeOutcome(PaymentStatus.Failed, null, payment.FailureReason);
         }
     }
+
+    /// <summary>
+    /// "Gateway unavailable" (fix 2 / ADR-043): the request never got a real answer from the gateway at
+    /// all — as opposed to <see cref="PaymentDeclinedException"/>, a business decline, which is always
+    /// Compensate regardless of mode.
+    /// </summary>
+    private static bool IsGatewayUnavailable(Exception ex) =>
+        ex is BrokenCircuitException or PaymentGatewayUnavailableException or TimeoutRejectedException;
 
     /// <summary>
     /// Compensating refund after a restaurant rejects an already-paid order (ADR-045).

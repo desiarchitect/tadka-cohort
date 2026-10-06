@@ -1,26 +1,29 @@
-# Day 13 changelog (since Day 12)
+# Day 14 changelog (since Day 13)
 
-`git checkout day-13`. Previous branch: `day-12`.
+`git checkout day-14`. Previous branch: `day-13`.
 
 ## We learned
 
-- The Kafka saga is **invisible** until you add traces. Three pillars: logs, traces, metrics.
-- **W3C `traceparent`** across HTTP + Kafka + Outbox `TraceParent` column so the saga is **one trace**.
-- Consumer error status: Hoisted activity across consumer try/catch/finally blocks records `ActivityStatusCode.Error` and exception details on failures.
-- Metrics: **low-cardinality labels only** (ids on spans/logs, never Prometheus labels).
+- Ordering→Payment is **Kafka** (Day 9). The circuit breaker goes on the real **sync** dep: **Payment→gateway**.
+- Retry is **transport-only**. Declines (`PaymentDeclinedException`) are never retried. `Outage` ≠ `Failing`.
+- **Buffer mode vs Compensate mode (Fix 2 / ADR-043):** on gateway outage, Compensate cancels permanently; Buffer mode deletes the pending payment row and seeks back the Kafka offset so the order retries once the gateway recovers.
+- **Graceful degradation:** Redis/replica = performance (fall through). Postgres/money = correctness (fail honest). Never stale money.
 
 ## Architecture
 
-- `src/Tadka.Telemetry` — `AddTadkaTelemetry(serviceName)`, gated on `OTEL_EXPORTER_OTLP_ENDPOINT`.
-- Compose profile `observability` (collector, Jaeger, Prometheus, Grafana). Off by default.
+- Polly complete: bulkhead → retry (jittered, transport-only) → circuit breaker → 2s timeout.
+- `Payment:OnGatewayUnavailable` lever (`Compensate` | `Buffer`).
+- Backpressure / load-shed levers exist (`Backpressure:MaxConcurrent`, `LoadShed:Enabled`).
 
-## Code vs Day 12
+## Code vs Day 13
 
 | Area | What changed |
 |---|---|
-| `Tadka.Telemetry` | Serilog JSON + OTEL traces/metrics |
-| Outbox tables | `TraceParent` column + migration |
-| Consumers | Extract header, child span, record error status on exception |
-| `tadka.orders.placed` / `payment.result` | Business metrics |
+| `PaymentResiliencePipeline` | Retry + breaker (ADR-043) |
+| `PaymentGatewayUnavailableException` vs `PaymentDeclinedException` | Transport vs business |
+| `FakePaymentGateway` | `Outage` behavior |
+| `OnGatewayUnavailable` | `Compensate` vs `Buffer` mode + consumer seek-back |
+| `tadka.payment.circuit_transitions` | Metric |
+| `PaymentServiceGatewayUnavailableTests` | 4 unit tests for Buffer/Compensate/ghost-row protection |
 
-ADRs **040, 041, 042**.
+ADRs **043, 044**.

@@ -29,6 +29,7 @@ public sealed class OrderPlacedConsumer(
     IServiceScopeFactory scopeFactory,
     KafkaProducer producer,
     IOptions<KafkaOptions> options,
+    IOptions<PaymentOptions> paymentOptions,
     ILogger<OrderPlacedConsumer> logger) : BackgroundService
 {
     private readonly PoisonMessageTracker _poison = new();
@@ -71,6 +72,21 @@ public sealed class OrderPlacedConsumer(
                 activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
                 activity?.AddException(ex);
                 logger.LogError(ex, "OrderPlacedConsumer consume error.");
+            }
+            catch (GatewayUnavailableRetryLaterException ex) when (cr is not null)
+            {
+                // Fix 2 / ADR-043 Buffer mode: the gateway was unreachable, not a business decline. This
+                // is deliberately NOT routed through HandlePoisonAsync/PoisonMessageTracker — a breaker
+                // rejection is not a poison message, so it must never count toward the DLQ attempt
+                // budget, and its backoff is the breaker's own break duration, not the 300ms poison
+                // retry delay (hammering an already-open circuit every 300ms helps nobody).
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
+                var breakSeconds = paymentOptions.Value.CircuitBreakSeconds <= 0 ? 60 : paymentOptions.Value.CircuitBreakSeconds;
+                logger.LogWarning(ex, "order-placed at {Offset} buffered — gateway unavailable, seeking back and pausing ~{Seconds}s.",
+                    cr.TopicPartitionOffset, breakSeconds);
+                consumer.Seek(cr.TopicPartitionOffset);
+                try { await Task.Delay(TimeSpan.FromSeconds(breakSeconds), stoppingToken); } catch (OperationCanceledException) { }
             }
             catch (Exception ex) when (cr is not null)
             {

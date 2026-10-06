@@ -19,6 +19,7 @@ Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself*
 | 11 | Extract Delivery (3rd service) + YARP gateway + Redis-geo + PgBouncer | [day-11.md](day-11.md) |
 | 12 | Extract Restaurant (4th service) + local read model + zero-downtime backfill | [day-12.md](day-12.md) |
 | 13 | Observability for the 4-service system: OpenTelemetry, Jaeger, Prometheus, Grafana, trace propagation | [day-13.md](day-13.md) |
+| 14 | Resilience & Chaos Engineering: circuit breaker, retry, Buffer vs Compensate, Redis fall-through | [day-14.md](day-14.md) |
 
 > Consolidated demo index (issue → fix → trade-off → captured numbers): the instructor pack's `cohort-prep/DEMOS.md`.
 

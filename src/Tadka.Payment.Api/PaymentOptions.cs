@@ -32,6 +32,17 @@ public sealed class PaymentOptions
     public double CircuitBreakSeconds { get; set; } = 60;
 
     /// <summary>
+    /// Fix 2 / ADR-043 lever: what to do with an order when the gateway is unavailable (open circuit,
+    /// transport failure, or timeout) - as opposed to a business decline, which is always Compensate.
+    /// <c>Compensate</c> (default): today's demo behaviour - save Failed immediately, the caller
+    /// (Ordering) cancels the order. Fast feedback, but permanent - the order is never retried even
+    /// after the gateway recovers. <c>Buffer</c>: treat it as "not attempted" - leave no Payment row,
+    /// throw so the Kafka consumer seeks back and redelivers instead of committing, and confirm the
+    /// order later once the gateway is healthy again. See ADR-043's trade-off note.
+    /// </summary>
+    public GatewayUnavailableMode OnGatewayUnavailable { get; set; } = GatewayUnavailableMode.Compensate;
+
+    /// <summary>
     /// DEMO LEVER (Day 8 crash/fault isolation): when true, a charge calls <c>Environment.FailFast</c> and
     /// the Payment service process dies. Post-extraction this kills ONLY this service — the monolith keeps
     /// serving menus and accepting orders. (In-process, on Day 7, the same fatal would have taken the whole
@@ -47,6 +58,16 @@ public sealed class PaymentOptions
     public bool LogRawCardNumber { get; set; }
 
     public GatewayOptions Gateway { get; set; } = new();
+}
+
+/// <summary>Fix 2 / ADR-043: what PaymentService.ChargeAsync does when the gateway itself is unreachable.</summary>
+public enum GatewayUnavailableMode
+{
+    /// <summary>Save Failed immediately (today's default demo behaviour) - fast, but permanent.</summary>
+    Compensate,
+
+    /// <summary>Leave no Payment row and throw for redelivery instead - the order confirms later.</summary>
+    Buffer
 }
 
 public sealed class GatewayOptions
