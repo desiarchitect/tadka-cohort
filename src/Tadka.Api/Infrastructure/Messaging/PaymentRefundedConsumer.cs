@@ -43,6 +43,7 @@ public sealed class PaymentRefundedConsumer(
         while (!stoppingToken.IsCancellationRequested)
         {
             ConsumeResult<string, string>? cr = null;
+            Activity? activity = null;
             try
             {
                 cr = consumer.Consume(TimeSpan.FromSeconds(1));
@@ -50,7 +51,7 @@ public sealed class PaymentRefundedConsumer(
 
                 // Rejoin the order's trace (ADR-041): closes the compensation loop so the refund
                 // half of the saga shows up as a child span, not an orphan, in Jaeger.
-                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(
+                activity = TadkaDiagnostics.ActivitySource.StartActivity(
                     $"consume {Topics.PaymentRefunded}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
 
                 await HandleAsync(cr.Message.Value, stoppingToken);
@@ -58,10 +59,21 @@ public sealed class PaymentRefundedConsumer(
                 _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
-            catch (ConsumeException ex) { logger.LogError(ex, "PaymentRefundedConsumer consume error."); }
+            catch (ConsumeException ex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
+                logger.LogError(ex, "PaymentRefundedConsumer consume error.");
+            }
             catch (Exception ex) when (cr is not null)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
                 await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
+            finally
+            {
+                activity?.Dispose();
             }
         }
 

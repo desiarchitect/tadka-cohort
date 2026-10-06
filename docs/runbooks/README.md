@@ -18,6 +18,7 @@ Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself*
 | 10 | JWT + RBAC + resource ownership + PII (masking, right-to-be-forgotten) | [day-10.md](day-10.md) |
 | 11 | Extract Delivery (3rd service) + YARP gateway + Redis-geo + PgBouncer | [day-11.md](day-11.md) |
 | 12 | Extract Restaurant (4th service) + local read model + zero-downtime backfill | [day-12.md](day-12.md) |
+| 13 | Observability for the 4-service system: OpenTelemetry, Jaeger, Prometheus, Grafana, trace propagation | [day-13.md](day-13.md) |
 
 > Consolidated demo index (issue → fix → trade-off → captured numbers): the instructor pack's `cohort-prep/DEMOS.md`.
 

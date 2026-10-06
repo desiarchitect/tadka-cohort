@@ -43,6 +43,7 @@ public sealed class PaymentResultsConsumer(
         while (!stoppingToken.IsCancellationRequested)
         {
             ConsumeResult<string, string>? cr = null;
+            Activity? activity = null;
             try
             {
                 cr = consumer.Consume(TimeSpan.FromSeconds(1));
@@ -50,7 +51,7 @@ public sealed class PaymentResultsConsumer(
 
                 // Rejoin the order's trace: read the traceparent the producer injected and open a consume
                 // span as a remote child (ADR-041). Missing header ⇒ a new root (graceful).
-                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(
+                activity = TadkaDiagnostics.ActivitySource.StartActivity(
                     $"consume {Topics.PaymentResults}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
 
                 await HandleAsync(cr.Message.Value, stoppingToken);
@@ -58,10 +59,21 @@ public sealed class PaymentResultsConsumer(
                 _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
-            catch (ConsumeException ex) { logger.LogError(ex, "PaymentResultsConsumer consume error."); }
+            catch (ConsumeException ex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
+                logger.LogError(ex, "PaymentResultsConsumer consume error.");
+            }
             catch (Exception ex) when (cr is not null)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
                 await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
+            finally
+            {
+                activity?.Dispose();
             }
         }
 

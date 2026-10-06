@@ -47,11 +47,12 @@ public sealed class MenuUpdatedConsumer(
         while (!stoppingToken.IsCancellationRequested)
         {
             ConsumeResult<string, string>? cr = null;
+            Activity? activity = null;
             try
             {
                 cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
-                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(   // rejoin the trace (ADR-041)
+                activity = TadkaDiagnostics.ActivitySource.StartActivity(   // rejoin the trace (ADR-041)
                     $"consume {Topics.MenuUpdated}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
                 var applied = await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr);
@@ -64,10 +65,21 @@ public sealed class MenuUpdatedConsumer(
                     Interlocked.Exchange(ref TadkaDiagnostics.LastMenuReplicaAppliedEventUnixMs, cr.Message.Timestamp.UnixTimestampMs);
             }
             catch (OperationCanceledException) { break; }
-            catch (ConsumeException ex) { logger.LogError(ex, "MenuUpdatedConsumer consume error."); }
+            catch (ConsumeException ex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
+                logger.LogError(ex, "MenuUpdatedConsumer consume error.");
+            }
             catch (Exception ex) when (cr is not null)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
                 await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
+            finally
+            {
+                activity?.Dispose();
             }
         }
 

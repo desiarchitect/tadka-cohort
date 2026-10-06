@@ -50,6 +50,7 @@ public sealed class OrderPlacedConsumer(
         while (!stoppingToken.IsCancellationRequested)
         {
             ConsumeResult<string, string>? cr = null;
+            Activity? activity = null;
             try
             {
                 cr = consumer.Consume(TimeSpan.FromSeconds(1));
@@ -57,7 +58,7 @@ public sealed class OrderPlacedConsumer(
 
                 // Open a consume span under the order's trace (ADR-041); the charge + payment-results
                 // publish below then hang off this span — so the whole saga is one Jaeger waterfall.
-                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(
+                activity = TadkaDiagnostics.ActivitySource.StartActivity(
                     $"consume {Topics.OrderPlaced}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
 
                 await HandleAsync(cr.Message.Value, stoppingToken);
@@ -65,10 +66,21 @@ public sealed class OrderPlacedConsumer(
                 _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
-            catch (ConsumeException ex) { logger.LogError(ex, "OrderPlacedConsumer consume error."); }
+            catch (ConsumeException ex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
+                logger.LogError(ex, "OrderPlacedConsumer consume error.");
+            }
             catch (Exception ex) when (cr is not null)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
                 await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
+            finally
+            {
+                activity?.Dispose();
             }
         }
 

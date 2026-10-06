@@ -36,12 +36,13 @@ public sealed class RestaurantResponseConsumer(
         while (!stoppingToken.IsCancellationRequested)
         {
             ConsumeResult<string, string>? cr = null;
+            Activity? activity = null;
             try
             {
                 cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
 
-                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(
+                activity = TadkaDiagnostics.ActivitySource.StartActivity(
                     $"consume {Topics.RestaurantResponse}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
 
                 var msg = JsonSerializer.Deserialize<RestaurantResponseMessage>(cr.Message.Value);
@@ -56,10 +57,21 @@ public sealed class RestaurantResponseConsumer(
                 _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
-            catch (ConsumeException ex) { logger.LogError(ex, "RestaurantResponseConsumer consume error."); }
+            catch (ConsumeException ex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
+                logger.LogError(ex, "RestaurantResponseConsumer consume error.");
+            }
             catch (Exception ex) when (cr is not null)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
                 await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
+            finally
+            {
+                activity?.Dispose();
             }
         }
 

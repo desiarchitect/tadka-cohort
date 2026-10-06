@@ -40,21 +40,33 @@ public sealed class PaymentRefundedConsumer(
         while (!stoppingToken.IsCancellationRequested)
         {
             ConsumeResult<string, string>? cr = null;
+            Activity? activity = null;
             try
             {
                 cr = consumer.Consume(TimeSpan.FromSeconds(1));
                 if (cr is null) continue;
-                using var activity = TadkaDiagnostics.ActivitySource.StartActivity(   // rejoin the trace (ADR-041)
+                activity = TadkaDiagnostics.ActivitySource.StartActivity(   // rejoin the trace (ADR-041)
                     $"consume {Topics.PaymentRefunded}", ActivityKind.Consumer, TadkaTrace.ParseContext(ReadTraceParent(cr)));
                 await HandleAsync(cr.Message.Value, stoppingToken);
                 consumer.Commit(cr);
                 _poison.Clear(cr.TopicPartitionOffset);
             }
             catch (OperationCanceledException) { break; }
-            catch (ConsumeException ex) { logger.LogError(ex, "PaymentRefundedConsumer consume error."); }
+            catch (ConsumeException ex)
+            {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
+                logger.LogError(ex, "PaymentRefundedConsumer consume error.");
+            }
             catch (Exception ex) when (cr is not null)
             {
+                activity?.SetStatus(ActivityStatusCode.Error, ex.Message);
+                activity?.AddException(ex);
                 await HandlePoisonAsync(consumer, cr, ex, stoppingToken);
+            }
+            finally
+            {
+                activity?.Dispose();
             }
         }
 
