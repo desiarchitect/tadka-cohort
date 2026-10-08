@@ -24,7 +24,7 @@ Instrument every service with **OpenTelemetry (OTEL)** — the CNCF vendor-neutr
 - **Dashboards** → **Grafana** (over Prometheus + Jaeger datasources).
 - **Logs** → **structured JSON to console** via **Serilog**, every line enriched with `service.name` + `trace_id` + `span_id` (so logs are greppable by trace id and tie back to a trace). **Loki is deferred** until scale demands it.
 
-A shared **`Tadka.Telemetry`** library exposes `AddTadkaTelemetry(serviceName)`: ASP.NET Core + HttpClient + EF Core auto-instrumentation, a custom `ActivitySource`/`Meter`, and the OTLP exporter. The exporter is **gated on `OTEL_EXPORTER_OTLP_ENDPOINT`** — unset means telemetry is off.
+A shared **`Tadka.Telemetry`** library exposes `AddTadkaTelemetry(serviceName)`: ASP.NET Core + HttpClient + .NET runtime auto-instrumentation, a custom `ActivitySource`/`Meter`, and the OTLP exporter. The exporter is **gated on `OTEL_EXPORTER_OTLP_ENDPOINT`** — unset means telemetry is off.
 
 The **Collector is the seam**: "instrument once, route anywhere." Swapping Jaeger for Datadog tomorrow is a Collector-config change, **not** an app change.
 

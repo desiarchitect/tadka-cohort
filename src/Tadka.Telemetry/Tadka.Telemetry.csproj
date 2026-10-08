@@ -12,6 +12,9 @@
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="Tadka.Api.Tests" /> <!-- TelemetryRegistration.IsNoise is tested directly -->
+  </ItemGroup>
+  <ItemGroup>
     <!-- PoisonMessageTracker keys on Confluent.Kafka's TopicPartitionOffset (ADR-051), shared across
          every service's consumers since it has zero dependency on any service's own message contracts. -->
     <PackageReference Include="Confluent.Kafka" Version="2.14.2" />

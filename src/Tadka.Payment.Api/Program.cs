@@ -98,6 +98,7 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+app.Lifetime.ApplicationStarted.Register(TadkaDiagnostics.PrimePaymentCounters); // series start at 0 so the first failure is visible to increase() (ADR-042)
 
 // The service owns its data: it migrates its OWN database on startup. If THIS database is down, only the
 // Payment service fails to start — the monolith (its own DB) is unaffected (ADR-024/026).

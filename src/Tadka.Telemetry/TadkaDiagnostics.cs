@@ -38,6 +38,22 @@ public static class TadkaDiagnostics
     public static readonly Counter<long> PaymentCircuitTransitions =
         Meter.CreateCounter<long>("tadka.payment.circuit_transitions", description: "Payment gateway circuit-breaker state transitions.");
 
+    /// <summary>
+    /// Creates the labelled series at zero the moment the process starts. A counter that is first touched by
+    /// its first real event is exported for the first time with a value already above zero, and Prometheus
+    /// <c>increase()</c> and <c>rate()</c> need two samples to measure a change, so that first burst reads as 0
+    /// and a "payments failed" alert would stay quiet. Priming at zero gives every later increment a baseline
+    /// (ADR-042). Call once after the host has started, so the OTEL meter reader is already listening.
+    /// </summary>
+    public static void PrimePaymentCounters()
+    {
+        PaymentResults.Add(0, new KeyValuePair<string, object?>("status", "success"));
+        PaymentResults.Add(0, new KeyValuePair<string, object?>("status", "failed"));
+    }
+
+    /// <summary>Same idea for the Ordering throughput counter (see <see cref="PrimePaymentCounters"/>).</summary>
+    public static void PrimeOrderCounters() => OrdersPlaced.Add(0);
+
     /// <summary>DEMO-ONLY anti-pattern (ADR-042): a counter that the OrdersController labels with order_id when
     /// <c>OTEL_CARDINALITY_DEMO=true</c>. Each order becomes a brand-new Prometheus series → watch the series
     /// count explode, then revert. This exists ONLY to show why ids must never be metric labels.</summary>
