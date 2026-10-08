@@ -61,12 +61,14 @@ public static class TelemetryRegistration
         return builder;
     }
 
-    // The "when NOT to trace" list (ADR-040): health checks fire every few seconds per service and the
-    // metrics scrape hits /metrics constantly — pure noise that would drown the real order traces.
-    private static bool IsNoise(string? path) =>
+    // The "when NOT to trace" list (ADR-040): health checks fire every few seconds per service, the
+    // metrics scrape hits /metrics constantly, and "/" is only ever a browser or load balancer poking the
+    // root: pure noise that would drown the real order traces.
+    internal static bool IsNoise(string? path) =>
         path is not null &&
         (path.StartsWith("/health", StringComparison.OrdinalIgnoreCase) ||
-         path.StartsWith("/metrics", StringComparison.OrdinalIgnoreCase));
+         path.StartsWith("/metrics", StringComparison.OrdinalIgnoreCase) ||
+         path == "/");
 }
 
 /// <summary>Stamps every log line with the current trace_id/span_id so logs tie back to a Jaeger trace (ADR-040/041).</summary>

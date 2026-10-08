@@ -21,6 +21,9 @@
 | `Tadka.Telemetry` | Serilog JSON + OTEL traces/metrics |
 | Outbox tables | `TraceParent` column + migration |
 | Consumers | Extract header, child span, record error status on exception |
-| `tadka.orders.placed` / `payment.result` | Business metrics |
+| `tadka.orders.placed` / `payment.result` | Business metrics, created at 0 on start so `increase()` sees the first burst (`PrimePaymentCounters`) |
+| Grafana alert | Payment failure alert fires above 3 failures in 5 minutes (was above 0) |
+| Tracing filter | `/health`, `/metrics` and `/` are not traced |
+| `docker/kafka-scram-entrypoint.sh` | Wipes its own storage on start, so a restarted Kafka container comes back healthy |
 
 ADRs **040, 041, 042**.

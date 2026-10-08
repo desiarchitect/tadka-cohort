@@ -287,6 +287,7 @@ builder.Services.AddSingleton<Tadka.Api.Infrastructure.FeatureFlags.IFeatureFlag
         sp.GetRequiredService<ILogger<Tadka.Api.Infrastructure.FeatureFlags.FeatureFlagService>>()));
 
 var app = builder.Build();
+app.Lifetime.ApplicationStarted.Register(Tadka.Telemetry.TadkaDiagnostics.PrimeOrderCounters); // same reason as Payment (ADR-042)
 
 // Apply migrations on startup, then idempotently seed known demo users with real password hashes + roles
 // (so login works on a fresh DB). The monolith owns ONLY the core schema; the Payment service migrates its

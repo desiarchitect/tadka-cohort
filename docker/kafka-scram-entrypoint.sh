@@ -14,6 +14,12 @@
 # can point --command-config at, then starts the broker itself.
 set -euo pipefail
 
+# A restarted container (Docker Desktop restart, `docker compose stop` then `up`) keeps its /tmp, so the
+# storage formatted by the previous run is still there and KafkaDockerWrapper's own format step below
+# would stop with "already formatted". Start every run from empty storage. This container has no
+# persistent volume by design, so nothing is lost that a restart did not already lose.
+rm -rf /tmp/kafka-logs
+
 . /etc/kafka/docker/bash-config
 . /etc/kafka/docker/configureDefaults
 . /etc/kafka/docker/configure

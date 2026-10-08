@@ -15,13 +15,13 @@ Making the choreographed saga **visible** as one waterfall trace requires solvin
 
 ## Decision
 
-Propagate the **W3C Trace Context** (`traceparent`/`tracestate`) explicitly across Kafka, and **persist it through the Outbox** so the async hop rejoins the originating trace:
+Propagate the **W3C Trace Context** (the `traceparent` header) explicitly across Kafka, and **persist it through the Outbox** so the async hop rejoins the originating trace:
 
 1. **At enqueue** (inside the order/menu transaction): capture the current `traceparent` from `Activity.Current` and store it in a new **`TraceParent` column** on the outbox row (monolith `ordering` outbox + Restaurant outbox). It commits atomically with the business row — the trace context is as durable as the event itself.
-2. **At relay** (`OutboxRelay`): start a short **"publish" span** (child of the stored context), and **inject** the `traceparent` into the **Kafka message headers** via the W3C propagator before producing.
+2. **At relay** (`OutboxRelay`): start a short **"publish" span** (child of the stored context), and write that span's `traceparent` into the **Kafka message headers** (`KafkaProducer.PublishRawAsync`) before producing.
 3. **At consume** (every consumer — Payment `OrderPlacedConsumer`, monolith `PaymentResultsConsumer` + `MenuUpdatedConsumer`, Delivery's `order-confirmed` consumer): **extract** the `traceparent` from the message headers and start the processing span **as a child of the extracted context** (or a span *link* when fan-out makes a strict parent wrong). Now Payment's charge span hangs under the same trace as the order span.
 
-A shared **`Tadka.Telemetry`** helper exposes `InjectTraceContext(headers)` / `ExtractTraceContext(headers)` using `System.Diagnostics` + the OTEL `Propagators.DefaultTextMapPropagator`, so every produce/consume seam uses the same code.
+A shared **`Tadka.Telemetry`** helper, `TadkaTrace`, exposes `CurrentTraceParent()` (the current span as a W3C string, stored on the outbox row) and `ParseContext(string?)` (back to a remote `ActivityContext`, or `default` when the header is missing), using plain `System.Diagnostics`, so every produce/consume seam uses the same code.
 
 We deliberately use **manual W3C propagation via headers + the Outbox column** rather than a broker-auto-instrumentation package: it is robust, version-independent against the young `Confluent.Kafka` OTEL instrumentation, and importantly, it addresses the Outbox time-gap (which a simple auto-instrumentation interceptor would fail to bridge).
 
