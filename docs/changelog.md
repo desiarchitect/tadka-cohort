@@ -12,6 +12,7 @@
 ## Architecture
 
 - Polly complete: bulkhead → retry (jittered, transport-only) → circuit breaker → 2s timeout.
+- Load shedding now drops order history and invoices (explicit sheddable paths win over the critical `/api/v1/orders` prefix) while place-order, payment and health stay admitted; Restaurant's Redis client has 500 ms timeouts so a Redis outage costs under a second, not five.
 - `Payment:OnGatewayUnavailable` lever (`Compensate` | `Buffer`).
 - Backpressure / load-shed levers exist (`Backpressure:MaxConcurrent`, `LoadShed:Enabled`).
 

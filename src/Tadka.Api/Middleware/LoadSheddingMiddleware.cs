@@ -44,14 +44,19 @@ public sealed class LoadSheddingMiddleware(RequestDelegate next, IOptionsMonitor
         }
 
         var path = context.Request.Path.Value ?? "";
-        if (IsCritical(path))
+
+        // Explicitly sheddable paths win over the critical prefixes: order history and invoices live under
+        // /api/v1/orders (a critical prefix), but they are the first things to drop (ADR-060). Place-order,
+        // order status and payments stay admitted.
+        var explicitlySheddable = SheddableContains.Any(x => path.Contains(x, StringComparison.OrdinalIgnoreCase));
+        if (!explicitlySheddable && IsCritical(path))
         {
             await next(context);
             return;
         }
 
         // Sheddable: non-critical API under load
-        if (path.StartsWith("/api", StringComparison.OrdinalIgnoreCase) || SheddableContains.Any(s => path.Contains(s, StringComparison.OrdinalIgnoreCase)))
+        if (explicitlySheddable || path.StartsWith("/api", StringComparison.OrdinalIgnoreCase))
         {
             context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
             context.Response.Headers.RetryAfter = "5";
