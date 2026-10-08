@@ -233,10 +233,12 @@ Place an order for 2 × Chicken Biryani at Meghana Foods (₹598) through the AP
 
 **Bash:**
 ```bash
-curl -s -X POST http://localhost:8080/api/v1/orders \
+ORDER=$(curl -s -X POST http://localhost:8080/api/v1/orders \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
-  -d "$BODY" | sed -E 's/.*"status":"([^"]+)".*"totalAmount":\{"amount":([0-9.]+).*/status: \1  total: \2/'
+  -d "$BODY")
+echo "$ORDER" | sed -E 's/.*"status":"([^"]+)".*"totalAmount":\{"amount":([0-9.]+).*/status: \1  total: \2/'
+ID=$(echo "$ORDER" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 ```
 
 **PowerShell:**
@@ -248,11 +250,20 @@ $order = Invoke-RestMethod -Uri http://localhost:8080/api/v1/orders -Method Post
 **Captured live:** `status: Created  total: 598.00`
 
 Wait 2 seconds for the background saga to complete, then inspect the order status:
+
+**Bash:**
+```bash
+sleep 2
+curl -s http://localhost:8080/api/v1/orders/$ID -H "Authorization: Bearer $TOKEN" | grep -o '"status":"[^"]*"'
+```
+
+**PowerShell:**
 ```powershell
+Start-Sleep -Seconds 2
 $status = (Invoke-RestMethod -Uri "http://localhost:8080/api/v1/orders/$($order.id)" -Method Get -Headers $H).status
 "Final Order Status: $status"
 ```
-**Captured live:** `Final Order Status: Confirmed`
+**Captured live:** `Final Order Status: Confirmed` (bash prints it as `"status":"Confirmed"`).
 
 #### Inspecting the Trace in Jaeger UI
 1. Open **[http://localhost:16686](http://localhost:16686)**.
@@ -562,7 +573,16 @@ if (Environment.GetEnvironmentVariable("OTEL_CARDINALITY_DEMO") == "true")
         new KeyValuePair<string, object?>("order_id", order.Id.ToString()));
 ```
 
-Now, place 6 orders in rapid succession:
+Now, place 6 orders in rapid succession. The monolith's signing keys live in memory, so your old token stopped working when you restarted it: log in again first.
+
+**Bash:**
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+for i in 1 2 3 4 5 6; do
+  echo "Placed order $i : $(curl -s -X POST http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)"
+done
+```
+
 **PowerShell:**
 ```powershell
 # Re-login (monolith keys reset in memory)
@@ -593,6 +613,13 @@ In Grafana, the panel **Metric series count (cardinality watch)** steps up with 
 
 #### The Fix
 Stop the monolith, clear the flag, and restart:
+
+**Bash:**
+```bash
+unset OTEL_CARDINALITY_DEMO
+dotnet run --project src/Tadka.Api
+```
+
 **PowerShell:**
 ```powershell
 $env:OTEL_CARDINALITY_DEMO = $null
@@ -717,6 +744,11 @@ sum(increase(tadka_payment_result_total{status="failed"}[5m])) > 3
    ```
    Wait for Payment to start, then wait about a minute so the zero-valued series has been exported once.
 2. Place a burst of 4 orders through Gateway:
+   ```bash
+   for i in 1 2 3 4; do
+     curl -s -o /dev/null -X POST http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY"
+   done
+   ```
    ```powershell
    for ($i = 1; $i -le 4; $i++) {
        Invoke-RestMethod -Uri http://localhost:8080/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY
@@ -735,6 +767,10 @@ sum(increase(tadka_payment_result_total{status="failed"}[5m])) > 3
    ```
    **Captured live:** four failing orders at 17:39:27; `Pending` at 17:40:24 (57 s later: the 60 s metric export plus the next 10 s evaluation); `Firing` at 17:40:57 (33 s after that: the `for: 30s` dwell); back to `Normal` by 17:45:24, when the failures fell out of the 5 minute window. The value that tripped it: `sum(increase(tadka_payment_result_total{status="failed"}[5m]))` = **4.007**, against a threshold of 3.
 4. Restore Payment to normal:
+   ```bash
+   unset Payment__Gateway__Behavior
+   dotnet run --project src/Tadka.Payment.Api
+   ```
    ```powershell
    $env:Payment__Gateway__Behavior = $null
    dotnet run --project src/Tadka.Payment.Api
@@ -865,6 +901,9 @@ docker compose --profile observability down -v
 ```
 
 To run apps in normal dev mode without telemetry:
+```bash
+unset OTEL_EXPORTER_OTLP_ENDPOINT
+```
 ```powershell
 $env:OTEL_EXPORTER_OTLP_ENDPOINT = $null
 ```
@@ -932,6 +971,9 @@ The OpenTelemetry .NET SDK exports metrics every **60 seconds**. Wait at least 6
 ### 4. PowerShell `Invoke-WebRequest` throws on 4xx/5xx responses
 Use the `Get-StatusCode` helper defined in Section 1, or use `Invoke-RestMethod` within a `try/catch` block.
 
+### 5. Services fail to build with `Cannot open Tadka.Telemetry.dll for writing`
+Occurs when multiple `dotnet run` commands attempt to build the shared dependency simultaneously. Run `dotnet build Tadka.slnx` once before starting services, and add `--no-build` to `dotnet run`.
+
 ### 6. The first order after a restart sits in `Created` for ~40 seconds
 Consumer-group handover after a killed process (Section 1). Wait, or stop services with Ctrl+C (a clean shutdown leaves the group at once).
 
@@ -940,6 +982,3 @@ Consumer-group handover after a killed process (Section 1). Wait, or stop servic
 
 ### 8. PowerShell: text piped to `docker exec -i` arrives with a stray first character
 Windows PowerShell 5.1 prepends a byte-order mark to piped text. Use the `Send-Kafka` helper (Section 3.6), which sends the line from inside the container.
-
-### 5. Services fail to build with `Cannot open Tadka.Telemetry.dll for writing`
-Occurs when multiple `dotnet run` commands attempt to build the shared dependency simultaneously. Run `dotnet build Tadka.slnx` once before starting services, and add `--no-build` to `dotnet run`.
