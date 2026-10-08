@@ -500,18 +500,41 @@ Backpressure vs shedding in one line: backpressure says "I am full, come back" t
 
 ## 7d. Demo 7: Kafka down (the Outbox buffers the order)
 
-**What you're proving:** Ordering has no synchronous dependency on Kafka. The order and its event commit together; the relay publishes when Kafka is back.
+**What you're proving:** Ordering has no synchronous dependency on Kafka. The order and the event it must publish are saved in **one database transaction** (the Outbox, [Day 9](../adrs/028-transactional-outbox-pattern.md)); a background relay publishes to Kafka afterwards. So when Kafka is gone the order is still accepted in milliseconds, and the event waits in a table until the broker returns.
+
+Stop Kafka, place three orders (timing each), and count the events still waiting in the Outbox table. Use the `$TOKEN`, `$BODY` and `Get-StatusCode` from section 1 (log in again if you restarted the monolith):
+
+**Bash:**
 ```bash
 docker compose stop kafka
+for i in 1 2 3; do curl -s -o /dev/null -w "%{http_code} in %{time_total}s\n" \
+  -X POST http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d "$BODY"; done
+docker exec tadka-postgres psql -U tadka -d tadka -t -A \
+  -c "select count(*) from ordering.outbox_messages where \"ProcessedAt\" is null;"
 ```
+
+**PowerShell:**
 ```powershell
 docker compose stop kafka
+1..3 | ForEach-Object { $t = Measure-Command { $c = Get-StatusCode `
+  -Uri http://localhost:8080/api/v1/orders -Method Post -Headers $H -Body $BODY }
+  "$c in " + [int]$t.TotalMilliseconds + " ms" }
+docker exec tadka-postgres psql -U tadka -d tadka -t -A `
+  -c "select count(*) from ordering.outbox_messages where \`"ProcessedAt\`" is null;"
 ```
-Place three orders. **Captured live:** each `POST /orders` returned `201` in about **12 ms**, the orders stayed `Created`, and `select count(*) from ordering.outbox_messages where "ProcessedAt" is null` returned **3**.
+**Captured live:** each `POST /orders` returned `201` in about **12 to 60 ms**, the orders stayed `Created`, and the unsent Outbox count was **3** (it grows by one per order). Then bring the broker back:
+
+**Bash:**
 ```bash
 docker compose start kafka
 ```
-**Captured live:** once the broker is back the relay drained the backlog (0 unsent rows) within a second. In this lab the broker keeps nothing on disk, so after a broker restart also restart the five services (and re-run the topic loop first if the topics are gone): their consumers then pick the three orders up and all three read `Confirmed` about 25 seconds later.
+
+**PowerShell:**
+```powershell
+docker compose start kafka
+```
+**Captured live:** once the broker is back, the relay drained the backlog (0 unsent rows) within seconds. In this lab the broker keeps nothing on disk, so after a broker restart re-create the topics (the topic loop in section 1) and restart the five services, then place one fresh order to prove the whole chain is healthy again. The point of the demo is the first half: while Kafka was away, every order was accepted and its event was safe in the Outbox.
 
 ---
 
