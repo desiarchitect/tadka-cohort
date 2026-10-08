@@ -392,12 +392,11 @@ dotnet run --project src/Tadka.Payment.Api
 To visually verify that Kafka messages carry the W3C `traceparent` across broker topics:
 1. Open Kafka UI at **[http://localhost:8090](http://localhost:8090)**.
 2. In the left navigation, click **Topics** → click `order-placed`.
-3. Switch to the **Messages** tab.
-4. Expand the newest message:
-   - Notice the **Headers** table contains:
-     - Key: `traceparent`
-     - Value: `00-f702b761785651a3b5a7057190bb727a-d4e491a662faeb10-01`
-   - Notice the trace ID (`f702b761785651a3b5a7057190bb727a`) exactly matches the trace ID in Jaeger!
+3. Switch to the **Messages** tab (the cluster in Kafka UI is called `tadka`).
+4. Press the **+** at the left of the newest message row to expand it. It opens on the **Value** tab (the JSON payload), so switch to the **Headers** tab:
+   - You will see `{ "traceparent": "00-336b648e0821aa0c3f47995be6f8fa69-7205b03360312bf4-01" }`
+     (your ids will differ).
+   - The trace ID (`336b648e...`) matches the trace ID at the top of that order's trace in Jaeger.
 5. Now check `payment-results` and `order-confirmed`: each carries the same trace ID. The span id (the third field) changes at every hop, because each hop is a new span.
 
 The same check from a terminal, with no UI (reads the newest message of a topic and prints its headers):
