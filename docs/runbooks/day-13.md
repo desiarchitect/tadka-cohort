@@ -222,6 +222,218 @@ By the time the background `OutboxRelay` worker polls the database and publishes
 - The relay then puts that span's id on the Kafka message as a `traceparent` header ([`KafkaProducer.PublishRawAsync`](../../src/Tadka.Api/Infrastructure/Messaging/KafkaProducer.cs): `message.Headers = new Headers { { TadkaTrace.TraceParentHeader, Encoding.UTF8.GetBytes(traceParent) } }`).
 - Each consumer (`OrderPlacedConsumer`, `PaymentResultsConsumer`, `OrderConfirmedConsumer`, and the others) reads the header with its own small `ReadTraceParent(cr)`, turns it into a context with `TadkaTrace.ParseContext(...)`, and starts `consume <topic>` as a remote child. A missing or garbled header degrades to a brand-new root trace, never an exception.
 
+### 2.1 How the OTEL Collector is configured
+
+The Collector is a small program that sits between your services and the places the data ends up. Every service sends everything to it in one format (OTLP), and the Collector decides where each kind of data goes. Think of a post office sorting room: **receivers** are the counter where parcels arrive, **processors** pack them, **exporters** are the vans to each destination, and **pipelines** say which counter feeds which van. The whole file is [`docker/observability/otel-collector-config.yaml`](../../docker/observability/otel-collector-config.yaml) (39 lines).
+
+**How the container runs** (from [`docker-compose.yml`](../../docker-compose.yml)):
+
+| Setting | Value | Why |
+|---|---|---|
+| Image | `otel/opentelemetry-collector-contrib:0.115.1` | The `contrib` build includes the Prometheus exporter. The version is pinned so the demo does not change under you. |
+| Container | `tadka-otel-collector` | Fixed name, used by the `docker` commands in this runbook. |
+| Profile | `observability` | Opt-in. A plain `docker compose up -d` does not start it. |
+| Command | `--config=/etc/otel-collector-config.yaml` | Tells the Collector which file to read. |
+| Volume | the repo file is mounted at that path | Edit the file on your machine, then restart the container. The Collector does not reload its config on its own. |
+| Ports | `4317` (OTLP gRPC), `4318` (OTLP HTTP), `8889` (Prometheus page) | `4317` is where your services send data. `8889` is where Prometheus collects it. |
+| Starts after | `jaeger` | Compose starts the Jaeger container first. It does not wait for Jaeger to be ready. |
+
+**What each block of the config means:**
+
+| Block | Setting | What it does |
+|---|---|---|
+| `receivers.otlp.protocols.grpc` | `0.0.0.0:4317` | Accepts OTLP over gRPC. `0.0.0.0` means "listen on every network interface inside the container", which is what lets the published port reach it. Local services use this one (`OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317`). |
+| `receivers.otlp.protocols.http` | `0.0.0.0:4318` | Accepts OTLP over HTTP. Not used locally. The Azure deployment uses it. |
+| `processors.batch` | `{}` (defaults) | Collects spans and metrics into batches before sending them on, so the Collector makes fewer, larger calls. This is the only processor we use. |
+| `exporters.otlp/jaeger` | `endpoint: jaeger:4317` | Sends traces to Jaeger by its Docker network name. Port `4317` here is Jaeger's own OTLP receiver, which is switched on by `COLLECTOR_OTLP_ENABLED=true` in the compose file. |
+| `exporters.otlp/jaeger.tls` | `insecure: true` | Plain text, no certificate. Acceptable only because this hop never leaves the private Docker network. |
+| `exporters.prometheus` | `endpoint: 0.0.0.0:8889` | Does **not** push anything. It serves a web page of current metric values, and Prometheus visits that page. |
+| `exporters.prometheus.resource_to_telemetry_conversion` | `enabled: true` | Copies the service name onto every metric as a label (`service_name`). Without it the service name would not be on each series, and the dashboard could not group by service. Safe here: five services is a tiny number of label values (ADR-042 is about ids, not service names). |
+| `service.pipelines.traces` | `otlp` then `batch` then `otlp/jaeger` | Traces go to Jaeger. |
+| `service.pipelines.metrics` | `otlp` then `batch` then `prometheus` | Metrics go to the page Prometheus reads. |
+
+**What is deliberately not configured:** there is no `logs` pipeline, because logs are written to each service's console as JSON (Section 5) and do not pass through the Collector. There is also no `memory_limiter`, no `tail_sampling`, and no redaction. The retry and queue settings of the exporters are left at their defaults. Section 10 explains what production adds.
+
+**The seam.** To send traces to a different backend tomorrow, you change the `exporters` and `pipelines` blocks of this one file and restart the Collector. No service changes. The Azure deployment does exactly that: [`deploy/azure/otel-collector-config.yaml`](../../deploy/azure/otel-collector-config.yaml) has the same receivers and the same two pipelines, but its exporter is `azuremonitor`, which sends everything to Application Insights.
+
+To restart the Collector after editing its file:
+```bash
+docker compose --profile observability restart otel-collector
+```
+```powershell
+docker compose --profile observability restart otel-collector
+```
+
+### 2.2 How telemetry is set up in .NET
+
+Every service has **one line** in its `Program.cs`:
+```csharp
+builder.AddTadkaTelemetry("Tadka.Payment.Api");   // Tadka.Api, Tadka.Gateway, Tadka.Delivery.Api, Tadka.Restaurant.Api
+```
+That method lives in the shared project [`src/Tadka.Telemetry`](../../src/Tadka.Telemetry/TelemetryRegistration.cs), which all five entry points reference. Nothing else in a service knows about Jaeger, Prometheus or the Collector.
+
+**NuGet packages** (in `Tadka.Telemetry.csproj`):
+
+| Package | Version | Used for |
+|---|---|---|
+| `OpenTelemetry.Extensions.Hosting` | 1.15.3 | The `AddOpenTelemetry()` entry point. |
+| `OpenTelemetry.Exporter.OpenTelemetryProtocol` | 1.15.3 | Sends traces and metrics to the Collector (OTLP). |
+| `OpenTelemetry.Instrumentation.AspNetCore` | 1.15.2 | Automatic spans and metrics for incoming HTTP requests. |
+| `OpenTelemetry.Instrumentation.Http` | 1.15.1 | Automatic spans and metrics for outgoing HTTP calls, and it passes the `traceparent` header on. |
+| `OpenTelemetry.Instrumentation.Runtime` | 1.15.1 | .NET runtime metrics (garbage collection, thread pool). |
+| `Serilog.AspNetCore` and `Serilog.Formatting.Compact` | 10.0.0 and 3.0.0 | Structured JSON logs. |
+
+**What `AddTadkaTelemetry` does, in order:**
+
+| Step | Code | Result |
+|---|---|---|
+| 1. Logs | `UseSerilog(...)` with `CompactJsonFormatter`, level Information, `Microsoft.AspNetCore` and `Microsoft.EntityFrameworkCore` raised to Warning | One JSON object per log line on the console. Framework chatter is hidden. |
+| 2. Log enrichment | `Enrich.WithProperty("service.name", ...)` and `ActivityEnricher` | Every log line carries the service name and, when a request is in progress, `trace_id` and `span_id`. That is how you search all service logs for one trace (Section 5). |
+| 3. The gate | `if (OTEL_EXPORTER_OTLP_ENDPOINT is empty) return;` | No endpoint means no exporter. Logs still work, and the service behaves exactly as it did on Day 12. This is why the tests need no Collector, and why a service started in a terminal where you forgot the variable is silent. |
+| 4. Name | `ConfigureResource(r => r.AddService(serviceName))` | The service name on every trace and metric. It becomes the Jaeger service dropdown and the `service_name` label in Prometheus. |
+| 5. Traces | `AddSource("Tadka")`, `AddAspNetCoreInstrumentation(filter)`, `AddHttpClientInstrumentation()`, `AddOtlpExporter()` | Our own spans, one span per incoming request, one span per outgoing call, all sent to the Collector. |
+| 6. Metrics | `AddMeter("Tadka")`, `AddAspNetCoreInstrumentation()`, `AddHttpClientInstrumentation()`, `AddRuntimeInstrumentation()`, `AddOtlpExporter()` | Our own business metrics, the request rate, errors and duration, the outgoing call metrics, and the runtime metrics. |
+
+**Where the data goes.** `AddOtlpExporter()` is called with no options on purpose. It reads the standard OpenTelemetry environment variables:
+
+| Variable | Local value | Meaning |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | The Collector. Also the on/off gate described above. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL` | not set (gRPC is the default) | The Azure deployment sets `http/protobuf` and points at the Collector on port `4318`. |
+
+**When data leaves the service.** Traces are batched and sent every few seconds. Metrics are sent on a **60-second timer** (the SDK default; our code does not change it). That is why a new order shows in Jaeger almost at once but takes up to a minute to move a Prometheus number. Prometheus then reads the Collector every 5 seconds (Section 2.4), but the numbers only change when a service has pushed.
+
+**What is filtered out.** `IsNoise` skips `/health`, `/metrics` and `/` so health probes do not bury real order traces (Section 7).
+
+**The business metrics** are defined once, in [`TadkaDiagnostics.cs`](../../src/Tadka.Telemetry/TadkaDiagnostics.cs), on one shared meter named `Tadka`:
+
+| Name in code | Type | Labels | Recorded in | Name in Prometheus |
+|---|---|---|---|---|
+| `tadka.orders.placed` | counter | none | `OrdersController` (when an order is accepted) | `tadka_orders_placed_total` |
+| `tadka.payment.result` | counter | `status` = `success` or `failed` | `PaymentService` | `tadka_payment_result_total` |
+| `tadka.payment.amount` | histogram, unit INR | none | `PaymentService` (successful charges) | `tadka_payment_amount_INR_bucket`, `_sum`, `_count` |
+| `tadka.payment.circuit_transitions` | counter | `state` = `open`, `closed` or `half_open` | `PaymentResiliencePipeline` | `tadka_payment_circuit_transitions_total` |
+| `tadka.replica.lag_seconds` | observable gauge | none | read live whenever the metric is collected | `tadka_replica_lag_seconds` |
+| `tadka.orders.placed.by_id` | counter | `order_id` | demo only, when `OTEL_CARDINALITY_DEMO=true` | `tadka_orders_placed_by_id_total` |
+
+**How a name turns into a Prometheus name:** dots become underscores, a counter gets `_total` added, a unit may be added (the INR in `tadka_payment_amount_INR_*`), and a histogram becomes three series: `_bucket`, `_sum` and `_count`. The built-in `http.server.request.duration` becomes `http_server_request_duration_seconds_bucket`, `_sum` and `_count`. The name of the service, `service.name`, becomes the label `service_name`.
+
+**Counter priming.** A counter that is created by its first real event is first exported already above zero, and Prometheus needs two samples to see a change, so that first burst would look like nothing happened. `PrimeOrderCounters()` (Ordering) and `PrimePaymentCounters()` (Payment, both `status` values) add zero when the host starts, so every later increment has a baseline (ADR-042).
+
+**The custom spans.** Everything else in a trace comes from the automatic HTTP instrumentation. These are ours, started with `TadkaDiagnostics.ActivitySource.StartActivity(...)`:
+
+| Span | Made by | What it shows |
+|---|---|---|
+| `ProcessPayment` | `PaymentService` | The charge itself. |
+| `outbox publish <topic>` | `OutboxRelay` in the monolith, Payment and Restaurant | The relay publishing one row to Kafka, as a child of the original request. |
+| `consume <topic>` | every Kafka consumer (Ordering, Payment, Delivery, Restaurant) | A consumer handling one message, started as a remote child of the span that produced it (ADR-041, the section above). |
+
+**To add your own metric:** define a counter on the `Tadka` meter in `TadkaDiagnostics.cs`, call `.Add(1)` where the event happens, and prime it at startup if you will alert on it. It then appears in Prometheus under the converted name. Never use an id (`order_id`, `user_id`) as a label: every distinct id creates a new series (ADR-042, and the cardinality demo in Section 4).
+
+### 2.3 How Prometheus and Grafana are set up
+
+Everything is files mounted into the containers, so the dashboards and the alert exist the moment Grafana starts. You do not click anything together.
+
+**Prometheus** ([`prometheus.yml`](../../docker/observability/prometheus.yml), image `prom/prometheus:v3.0.1`):
+
+| Setting | Value | Meaning |
+|---|---|---|
+| `scrape_interval` | `5s` | Prometheus reads each target every 5 seconds. |
+| `evaluation_interval` | `5s` | It re-checks its rules every 5 seconds. |
+| job `otel-collector` | `otel-collector:8889` | **The only target for the whole fleet.** The Collector has already merged the metrics of all five services on that page. |
+| job `prometheus` | `localhost:9090` | Prometheus reading itself, so that `prometheus_tsdb_head_series` exists. The cardinality demo watches that number. |
+
+Prometheus **pulls** (it visits a page on a timer), while the services **push** to the Collector. Two timers are therefore involved: the services push every 60 seconds, and Prometheus pulls every 5.
+
+**Grafana** (image `grafana/grafana:11.4.0`, port `3000`), configured entirely under [`docker/observability/grafana/provisioning`](../../docker/observability/grafana/provisioning):
+
+| Folder | What it provides |
+|---|---|
+| `datasources/datasources.yaml` | Two data sources: **Prometheus** (`http://prometheus:9090`, the default) and **Jaeger** (`http://jaeger:16686`). |
+| `dashboards/` | `dashboards.yaml` tells Grafana to load `json/tadka-system-overview.json`, the dashboard **Tadka, System Overview (RED + business)**, in the folder **Tadka**. |
+| `alerting/alerts.yaml` | One alert rule (below). |
+
+Login is `admin` / `admin`, and anonymous access is switched on with the Admin role (`GF_AUTH_ANONYMOUS_ENABLED`). That is a convenience for the class. Never leave it on a real server.
+
+**The six dashboard panels, and the query behind each** (you can paste any of them into the Prometheus page):
+
+| Panel | Query | What it tells you |
+|---|---|---|
+| Request rate (req/s) per service | `sum by (service_name) (rate(http_server_request_duration_seconds_count[1m]))` | **R**ate: how busy each service is. |
+| Error rate (5xx req/s) per service | `sum by (service_name) (rate(http_server_request_duration_seconds_count{http_response_status_code=~"5.."}[1m]))` | **E**rrors: server failures per second. |
+| P95 latency (s) per service | `histogram_quantile(0.95, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket[5m])))` | **D**uration: 95 out of 100 requests were faster than this. |
+| Orders placed (rate/min) | `sum(rate(tadka_orders_placed_total[1m])) * 60` | The business number: orders per minute. |
+| Payment results by status (rate/s) | `sum by (status) (rate(tadka_payment_result_total[5m]))` | Successful against failed payments. |
+| Metric series count | `prometheus_tsdb_head_series` | How many separate time series Prometheus is holding. It jumps in the cardinality demo. |
+
+**The one alert** ([`alerts.yaml`](../../docker/observability/grafana/provisioning/alerting/alerts.yaml)): rule group `tadka-slo`, folder `Tadka`, checked every 10 seconds.
+
+| Part | Value |
+|---|---|
+| Query | `sum(increase(tadka_payment_result_total{status="failed"}[5m]))` |
+| Fires when | the result is greater than **3** for **30 seconds** |
+| No data | counts as OK, so a quiet system does not page you |
+| Why `increase(...[5m])` and not `rate(...[1m])` | metrics arrive once a minute, so a short rate window can miss a burst. A five-minute window keeps the alert Firing long enough to see it in the UI and then clear. |
+| Why it watches payment failures, not HTTP 5xx | a declined payment is a normal `200` response with a failed status, so a 5xx alert would never see it. |
+
+### 2.4 How to use Prometheus (the syntax you actually type)
+
+Open **[http://localhost:9090](http://localhost:9090)**. This is the browser page. There is nothing to install, and the same text works in either shell because you type it into the page.
+
+1. Type an expression in the box at the top.
+2. Press **Execute**. Nothing runs until you do.
+3. Click the **Table** tab for the plain number, or the **Graph** tab for the line over time.
+
+**Read an expression from the inside out.** The same metric, in four layers:
+
+| You type | What it means | Try it |
+|---|---|---|
+| `tadka_orders_placed_total` | The raw counter: all orders placed since the service started. It only goes up. | Table tab |
+| `rate(tadka_orders_placed_total[1m])` | How fast it is going up, in orders per **second**, measured over the last 1 minute. `[1m]` is the look-back window. | Table tab |
+| `sum(rate(tadka_orders_placed_total[1m]))` | Adds the lines of every running instance into one number. | Table tab |
+| `sum(rate(tadka_orders_placed_total[1m])) * 60` | Multiplied by 60: orders per **minute**. This is the Grafana panel. | Graph tab |
+
+- **A counter's raw number is rarely useful.** You almost always wrap it in `rate()` (speed) or `increase()` (how many in the window).
+- **A result of `0` is not empty.** `0` means the metric exists but nothing happened inside the window.
+- **`{...}` filters** by label: `tadka_payment_result_total{status="failed"}`.
+- **`sum by (label)(...)`** keeps the label you name and adds up the rest: `sum by (service_name) (...)` gives one line per service.
+
+**Try it.** Place five orders (use the shared setup from Section 1), wait about a minute, and run the third and fourth expressions above:
+```bash
+for i in 1 2 3 4 5; do curl -s -o /dev/null -X POST http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY"; done
+```
+```powershell
+1..5 | ForEach-Object { Invoke-RestMethod -Uri http://localhost:8080/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY | Out-Null }
+```
+The raw counter moves up by five, and the per-minute number rises above 0 and then falls back toward 0 as the minute passes.
+
+**Six more expressions worth knowing:**
+```promql
+up                                                       # 1 = Prometheus can reach that target, 0 = it cannot
+count by (service_name) (http_server_request_duration_seconds_count)   # which services are sending metrics at all
+sum by (status) (tadka_payment_result_total)             # successful against failed payments, in total
+sum by (service_name) (rate(http_server_request_duration_seconds_count[1m]))   # requests per second per service
+histogram_quantile(0.95, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket[5m])))   # p95 latency
+prometheus_tsdb_head_series                              # how many series Prometheus holds (the cardinality number)
+```
+You can copy the `histogram_quantile` line as it is. It takes the latency buckets and works out the 95th percentile.
+
+**If an expression returns nothing, check in this order:**
+
+1. **Type only the metric name** and watch the suggestions that appear. If the name is not in the list, Prometheus has never received it.
+2. **Open [http://localhost:9090/targets](http://localhost:9090/targets).** The `otel-collector` target must say **UP**. You can also run `up` in the box.
+3. **Look at the Collector's own page**, which is what Prometheus reads:
+   ```bash
+   curl -s http://localhost:8889/metrics | grep '^tadka_orders_placed_total'
+   ```
+   ```powershell
+   (Invoke-WebRequest http://localhost:8889/metrics -UseBasicParsing).Content -split "`n" | Select-String '^tadka_orders_placed_total'
+   ```
+   If the line is missing here, the services are not sending metrics. If it is here but not in Prometheus, wait a few seconds for the next scrape.
+4. **Run `count by (service_name) (http_server_request_duration_seconds_count)`.** It lists the services that are sending. A service that is missing was started in a terminal where `OTEL_EXPORTER_OTLP_ENDPOINT` was not set (the gate in Section 2.2). Stop it and start it again with the variable set.
+5. **Wait up to 60 seconds** after placing orders (the export timer in Section 2.2).
+6. **A service that went quiet disappears.** After about five minutes without an update the Collector stops serving a metric, so Prometheus shows no recent data for it. Place a new order and it returns.
+
 ---
 
 ## 3. Demo 1: The Saga in One Trace (Distributed Tracing in Jaeger)
