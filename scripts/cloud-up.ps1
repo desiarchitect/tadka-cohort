@@ -72,6 +72,13 @@ Assert-Tool "terraform" "Install Terraform >= 1.6 (winget install Hashicorp.Terr
 Assert-Tool "az" "Install the Azure CLI (winget install Microsoft.AzureCLI)"
 Assert-AzureLogin
 if (-not $AlertEmail) { throw "Pass -AlertEmail (or set TADKA_ALERT_EMAIL): the budget alert must reach a human." }
+# Azure only rejects a malformed budget email at the very END of the apply, after every other resource is
+# built (a bad value cost a 15 minute deploy). Check the shape first. The value usually comes from the
+# TADKA_ALERT_EMAIL environment variable, so say so.
+if ($AlertEmail -notmatch '^[^@\s,]+@[^@\s,]+\.[^@\s,]+$') {
+    $from = if ($PSBoundParameters.ContainsKey("AlertEmail")) { "the -AlertEmail parameter" } else { "the TADKA_ALERT_EMAIL environment variable" }
+    throw "'$AlertEmail' (from $from) is not an email address: it needs an @ and a domain, for example you@example.com. Azure would only reject it at the END of the deploy. Fix it with: setx TADKA_ALERT_EMAIL you@example.com (then reopen the terminal), or pass -AlertEmail you@example.com."
+}
 if ($WithManagedRedis -and $Mode -ne "ha") { throw "-WithManagedRedis only applies to -Mode ha (the Day 14 comparison)." }
 if ($LoadTest -and $NoFrontDoor) { Write-Host "-LoadTest changes the Front Door WAF limit; with -NoFrontDoor there is no WAF, so it has no effect." -ForegroundColor Yellow }
 
