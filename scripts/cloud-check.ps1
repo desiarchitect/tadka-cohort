@@ -27,16 +27,22 @@
 
 .PARAMETER Burst        Also run the autoscaling test (about 4 minutes: sustained load for a minute, then waits for the scale-out).
 .PARAMETER AutoscaleOnly Run ONLY the autoscaling test (no order is placed).
+.PARAMETER FreeRiders   Run ONLY this: deliver every open order of the demo customer so the riders go back to the pool.
+                        Only THREE riders are seeded and an order keeps its rider until it is Delivered. cloud-up's
+                        smoke test and every demo order you place leave one busy, so after a few runs new orders
+                        wait for a rider and the "rider assigned" check fails. Run this before class.
 .PARAMETER SkipLogs     Skip the telemetry-error scan (it reads each app's recent log lines).
 .PARAMETER GatewayUrl   Override the URL (default: terraform output gateway_url).
 .EXAMPLE
   ./scripts/cloud-check.ps1
   ./scripts/cloud-check.ps1 -Burst
   ./scripts/cloud-check.ps1 -AutoscaleOnly
+  ./scripts/cloud-check.ps1 -FreeRiders
 #>
 param(
     [switch]$Burst,
     [switch]$AutoscaleOnly,
+    [switch]$FreeRiders,
     [switch]$SkipLogs,
     [string]$GatewayUrl
 )
@@ -133,8 +139,51 @@ export default function () { http.get(__ENV.GW + '/api/v1/restaurants'); }
     # (deploy/azure/apps.tf) or run Day 16 k6 stress.js from a machine closer to the region.
     Check "gateway scaled out under load" ($peak -gt $before) "replicas $before -> $peak (rule: 30 concurrent requests per replica, max 5)" -WarnOnly
 }
+# Only three riders are seeded and an order keeps its rider until it is Delivered (see -FreeRiders above).
+# For every open order of the demo customer: find its rider, log in as that rider, PickedUp then Delivered.
+# An order that has no rider yet is waiting for one; it gets one as soon as another is freed, so go round again.
+function Invoke-FreeRiders {
+    $customer = Get-UserToken "priya@tadka.test"
+    if (-not $customer) { Check "login priya@tadka.test" $false "login failed"; return }
+    $auth = @{ Authorization = "Bearer $customer" } + $origin
+    $freed = 0
+    $waiting = 0
+    for ($pass = 1; $pass -le 4; $pass++) {
+        $list = Invoke-Http -Url "$gw/api/v1/orders?pageSize=100" -Headers $auth
+        if ($list.Status -ne 200) { Check "list the customer's orders" $false "HTTP $($list.Status)"; return }
+        $orders = @(($list.Body | ConvertFrom-Json).items | Where-Object { $_.status -ne "Cancelled" })
+        $waiting = 0
+        $freedThisPass = 0
+        foreach ($o in $orders) {
+            $t = Invoke-Http -Url "$gw/api/v1/deliveries/$($o.id)/track" -Headers $auth
+            if ($t.Status -ne 200) { $waiting++; continue }
+            $d = $t.Body | ConvertFrom-Json
+            if ($d.status -eq "Delivered") { continue }
+            Start-Sleep -Seconds 3   # the credential endpoints allow 5 logins per 10 s per IP
+            $riderToken = Get-UserToken "$($d.agentName.ToLower()).rider@tadka.test"
+            if (-not $riderToken) { Check "log in as rider $($d.agentName)" $false "no rider login for order $($o.id.Substring(0,8))" -WarnOnly; continue }
+            $rAuth = @{ Authorization = "Bearer $riderToken" } + $origin
+            $ok = $true
+            if ($d.status -eq "Assigned") { $a = Invoke-Http -Method PATCH -Url "$gw/api/v1/deliveries/$($o.id)/status" -Headers $rAuth -Body '{"status":"PickedUp"}'; $ok = ($a.Status -eq 204) }
+            $b = Invoke-Http -Method PATCH -Url "$gw/api/v1/deliveries/$($o.id)/status" -Headers $rAuth -Body '{"status":"Delivered"}'
+            Check "free rider $($d.agentName) (order $($o.id.Substring(0,8)))" ($ok -and $b.Status -eq 204) "was $($d.status), Delivered HTTP $($b.Status)"
+            if ($ok -and $b.Status -eq 204) { $freed++; $freedThisPass++ }
+        }
+        if ($waiting -eq 0) { break }
+        if ($pass -lt 4) { Write-Host "  ...$waiting order(s) are waiting for a rider; going round again in 20 s" -ForegroundColor DarkGray; Start-Sleep -Seconds 20 }
+    }
+    if ($freed -eq 0 -and $waiting -eq 0) { Check "riders" $true "nothing to free: every order is already Delivered" }
+    if ($waiting -gt 0) { Check "orders still waiting for a rider" $false "$waiting order(s) never got a rider" -WarnOnly }
+}
+
 Write-Host "`n=== Tadka cloud-check: $gw ===" -ForegroundColor Cyan
 $started = Get-Date
+
+if ($FreeRiders) {
+    Write-Host "`n-- Freeing the riders --" -ForegroundColor Cyan
+    Invoke-FreeRiders
+    Show-Summary
+}
 
 if ($AutoscaleOnly) {
     Write-Host "`n-- Autoscaling only --" -ForegroundColor Cyan
