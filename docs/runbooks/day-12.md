@@ -719,10 +719,189 @@ The realm (`infra/keycloak/tadka-realm.json`) also defines the three riders (`su
 
 ---
 
-## 10. Deferred, not run here: the live Azure cloud walk (ADR-064)
+## 10. The live Azure walk: commands to run on Day 12 (ADR-064)
 
-The teaching script's Segment 7 walks a *real*, currently deployed Azure Container Apps stack (a Front Door CDN cache hit, a private Postgres, counting the hops through the platform's own Envoy sidecars, the SSE-bypasses-the-CDN pattern). That is real cloud infrastructure that costs real money and needs the instructor's own Azure credentials and a pre-class `cloud-up.ps1 -Mode basic` run, so it is **not** part of running this runbook, and **nothing in this section was executed live**. If you have that stack up, see `deploy/README.md`, `docs/adrs/064-live-cloud-deployment-azure-container-apps.md`, and `docs/runbooks/azure-getting-started.md` for the one-time setup. Run `cloud-down.ps1` afterwards.
+The last ten minutes of Day 12 show the same system running on **real Azure**: one public entry, services you cannot reach from the internet, a private database, and a bill running on the meter. This section is the list of commands, in the order you run them. It is for the **instructor only**. Students see the result, not the Terraform.
 
+- **It costs real money.** Planning estimate for a 4-hour `basic` session: about Rs 50 to 150 (an estimate, not a measured bill; the real figure is on Cost Management a day later, see 10.4).
+- **You need your own Azure account**, logged in with `az login`. First time ever? Do [`azure-getting-started.md`](azure-getting-started.md) first, then come back here.
+- The `cloud-*.ps1` scripts are **PowerShell**. From Git Bash, run them as `powershell.exe -NoProfile -File ./scripts/<name>.ps1 <arguments>`. The `az`, `terraform` and `curl` commands below work in both shells, and each block shows both.
+
+### 10.1 Which variant do you have?
+
+| Your subscription | `cloud-up` flag | What you can show |
+|---|---|---|
+| Pay-as-you-go | none (Front Door is on) | all five beats below, including the CDN cache hit |
+| **Free Trial or Student** | **`-NoFrontDoor`** | beats 2 to 5. Beat 1 (the CDN hit) cannot be shown: Azure refuses Front Door on these subscriptions (`Free Trial and Student account is forbidden for Azure Frontdoor resources`). The gateway URL is the public entry point. |
+
+### 10.2 Before class: start 45 minutes ahead
+
+**Step 1. Check who you are and the alert email.** The email must be a real address with an `@`; `cloud-up` stops at once if it is not. A window that was open when you ran `setx` keeps the old value, so use a new window.
+```powershell
+az account show --query "{subscription:name, user:user.name}" -o table
+$env:TADKA_ALERT_EMAIL
+```
+```bash
+az account show --query "{subscription:name, user:user.name}" -o table
+echo "$TADKA_ALERT_EMAIL"
+```
+
+**Step 2. Bring the session up.** From the repository root. Pass the email explicitly so a stale environment variable cannot interfere. `-AutoDownAfterHours` registers a backstop that deletes everything at that time if you forget; pick a time well after class ends.
+```powershell
+./scripts/cloud-up.ps1 -Mode basic -AlertEmail you@example.com -AutoDownAfterHours 6
+./scripts/cloud-up.ps1 -Mode basic -AlertEmail you@example.com -AutoDownAfterHours 6 -NoFrontDoor   # Free Trial or Student
+```
+```bash
+powershell.exe -NoProfile -File ./scripts/cloud-up.ps1 -Mode basic -AlertEmail you@example.com -AutoDownAfterHours 6 -NoFrontDoor
+```
+Leave the window alone until it prints **`SMOKE OK`** and **`Tadka is live (basic)`**. Allow 15 to 25 minutes from nothing (the planning figure; the Container Apps environment alone took 4 minutes 49 seconds when measured). A re-run that only has to finish a few resources took about 2 minutes. If it stops partway, read the red error above `terraform apply failed`, fix that, and **run the same command again**; it carries on from where it stopped (see Troubleshooting in [`cloud-deploy.md`](cloud-deploy.md)).
+
+**Step 3. Check that everything works.** Open a **new** PowerShell window in the **same clone** you ran `cloud-up` from (it reads the gateway address from that clone's Terraform state). About a minute.
+```powershell
+./scripts/cloud-check.ps1
+```
+```bash
+powershell.exe -NoProfile -File ./scripts/cloud-check.ps1
+```
+Every line should be `PASS`. On a `-NoFrontDoor` session the Front Door line is `SKIP`, and the log lines may `SKIP` if Azure's log command fails; neither is a problem. It exits with code 1 if anything `FAIL`ed.
+
+**Step 4. Free the riders.** Only **three riders** are seeded, and an order keeps its rider until it is delivered. `cloud-up`'s smoke test and every demo order you place leave one rider busy, so after a few runs new orders wait for a rider and the live demo stalls. This delivers every open order of the demo customer and puts the riders back. Run it after any re-run of `cloud-up`, and again just before class:
+```powershell
+./scripts/cloud-check.ps1 -FreeRiders
+```
+```bash
+powershell.exe -NoProfile -File ./scripts/cloud-check.ps1 -FreeRiders
+```
+A second run prints `nothing to free`.
+
+**Step 5. Prepare a token and an order** for the live-tracking beat, so you are not typing during class. This order keeps one rider busy until you run Step 4 again.
+```powershell
+$gw = terraform -chdir=deploy/azure output -raw gateway_url
+$fd = terraform -chdir=deploy/azure output -raw front_door_url      # empty on a -NoFrontDoor session
+$BODY = '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":2}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.93,"longitude":77.61}}'
+$TOKEN = (Invoke-RestMethod "$gw/api/v1/auth/login" -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+$ORDER = (Invoke-RestMethod "$gw/api/v1/orders" -Method Post -Headers @{Authorization="Bearer $TOKEN"} -ContentType "application/json" -Body $BODY).id
+$ORDER
+```
+```bash
+gw=$(terraform -chdir=deploy/azure output -raw gateway_url)
+fd=$(terraform -chdir=deploy/azure output -raw front_door_url)     # empty on a -NoFrontDoor session
+BODY='{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":2}],"deliveryAddress":{"line1":"x","line2":"y","city":"Bangalore","pincode":"560066","latitude":12.93,"longitude":77.61}}'
+TOKEN=$(curl -s -X POST $gw/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+ORDER=$(curl -s -X POST $gw/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/')
+echo "$ORDER"
+```
+
+**Step 6. Open three tabs:** the public URL in a browser (`$fd`, or `$gw` on a `-NoFrontDoor` session), the Azure portal on the resource group `rg-tadka-session`, and [`docs/diagrams/day-12-azure-deployment.md`](../diagrams/day-12-azure-deployment.md). Note the time: the bill starts now.
+
+### 10.3 In class: the five beats
+
+**Beat 1. The CDN hit (2 minutes). Front Door sessions only.** The first request is a cache miss and the second is served by the edge, so it never reaches Tadka. This is Day 6's menu cache, moved out of your laptop onto a server near the user. On a `-NoFrontDoor` session skip this beat in one sentence and go to beat 2.
+```powershell
+curl.exe -sI "$fd/api/v1/restaurants" | findstr /i x-cache
+curl.exe -sI "$fd/api/v1/restaurants" | findstr /i x-cache
+```
+```bash
+curl -sI "$fd/api/v1/restaurants" | grep -i x-cache
+curl -sI "$fd/api/v1/restaurants" | grep -i x-cache
+```
+Expect `TCP_MISS`, then `TCP_HIT`. **Not run live yet** (it needs Front Door, which a Free Trial cannot create).
+
+**Beat 2. Match every box to the Compose file you know (2 minutes).** In the portal, open the resource group and point at each box. These commands show the same thing in the terminal:
+```powershell
+az resource list -g rg-tadka-session -o table
+$pg = terraform -chdir=deploy/azure output -raw postgres_server
+az postgres flexible-server show -g rg-tadka-session -n $pg --query "{server:name, publicAccess:network.publicNetworkAccess, sku:sku.name, version:version}" -o json
+az postgres flexible-server db list -g rg-tadka-session -s $pg --query "[].name" -o tsv
+```
+```bash
+az resource list -g rg-tadka-session -o table
+pg=$(terraform -chdir=deploy/azure output -raw postgres_server)
+az postgres flexible-server show -g rg-tadka-session -n $pg --query "{server:name, publicAccess:network.publicNetworkAccess, sku:sku.name, version:version}" -o json
+az postgres flexible-server db list -g rg-tadka-session -s $pg --query "[].name" -o tsv
+```
+What to point at:
+- The four local database containers are **one** Flexible Server with four databases: `tadka`, `tadka_payment`, `tadka_delivery`, `tadka_restaurant` (plus Azure's own system databases in the list). Four servers would be four bills; the isolation here is logical, not physical.
+- **`publicAccess: Disabled`.** The database has no public address. It sits in a private subnet and only the apps can reach it (Day 10: the data tier is never public).
+- `kafka` and `redis` are container apps. `Tadka.Gateway` is the `gateway` app. The four services are four more apps. There is **no separate load balancer box**: the Container Apps ingress is the load balancer.
+- The region is Central India. Phone numbers and addresses are personal data (Day 10), so keeping them in India is the safe default.
+
+Ask the room: "where is the load balancer in this list?" It exists, but you cannot see it. On AWS it would be a separate ALB with its own bill.
+
+**Beat 3. Count the hops (2 minutes).** Draw it on the board before showing anything, because response headers will not show it: the response carries only `server: Kestrel`.
+
+| Path | Boxes | Hops |
+|---|---|---|
+| With Front Door | client, Front Door, Envoy (the Container Apps ingress), gateway, **Envoy**, restaurant, Postgres | 7 boxes, **6 hops** |
+| `-NoFrontDoor` | client, Envoy, gateway, **Envoy**, restaurant, Postgres | 6 boxes, **5 hops** |
+
+A hop is an arrow, not a box. People count the boxes they can see and miss the second Envoy: on Container Apps a service-to-service call also goes through the platform's proxy. Every hop adds a little latency, which is the reason the order's hot path never calls Restaurant (the local read model from Demo 1). You can show what the first hop alone costs:
+```powershell
+curl.exe -s -o NUL -w "dns %{time_namelookup}s  connect %{time_connect}s  tls %{time_appconnect}s  first-byte %{time_starttransfer}s  total %{time_total}s\n" "$gw/api/v1/restaurants"
+```
+```bash
+curl -s -o /dev/null -w "dns %{time_namelookup}s  connect %{time_connect}s  tls %{time_appconnect}s  first-byte %{time_starttransfer}s  total %{time_total}s\n" "$gw/api/v1/restaurants"
+```
+Measured from a laptop in India, twice: total 0.09 s and 0.13 s for a warm read, of which the connection and TLS setup are most. Your number will differ.
+
+**Beat 4. Only the gateway is public, and live tracking goes around the CDN (3 minutes).**
+
+4a. Which apps have a public address:
+```powershell
+az containerapp list -g rg-tadka-session --query "[].{app:name, public:properties.configuration.ingress.external}" -o table
+```
+```bash
+az containerapp list -g rg-tadka-session --query "[].{app:name, public:properties.configuration.ingress.external}" -o table
+```
+Only `gateway` says `True`. The other seven say `False`.
+
+4b. Payment has no public door, and even through the gateway it asks for its own token (the gateway is not the trust boundary, Day 11). Expect `401`:
+```powershell
+curl.exe -s -o NUL -w "%{http_code}\n" "$gw/api/v1/payments/charge" -X POST -H "Content-Type: application/json" -d "{}"
+```
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" "$gw/api/v1/payments/charge" -X POST -H "Content-Type: application/json" -d '{}'
+```
+
+4c. Live tracking. The first events arrive at once (the order's current status), then the cursor waits with the connection still open. Press Ctrl+C to stop.
+```powershell
+curl.exe -N -H "Authorization: Bearer $TOKEN" "$gw/api/v1/orders/$ORDER/events"
+```
+```bash
+curl -N -H "Authorization: Bearer $TOKEN" "$gw/api/v1/orders/$ORDER/events"
+```
+On a Front Door session this goes to the **gateway** URL on purpose, not the Front Door URL. A CDN is built for short responses that can be cached, and it cuts a response that stays open for minutes, so the realtime path skips it. A common pattern in large apps: a separate hostname for realtime, outside the CDN. On a Front Door session the gateway URL answers `403` to everything except health checks and this stream (the origin lock); **not run live yet**.
+
+**Beat 5. The bill (1 minute).** No command. Ask the room to guess what today's class will cost, and write two or three guesses on the board. All of this is on the meter right now. The real figure is on Cost Management about a day later, and the Day 16 session compares it with their guesses.
+
+### 10.4 After class
+
+```powershell
+./scripts/cloud-down.ps1
+```
+```bash
+powershell.exe -NoProfile -File ./scripts/cloud-down.ps1
+```
+Wait for **`Resource group rg-tadka-session is GONE`**. Measured: **24.5 minutes**, so do not close the window early. If `terraform destroy` fails, run it again with `-Force`, which deletes the resource group directly. Then confirm it yourself, because this bills by the hour:
+```powershell
+az group exists --name rg-tadka-session
+```
+```bash
+az group exists --name rg-tadka-session
+```
+It must print `false`; also glance at the portal. The next day, open Cost Management for that group and write the real figure into [`docs/cost-model.md`](../cost-model.md).
+
+### 10.5 If the cloud is not up when class starts
+
+Do not debug Azure in front of the room. Show the diagram ([`day-12-azure-deployment.md`](../diagrams/day-12-azure-deployment.md)) and the decision in ADR-064, say the live run is on the next session, and run `cloud-down.ps1` afterwards so a half-built environment does not bill overnight.
+
+### 10.6 What has and has not been run live
+
+**Run live in PowerShell** on an Azure Free Trial subscription with `-NoFrontDoor`: `cloud-up`, `cloud-check` (31 or 32 PASS, depending on whether the log checks could read the logs), `cloud-check -FreeRiders`, the token and order setup, beat 2's `az` commands, beat 3's timing command, beats 4a to 4c, and `cloud-down` (24.5 minutes).
+
+**Run live in Git Bash:** the token and order setup, the Payment `401`, the SSE stream, and `cloud-check` through `powershell.exe -NoProfile -File`. The `az`, `terraform` and `cloud-up` / `cloud-down` commands in the bash blocks were not run from Git Bash; they are the same programs and arguments as the PowerShell versions.
+
+**Not run live yet:** everything that needs Front Door (beat 1, the origin lock, the WAF rate limit), `-Mode ha`, and whether Application Insights receives telemetry from every service.
 ---
 
 ## 11. Run the tests
