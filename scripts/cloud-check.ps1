@@ -139,6 +139,19 @@ export default function () { http.get(__ENV.GW + '/api/v1/restaurants'); }
     # (deploy/azure/apps.tf) or run Day 16 k6 stress.js from a machine closer to the region.
     Check "gateway scaled out under load" ($peak -gt $before) "replicas $before -> $peak (rule: 30 concurrent requests per replica, max 5)" -WarnOnly
 }
+# How many of the three seeded riders are held by the demo customer's undelivered orders (an order that has
+# no rider yet is not counted). Riders held by OTHER customers' orders cannot be seen from here.
+function Get-BusyRiderCount([hashtable]$Auth) {
+    $list = Invoke-Http -Url "$gw/api/v1/orders?pageSize=100" -Headers $Auth
+    if ($list.Status -ne 200) { return -1 }
+    $busy = 0
+    foreach ($o in @(($list.Body | ConvertFrom-Json).items | Where-Object { $_.status -ne "Cancelled" })) {
+        $t = Invoke-Http -Url "$gw/api/v1/deliveries/$($o.id)/track" -Headers $Auth
+        if ($t.Status -eq 200 -and ($t.Body | ConvertFrom-Json).status -ne "Delivered") { $busy++ }
+    }
+    return $busy
+}
+
 # Only three riders are seeded and an order keeps its rider until it is Delivered (see -FreeRiders above).
 # For every open order of the demo customer: find its rider, log in as that rider, PickedUp then Delivered.
 # An order that has no rider yet is waiting for one; it gets one as soon as another is freed, so go round again.
@@ -231,6 +244,13 @@ if (-not $priya) {
     Write-Host "  Cannot continue the order checks without a login. Is the monolith (api) healthy?" -ForegroundColor Red
 } else {
     $auth = @{ Authorization = "Bearer $priya" } + $origin
+    # Only 3 riders exist. If earlier orders hold all of them, a new order cannot get one, and that says nothing
+    # about whether the deployment works. Find out first, say so, and skip the checks that need a rider.
+    $busyRiders = Get-BusyRiderCount $auth
+    $ridersBusy = ($busyRiders -ge 3)
+    if ($ridersBusy) {
+        Check "a rider is free for a new order" $false "all 3 riders are busy with $busyRiders undelivered orders. Not a deployment fault: run ./scripts/cloud-check.ps1 -FreeRiders, then check again" -WarnOnly
+    }
     $key = [guid]::NewGuid().ToString()
     $body = New-DemoOrderBody
     $post = Invoke-Http -Method POST -Url "$gw/api/v1/orders" -Headers ($auth + @{ "Idempotency-Key" = $key }) -Body $body
@@ -250,12 +270,16 @@ if (-not $priya) {
         Check "order Confirmed (Kafka + Payment)" $ok "status=$status"
 
         $rider = ""
-        $ok = Wait-Until {
-            $t = Invoke-Http -Url "$gw/api/v1/deliveries/$orderId/track" -Headers $auth
-            if ($t.Status -eq 200) { $script:rider = ($t.Body | ConvertFrom-Json).agentName }
-            [bool]$script:rider
-        } -TimeoutSec 90 -EverySec 3 -What "rider assignment"
-        Check "rider assigned (Delivery)" $ok $(if ($ok) { "rider=$rider" } else { "no rider within 90 s. Only 3 riders are seeded and each undelivered order keeps one busy; deliver or wait for earlier orders to free them" })
+        if ($ridersBusy) {
+            Skip "rider assigned (Delivery)" "all riders are busy (see the warning above), so there is nothing to wait for"
+        } else {
+            $ok = Wait-Until {
+                $t = Invoke-Http -Url "$gw/api/v1/deliveries/$orderId/track" -Headers $auth
+                if ($t.Status -eq 200) { $script:rider = ($t.Body | ConvertFrom-Json).agentName }
+                [bool]$script:rider
+            } -TimeoutSec 90 -EverySec 3 -What "rider assignment"
+            Check "rider assigned (Delivery)" $ok $(if ($ok) { "rider=$rider" } else { "no rider within 90 s although fewer than 3 riders looked busy. Check the Delivery app: az containerapp logs show -g $rg -n delivery. Riders held by another customer's orders are not counted here" })
+        }
 
         $p = Invoke-Http -Url "$gw/api/v1/payments/$orderId" -Headers $auth
         $pStatus = if ($p.Status -eq 200 -and $p.Body) { ($p.Body | ConvertFrom-Json).status } else { "" }
@@ -273,7 +297,12 @@ if (-not $priya) {
             $rh = @{ Authorization = "Bearer $rahul" } + $origin
             $x = Invoke-Http -Url "$gw/api/v1/orders/$orderId" -Headers $rh;               Check "other customer reads the order -> 403" ($x.Status -eq 403) "HTTP $($x.Status)"
             $x = Invoke-Http -Url "$gw/api/v1/payments/$orderId" -Headers $rh;             Check "other customer reads the payment -> 403" ($x.Status -eq 403) "HTTP $($x.Status)"
-            $x = Invoke-Http -Url "$gw/api/v1/deliveries/$orderId/track" -Headers $rh;     Check "other customer tracks the rider -> 403" ($x.Status -eq 403) "HTTP $($x.Status)"
+            if ($rider) {
+                $x = Invoke-Http -Url "$gw/api/v1/deliveries/$orderId/track" -Headers $rh;     Check "other customer tracks the rider -> 403" ($x.Status -eq 403) "HTTP $($x.Status)"
+            } else {
+                # With no rider assigned, tracking answers 404 to everyone, so ownership cannot be tested.
+                Skip "other customer tracks the rider -> 403" "no rider was assigned, so there is nothing to track"
+            }
         } else { Skip "other-customer checks" "rahul login failed" }
         $x = Invoke-Http -Method POST -Url "$gw/api/v1/payments/charge" -Headers $auth -Body (@{ orderId = $orderId; amount = 1; currency = "INR" } | ConvertTo-Json)
         Check "customer runs a charge -> 403 (Admin only)" ($x.Status -eq 403) "HTTP $($x.Status)"

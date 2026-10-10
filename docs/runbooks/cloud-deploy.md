@@ -66,6 +66,9 @@ Start at [`azure-getting-started.md`](azure-getting-started.md) instead; it cove
       real order, checks security and the saga, and delivers the order so the rider is freed. Every line should say
       PASS (Front Door lines say SKIP on a `-NoFrontDoor` session). Add `-Burst` for the autoscaling test (needs `k6`).
       From another clone: `./scripts/cloud-check.ps1 -GatewayUrl https://<gateway-host>`.
+      Only three riders are seeded and every undelivered order keeps one busy (the `cloud-up` smoke test leaves one each
+      time). If they are all taken the check shows a **WARN**, not a FAIL; run `./scripts/cloud-check.ps1 -FreeRiders`
+      and check again.
 
 **T-15 min**
 - [ ] The script ended with `SMOKE OK`. If a check failed, it names the app: `az containerapp logs show -g rg-tadka-session -n <app> --follow`.
@@ -225,5 +228,6 @@ k6 run -e BASE_URL=$fd k6/stress.js     # watch: az containerapp replica list -g
 | Api 500s with "too many connections" | replicas x pool > B1ms limit | lower `max_replicas` or pool sizes |
 | `cloud-up` stops partway with `terraform apply failed` | one resource was refused after others were built; the error text is printed above the failure | fix the cause named in the error, then **run the same `cloud-up` command again**: Terraform keeps what it built and carries on from there. Do not delete the group first. If you are abandoning the session, run `./scripts/cloud-down.ps1`. |
 | `400: Notification cannot have invalid email addresses` (budget) | `TADKA_ALERT_EMAIL` (or `-AlertEmail`) is not an email address, for example `name.onmicrosoft.com` | `cloud-up` now checks this before building. Fix it with `setx TADKA_ALERT_EMAIL you@example.com`, reopen the terminal, and run `cloud-up` again (or pass `-AlertEmail you@example.com`) |
+| `cloud-check.ps1` shows `WARN  a rider is free for a new order` and skips the rider checks | all 3 seeded riders are held by earlier undelivered orders (smoke tests, demo orders). The deployment is fine. | `./scripts/cloud-check.ps1 -FreeRiders`, then check again |
 | `cloud-check.ps1` fails straight away with a Terraform error about outputs or state | it was run from a different clone than `cloud-up` (the gateway address comes from that clone's Terraform state), or `cloud-up` is still running | run it from the same clone after `cloud-up` has finished, or pass `-GatewayUrl https://<gateway-host>` |
 | `terraform destroy` fails | lost/partial state | `./scripts/cloud-down.ps1 -Force` (deletes the resource group with az) |
