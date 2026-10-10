@@ -39,7 +39,9 @@ Start at [`azure-getting-started.md`](azure-getting-started.md) instead; it cove
    - First push creates the packages as **private**. Either make each package public once (GitHub →
      Packages → `tadka-<svc>` → Package settings → Change visibility → Public), or put a PAT with
      `read:packages` in `ghcr_username`/`ghcr_token` (a gitignored `deploy/azure/*.auto.tfvars` file).
-4. **Budget email.** `setx TADKA_ALERT_EMAIL you@example.com` (or pass `-AlertEmail` every time).
+4. **Budget email.** `setx TADKA_ALERT_EMAIL you@example.com` (or pass `-AlertEmail` every time), then reopen the
+   terminal. It must be a real address with an `@`; `cloud-up` rejects anything else before it builds anything.
+   Check it with `$env:TADKA_ALERT_EMAIL`.
 
 ## Per-session checklist
 
@@ -57,6 +59,13 @@ Start at [`azure-getting-started.md`](azure-getting-started.md) instead; it cove
       runs `cloud-down.ps1 -Force` at that time, in case you forget. Pick a time well after class ends.
       Day 14 optional: add `-WithManagedRedis` to also deploy Azure Managed Redis (HA on) next to Sentinel,
       for a side-by-side comparison. The apps keep using Sentinel. Adds hourly cost to that session only.
+
+**T-30 min (once `cloud-up` has finished)**
+- [ ] Run the end-to-end check from a **new** PowerShell window, in the **same clone** you ran `cloud-up` from (it reads
+      the gateway address from that clone's Terraform state): `./scripts/cloud-check.ps1`. About a minute. It places one
+      real order, checks security and the saga, and delivers the order so the rider is freed. Every line should say
+      PASS (Front Door lines say SKIP on a `-NoFrontDoor` session). Add `-Burst` for the autoscaling test (needs `k6`).
+      From another clone: `./scripts/cloud-check.ps1 -GatewayUrl https://<gateway-host>`.
 
 **T-15 min**
 - [ ] The script ended with `SMOKE OK`. If a check failed, it names the app: `az containerapp logs show -g rg-tadka-session -n <app> --follow`.
@@ -214,4 +223,7 @@ k6 run -e BASE_URL=$fd k6/stress.js     # watch: az containerapp replica list -g
 | SSE stream stops after a while via Front Door | CDN origin timeout on a long-lived response | use the gateway URL for SSE (by design) |
 | `ImagePullBackOff`-style errors | GHCR packages private | make them public or set `ghcr_token` |
 | Api 500s with "too many connections" | replicas x pool > B1ms limit | lower `max_replicas` or pool sizes |
+| `cloud-up` stops partway with `terraform apply failed` | one resource was refused after others were built; the error text is printed above the failure | fix the cause named in the error, then **run the same `cloud-up` command again**: Terraform keeps what it built and carries on from there. Do not delete the group first. If you are abandoning the session, run `./scripts/cloud-down.ps1`. |
+| `400: Notification cannot have invalid email addresses` (budget) | `TADKA_ALERT_EMAIL` (or `-AlertEmail`) is not an email address, for example `name.onmicrosoft.com` | `cloud-up` now checks this before building. Fix it with `setx TADKA_ALERT_EMAIL you@example.com`, reopen the terminal, and run `cloud-up` again (or pass `-AlertEmail you@example.com`) |
+| `cloud-check.ps1` fails straight away with a Terraform error about outputs or state | it was run from a different clone than `cloud-up` (the gateway address comes from that clone's Terraform state), or `cloud-up` is still running | run it from the same clone after `cloud-up` has finished, or pass `-GatewayUrl https://<gateway-host>` |
 | `terraform destroy` fails | lost/partial state | `./scripts/cloud-down.ps1 -Force` (deletes the resource group with az) |
