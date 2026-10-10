@@ -114,6 +114,19 @@ works, `cloud-up.ps1` throws if neither is present. **The alert itself is not a 
 Management data lags 8-24 hours, so it emails you the day after a forgotten teardown, never during class.
 Step 8's teardown is the real control.
 
+**The value must be a real email address, with an `@`.** `cloud-up.ps1` now checks this first and stops in a
+second. Before that check existed, a wrong value was accepted, the whole environment was built, and Azure
+refused the budget alert only at the very end (`400: Notification cannot have invalid email addresses`). The
+usual cause is a wrong value saved earlier with `setx`, for example the tenant domain
+`yourname.onmicrosoft.com` instead of `you@example.com`. See what your terminal holds:
+```powershell
+$env:TADKA_ALERT_EMAIL                                          # what this window sees
+[Environment]::GetEnvironmentVariable("TADKA_ALERT_EMAIL","User")   # what is saved for new windows
+```
+To fix a wrong value, run `setx TADKA_ALERT_EMAIL you@example.com` again, then **close and reopen the terminal**
+(the old value stays in the window you already have open). Passing `-AlertEmail you@example.com` on the command
+always wins over the saved value.
+
 ## 6. The first real run
 
 ```powershell
