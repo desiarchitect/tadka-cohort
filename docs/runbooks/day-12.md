@@ -772,7 +772,7 @@ Every line should be `PASS`. On a `-NoFrontDoor` session the Front Door line is 
 ```bash
 powershell.exe -NoProfile -File ./scripts/cloud-check.ps1 -FreeRiders
 ```
-A second run prints `nothing to free`.
+A second run prints `nothing to free`. If you forget this step, `cloud-check` does **not** fail: it prints one `WARN` (`a rider is free for a new order`), skips the checks that need a rider, and finishes in under 20 seconds. Run `-FreeRiders` and check again. It counts the demo customer's orders only; if riders were somehow held by another customer's orders it cannot see that, and the check then fails with `no rider within 90 s`.
 
 **Step 5. Prepare a token and an order** for the live-tracking beat, so you are not typing during class. This order keeps one rider busy until you run Step 4 again.
 ```powershell
