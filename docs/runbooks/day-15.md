@@ -231,9 +231,9 @@ In Day 15, students pair up for two 15-minute mock interview rounds.
 
 ### Timing Protocol
 
-- Round 1 (15 min): Student A is Candidate, Student B is Interviewer (10 min interview + 5 min peer feedback).
-- Switch (1 min): Swap roles.
-- Round 2 (15 min): Student B is Candidate, Student A is Interviewer (10 min interview + 5 min peer feedback).
+1. Round 1 (15 min): Student A is Candidate, Student B is Interviewer (10 min interview + 5 min peer feedback).
+2. Switch (1 min): Swap roles.
+3. Round 2 (15 min): Student B is Candidate, Student A is Interviewer (10 min interview + 5 min peer feedback).
 
 ### 100-Point Peer Feedback Rubric
 
@@ -249,9 +249,12 @@ Scores are for peer guidance and feedback only (no instructor grades):
 | **Communication & Navigation** | 10 pts | Drives the conversation, checks in with interviewer, structures thoughts clearly |
 
 Score bands:
-- 80 to 100: Ready for senior architect and staff system design loops.
-- 65 to 79: Solid fundamentals; needs deeper explanation of failure modes.
-- Below 65: Needs more practice driving the 45-minute structure and stating trade-offs.
+
+| Score Range | Readiness Level |
+|---|---|
+| **80 to 100** | Ready for senior architect and staff system design loops. |
+| **65 to 79** | Solid fundamentals; needs deeper explanation of failure modes. |
+| **Below 65** | Needs more practice driving the 45-minute structure and stating trade-offs. |
 
 ---
 
