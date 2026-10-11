@@ -1,30 +1,26 @@
-# Day 14 changelog (since Day 13)
+# Day 15 changelog (since Day 14)
 
-`git checkout day-14`. Previous branch: `day-13`.
+`git checkout day-15`. Previous branch: `day-14`.
 
 ## We learned
 
-- Ordering→Payment is **Kafka** (Day 9). The circuit breaker goes on the real **sync** dep: **Payment→gateway**.
-- Retry is **transport-only**. Declines (`PaymentDeclinedException`) are never retried. `Outage` ≠ `Failing`.
-- **Buffer mode vs Compensate mode (Fix 2 / ADR-043):** on gateway outage, Compensate cancels permanently; Buffer mode deletes the pending payment row and seeks back the Kafka offset so the order retries once the gateway recovers.
-- **Graceful degradation:** Redis/replica = performance (fall through). Postgres/money = correctness (fail honest). Never stale money.
+- An interview is an ADR performed in 45 minutes: Clarify (5) → Estimate (5) → HLD (10) → Deep Dives (15) → Bottlenecks/Failure (7) → Wrap (3).
+- Map every system design claim to runnable evidence in Tadka: idempotency (Day 4), outbox catch-up (Day 9), geo dispatch (Day 11), local read models (Day 12), distributed tracing (Day 13), resilience / circuit breakers (Day 14).
+- Breadth topics and patterns: full-text search / inverted indexes, video streaming CDN/HLS, OLAP/CDC rollups, object storage pre-signed URLs, web crawling, and CRDT counters.
 
 ## Architecture
 
-- Polly complete: bulkhead → retry (jittered, transport-only) → circuit breaker → 2s timeout.
-- Load shedding now drops order history and invoices (explicit sheddable paths win over the critical `/api/v1/orders` prefix) while place-order, payment and health stay admitted; Restaurant's Redis client has 500 ms timeouts so a Redis outage costs under a second, not five.
-- `Payment:OnGatewayUnavailable` lever (`Compensate` | `Buffer`).
-- Backpressure / load-shed levers exist (`Backpressure:MaxConcurrent`, `LoadShed:Enabled`).
+- Teaching & interview-transfer milestone: no application code changes.
+- System operates the canonical 4 services + gateway with full persistence, messaging, observability, and resilience.
+- Breadth toys verified in `toydemo/` (13 toys across Days 03, 06, 09, 15).
 
-## Code vs Day 13
+## Code vs Day 14
 
 | Area | What changed |
 |---|---|
-| `PaymentResiliencePipeline` | Retry + breaker (ADR-043) |
-| `PaymentGatewayUnavailableException` vs `PaymentDeclinedException` | Transport vs business |
-| `FakePaymentGateway` | `Outage` behavior |
-| `OnGatewayUnavailable` | `Compensate` vs `Buffer` mode + consumer seek-back |
-| `tadka.payment.circuit_transitions` | Metric |
-| `PaymentServiceGatewayUnavailableTests` | 4 unit tests for Buffer/Compensate/ghost-row protection |
+| Application code | None (zero code changes; teaching-only milestone) |
+| Documentation | New student runbook `docs/runbooks/day-15.md` |
+| ADR Canon | ADRs 001 through 067 active in repo (66 ADR files) |
+| Tests | 207/207 tests passing across all 5 test projects |
 
-ADRs **043, 044**.
+ADRs through **067**.
