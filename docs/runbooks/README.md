@@ -1,11 +1,11 @@
-# Tadka — Student Runbooks (Day 1 → Day 16)
+# Tadka: Student Runbooks (Day 1 → Day 16)
 
-Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself**. One file per day; each reflects that day's branch state (the system grows as you go — Day 3 has no cache/replica yet, Day 5 adds the replica, Day 6 adds Redis, Day 12 extracts Restaurant). Every architectural move is *earned by a failure you can reproduce* — these runbooks show you how.
+Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself**. One file per day; each reflects that day's branch state (the system grows as you go: Day 3 has no cache/replica yet, Day 5 adds the replica, Day 6 adds Redis, Day 12 extracts Restaurant). Every architectural move is *earned by a failure you can reproduce*, and these runbooks show you how.
 
-**Confused why Day 6 ≠ Day 12?** Read **[DAY-EVOLUTION.md](DAY-EVOLUTION.md)** first — the branch map and invariants. Inbox rule: **[INBOX-DISCIPLINE.md](INBOX-DISCIPLINE.md)**. Full stack: `main` or `day-16`. Smoke: `scripts/cohort-smoke.ps1`. Instructor walkthrough: `scripts/demo-break-kit.ps1`.
+**Confused why Day 6 ≠ Day 12?** Read **[DAY-EVOLUTION.md](DAY-EVOLUTION.md)** first for the branch map and invariants. Inbox rule: **[INBOX-DISCIPLINE.md](INBOX-DISCIPLINE.md)**. Full stack: `main` or `day-16`. Smoke: `scripts/cohort-smoke.ps1`. Instructor walkthrough: `scripts/demo-break-kit.ps1`.
 
 | Day | What you build & verify | Runbook |
-|----|----|----|
+|---|---|---|
 | 1 | Scaffold + `/health`; Copilot setup | [day-01.md](day-01.md) |
 | 2 | Domain model + schema-per-domain (5 schemas, migration) | [day-02.md](day-02.md) |
 | 3 | Full REST API `/api/v1` (14 endpoints), server-side pricing, state machine, RFC 7807 errors | [day-03.md](day-03.md) |
@@ -18,18 +18,19 @@ Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself*
 | 10 | JWT + RBAC + resource ownership + PII (masking, right-to-be-forgotten) | [day-10.md](day-10.md) |
 | 11 | Extract Delivery (3rd service) + YARP gateway + Redis-geo + PgBouncer | [day-11.md](day-11.md) |
 | 12 | Extract Restaurant (4th service) + local read model + zero-downtime backfill | [day-12.md](day-12.md) |
-| 13 | Observability for the 4-service system: OpenTelemetry, Jaeger, Prometheus, Grafana, trace propagation | [day-13.md](day-13.md) |
+| 13 | Observability for 4-service system: OpenTelemetry, Jaeger, Prometheus, Grafana, trace propagation | [day-13.md](day-13.md) |
 | 14 | Resilience & Chaos Engineering: circuit breaker, retry, Buffer vs Compensate, Redis fall-through | [day-14.md](day-14.md) |
 | 15 | System Design Masterclass: 45-min framework, Tadka as evidence, mock interview kit, breadth toys | [day-15.md](day-15.md) |
+| 16 | Load testing, cost modeling, Azure cloud deploy, and portfolio capstone | [day-16.md](day-16.md) |
 
-> Consolidated demo index (issue → fix → trade-off → captured numbers): the instructor pack's `cohort-prep/DEMOS.md`.
+> Consolidated demo index (issue → fix → trade-off → captured numbers): instructor pack in `cohort-prep/DEMOS.md`.
 
 ---
 
 ## Prerequisites (install once)
 
 - **Git**, **.NET 10 SDK** (`dotnet --version` → 10.x), **Docker Desktop** (running).
-- **Optional:** an HTTP GUI (the app ships **Scalar** at `https://localhost:7036/scalar/v2`), `k6` (Day 5 load test — `winget install GrafanaLabs.k6`), `psql`/`redis-cli` (or just use `docker exec`).
+- **Optional:** an HTTP GUI (the app ships **Scalar** at `https://localhost:7036/scalar/v2`), `k6` (load testing: `winget install GrafanaLabs.k6`), `psql`/`redis-cli` (or just use `docker exec`).
 
 ## One-time setup
 
@@ -38,7 +39,7 @@ git clone <tadka-repo-url> tadka
 cd tadka
 ```
 
-Each day is a **branch**. Switch to the day you're working on:
+Each day is a **branch**. Switch to the day you are working on:
 
 ```bash
 git checkout day-03      # day-01 … day-16 (each branch is that day's code + its runbook)
@@ -47,8 +48,8 @@ git checkout day-03      # day-01 … day-16 (each branch is that day's code + i
 ## The shape of every day
 
 ```bash
-docker compose up -d                      # start infra (Postgres; +replica Day 5; +Redis Day 6)
-dotnet run --project src/Tadka.Api        # builds, applies migrations, seeds, starts the API
+docker compose up -d                      # start infra (Postgres; +replica Day 5; +Redis Day 6; +Kafka Day 9)
+dotnet run --project src/Tadka.Api        # builds, applies migrations, seeds, starts API
 # → app on http://localhost:5224 (https 7036). Browse/try APIs at https://localhost:7036/scalar/v2
 dotnet test                               # from Day 4 on, runs the test suite (needs Docker for Testcontainers)
 ```
@@ -69,11 +70,11 @@ Stop the app with `Ctrl+C`. Reset the database completely with `docker compose d
 
 | Entity | Id | Note |
 |---|---|---|
-| Restaurant — Meghana Foods | `a1b2c3d4-0001-4000-8000-000000000001` | 6 menu items |
-| Restaurant — Truffles | `a1b2c3d4-0002-4000-8000-000000000002` | 5 items |
-| Restaurant — Vidyarthi Bhavan | `a1b2c3d4-0003-4000-8000-000000000003` | 5 items |
-| Menu item — Chicken Biryani (Meghana) | `b1b2c3d4-0001-4000-8000-000000000001` | ₹299 |
-| Customer — Priya Sharma | `c1b2c3d4-0001-4000-8000-000000000001` | use as `customerId` |
+| Restaurant: Meghana Foods | `a1b2c3d4-0001-4000-8000-000000000001` | 6 menu items |
+| Restaurant: Truffles | `a1b2c3d4-0002-4000-8000-000000000002` | 5 items |
+| Restaurant: Vidyarthi Bhavan | `a1b2c3d4-0003-4000-8000-000000000003` | 5 items |
+| Menu item: Chicken Biryani (Meghana) | `b1b2c3d4-0001-4000-8000-000000000001` | ₹299 |
+| Customer: Priya Sharma | `c1b2c3d4-0001-4000-8000-000000000001` | use as `customerId` |
 
 ## ⚠️ Windows PowerShell + curl
 
@@ -84,4 +85,4 @@ In **Windows PowerShell**, `curl` is an alias for `Invoke-WebRequest`, so `curl 
 - **First `/health` is slow** (~500–800 ms): EF model build + connection-pool warm-up + JIT. Hit it again for the real (single-digit ms) number.
 - **`docker compose up` says a container name is in use:** `docker rm -f <name>` then `up -d`, or `docker compose down` first.
 - **Port already in use (5224/5432):** stop the previous `dotnet run` / container.
-- **Migrations** run automatically at startup against the **primary**; you don't run `dotnet ef` yourself.
+- **Migrations** run automatically at startup against the **primary**; you do not run `dotnet ef` yourself.

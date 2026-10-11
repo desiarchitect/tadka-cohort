@@ -10,7 +10,7 @@ Instructor-only. Students never run this; they use the URL it prints. Three sess
 
 Students who want their own copy: [`self-deploy.md`](self-deploy.md) (optional, their own free account).
 
-Never done any of this before — no Azure account, no Terraform/CLI installed, never run `cloud-up.ps1`?
+Never done any of this before: no Azure account, no Terraform/CLI installed, never run `cloud-up.ps1`?
 Start at [`azure-getting-started.md`](azure-getting-started.md) instead; it covers everything before the
 "One-time prerequisites" section below.
 

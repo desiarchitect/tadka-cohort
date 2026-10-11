@@ -1,6 +1,6 @@
-// Tadka — HOT-KEY load profile (Day 6 / Day 14 stampede demo)
+// Tadka: HOT-KEY load profile (Day 6 / Day 14 stampede demo)
 //
-// ~80% of menu traffic hits ONE restaurant (Meghana Foods — the "celebrity"
+// ~80% of menu traffic hits ONE restaurant (Meghana Foods, the "celebrity"
 // flash-sale pattern). Use this AFTER invalidating that menu's Redis key so
 // every request misses at once, then compare with single-flight lock ON.
 //
@@ -12,11 +12,12 @@
 //   docker exec tadka-redis redis-cli DEL restaurant:a1b2c3d4-0001-4000-8000-000000000001:menu
 //   k6 run k6/hot-key.js
 //   k6 run -e HOT_SHARE=0.95 -e PEAK_VUS=100 k6/hot-key.js
+//   # Cloud with Front Door: pass -e FDID=<front_door_id>
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Rate, Trend, Counter } from 'k6/metrics';
-import { BASE_URL, browseErrors, menuLatency } from './lib.js';
+import { BASE_URL, ORIGIN_HEADERS, browseErrors, menuLatency, checkRateLimit, rateLimited } from './lib.js';
 
 const MEGHANA_ID = 'a1b2c3d4-0001-4000-8000-000000000001';
 const OTHER_IDS = [
@@ -46,6 +47,7 @@ export const options = {
   thresholds: {
     hotkey_errors: ['rate<0.15'],
     'http_req_duration{name:hot_menu}': ['p(99)<5000'],
+    rate_limited: ['count==0'], // rate limiter, not capacity: raise Gateway__RateLimitPerMinute
   },
 };
 
@@ -54,8 +56,10 @@ export default function () {
   const isHot = restaurantId === MEGHANA_ID;
 
   const menuRes = http.get(`${BASE_URL}/api/v1/restaurants/${restaurantId}/menu`, {
+    headers: ORIGIN_HEADERS,
     tags: { name: isHot ? 'hot_menu' : 'cold_menu' },
   });
+  checkRateLimit(menuRes);
 
   const ok = menuRes.status === 200;
   hotKeyErrors.add(!ok);
@@ -68,6 +72,6 @@ export default function () {
 
   check(menuRes, { 'menu 200': (r) => r.status === 200 });
 
-  // Short think time — this simulates a feed refresh storm, not leisurely browsing.
+  // Short think time: this simulates a feed refresh storm, not leisurely browsing.
   sleep(Math.random() * 0.5 + 0.1);
 }

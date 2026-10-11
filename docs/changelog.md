@@ -1,25 +1,29 @@
-# Day 15 changelog (since Day 14)
+# Day 16 changelog (since Day 15)
 
-`git checkout day-15`. Previous branch: `day-14`.
+`git checkout day-16`. Previous branch: `day-15`.
 
 ## We learned
 
-- An interview is an ADR performed in 45 minutes: Clarify (5) → Estimate (5) → HLD (10) → Deep Dives (15) → Bottlenecks/Failure (7) → Wrap (3).
-- Map every system design claim to runnable evidence in Tadka: idempotency (Day 4), outbox catch-up (Day 9), geo dispatch (Day 11), local read models (Day 12), distributed tracing (Day 13), resilience / circuit breakers (Day 14).
-- Breadth topics and patterns: full-text search / inverted indexes, video streaming CDN/HLS, OLAP/CDC rollups, object storage pre-signed URLs, web crawling, and CRDT counters.
+- Load testing verifies architectural hypotheses: smoke, average load, stress (finding the knee), spike (recovery), and hot-key (cache stampede).
+- Local loopback trap: virtual users sharing 127.0.0.1 trip the 120 req/min edge rate limiter. True capacity testing requires elevating rate limit thresholds.
+- Unit economics: infrastructure cost per 1,000 orders is an architectural decision. Monolith baseline (₹2.03) vs 4-service distributed baseline at 1 lakh/day (₹10.43) vs 10 lakh/day (₹2.93).
+- Live cloud deployment with Azure Container Apps (ADR-064): automated provisioning, private PostgreSQL networking, CDN caching, and rapid teardown.
+- Capstone portfolio: connecting architecture records, empirical load metrics, and cost economics into a cohesive defense.
 
 ## Architecture
 
-- Teaching & interview-transfer milestone: no application code changes.
+- Production capstone milestone: full empirical measurement and cloud verification.
 - System operates the canonical 4 services + gateway with full persistence, messaging, observability, and resilience.
-- Breadth toys verified in `toydemo/` (13 toys across Days 03, 06, 09, 15).
+- 16 Kafka topics (8 primary + 8 dead-letter queues) with SASL/SCRAM authentication.
+- k6 load test suite hardened against false rate-limiting knees.
 
-## Code vs Day 14
+## Code vs Day 15
 
 | Area | What changed |
 |---|---|
-| Application code | None (zero code changes; teaching-only milestone) |
-| Documentation | New student runbook `docs/runbooks/day-15.md` |
+| Load Testing | Hardened `k6/lib.js`, `k6/average-load.js`, `k6/stress.js`, `k6/spike.js`, `k6/hot-key.js`, and `k6/README.md` |
+| Application code | None (zero code changes; test harness and measurement milestone) |
+| Documentation | New student runbook `docs/runbooks/day-16.md`, updated `docs/architecture.md`, `docs/cost-model.md`, `README.md`, and `docs/runbooks/README.md` |
 | ADR Canon | ADRs 001 through 067 active in repo (66 ADR files) |
 | Tests | 207/207 tests passing across all 5 test projects |
 

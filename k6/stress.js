@@ -1,8 +1,8 @@
-// Tadka — STRESS test (Day 16) — THE HEADLINE DEMO
+// Tadka: STRESS test (Day 16): THE HEADLINE DEMO
 //
 // Keep climbing the concurrency until something breaks. Every system has a
 // breaking point; the only question is whether you know yours BEFORE the IPL
-// final does. We deliberately relax the latency threshold here — we are not
+// final does. We deliberately relax the latency threshold here: we are not
 // asserting the SLO, we are HUNTING for the knee: the VU count where p99
 // explodes, errors appear, and one resource saturates first.
 //
@@ -10,10 +10,10 @@
 //   - Grafana RED dashboard: where does p99 knee up? where do 5xx start?
 //   - Which saturates first? DB connection pool (Npgsql) / Kafka consumer lag /
 //     container memory. THAT first-to-fall resource is your real bottleneck.
-//   - Jaeger: open a slow trace at the knee — which span owns the latency?
+//   - Jaeger: open a slow trace at the knee: which span owns the latency?
 //
 // The captured breaking-point number (e.g. "p99 crossed 1s at ~N VUs; the
-// primary connection pool drained first") is the deliverable — not the script.
+// primary connection pool drained first") is the deliverable, not the script.
 //
 //   k6 run -e BASE_URL=http://localhost:8080 k6/stress.js
 //   k6 run -e MAX_VUS=400 k6/stress.js
@@ -35,6 +35,7 @@ export const options = {
     // We still flag the catastrophic end of the scale so the run is readable.
     'http_req_duration{name:menu}': ['p(99)<5000'],
     browse_errors: ['rate<0.25'],
+    rate_limited: ['count==0'], // rate limiter, not capacity: raise Gateway__RateLimitPerMinute
   },
 };
 
