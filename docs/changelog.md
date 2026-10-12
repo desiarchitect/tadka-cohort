@@ -20,7 +20,7 @@
 |---|---|
 | Application code | None (zero code changes; teaching-only milestone) |
 | Documentation | New student runbook `docs/runbooks/day-15.md` |
-| ADR Canon | ADRs 001 through 067 active in repo (66 ADR files) |
-| Tests | 207/207 tests passing across all 5 test projects |
+| ADR Canon | 66 ADR files, numbered 001-067 (no 046) |
+| Tests | Unchanged from Day 14 (5 test projects) |
 
-ADRs through **067**.
+ADRs through **067** (046 unused).
