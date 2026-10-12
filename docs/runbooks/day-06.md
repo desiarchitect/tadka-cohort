@@ -96,6 +96,8 @@ docker stop tadka-api-2-1                     # kill one — requests keep succe
 docker start tadka-api-2-1                    # rejoins the rotation within ~20s
 ```
 
+> **Running this on `day-16` / `main`?** The load balancer is on **:8091** there, because from Day 9 Kafka UI owns :8090. Use `http://localhost:8091` in the commands above (the `day-06` branch itself still uses :8090).
+
 - **Compression + ETag (ADR-048):** `curl -H "Accept-Encoding: gzip" -D - http://localhost:8090/api/v1/restaurants` → `Content-Encoding: gzip`; repeat with `If-None-Match: <etag>` → `304`.
 - **Rate limiting (ADR-049):** default 120/min, Redis-shared across all 3 replicas. `RateLimit:Algorithm=FixedWindow|SlidingWindow`, `RateLimit:WindowSeconds` (short window for a fast classroom demo of the boundary burst).
 - **State divergence (ADR-047):** set `Cache:Mode=InMemory` on the 3 replicas (see `scripts/` or a compose override) to watch per-replica cache divergence after a price update — the default (Redis) mode stays consistent.

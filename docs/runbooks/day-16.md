@@ -271,6 +271,18 @@ Notice how Npgsql connection pooling keeps active database connections bounded e
 
 ---
 
+### Prove the journey: the same test on every checkpoint
+
+The tests above measure the finished system. To show what each day *bought*, run the same workload against six checkpoints (`day-03`, `day-05`, `day-06`, `day-07`, `day-09`, `day-16`) on the same 200k-order data set. Each checkpoint gets the pressure that day was built for: a big table, a hot key, a slow or dead Payment, more traffic than one replica can take.
+
+```powershell
+pwsh evolution/run-ladder.ps1        # about 2.5 hours; then open evolution/report.md
+```
+
+The full method, the expected results and the "1 user → 1 million users" model are in [evolution-1-to-1m.md](evolution-1-to-1m.md).
+
+---
+
 ## 5. Unit Economics: Cost Modeling (Rupees per 1,000 Orders)
 
 Architecture decisions directly dictate infrastructure bills.

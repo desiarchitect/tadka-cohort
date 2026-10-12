@@ -1,0 +1,2 @@
+# Per-run service logs are local debugging aids, not results.
+logs/

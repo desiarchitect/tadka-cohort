@@ -360,7 +360,8 @@ services:
     container_name: tadka-nginx-lb
     profiles: ["scale-out"]
     ports:
-      - "8090:80"
+      # 8091, not 8090: from Day 9 on, Kafka UI owns host 8090 and both are up at once in the scale-out demo.
+      - "8091:80"
     volumes:
       - ./docker/nginx/lb.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:

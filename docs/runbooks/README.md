@@ -22,6 +22,7 @@ Hands-on, copy-paste guides to **run, demo, and verify each day's code yourself*
 | 14 | Resilience & Chaos Engineering: circuit breaker, retry, Buffer vs Compensate, Redis fall-through | [day-14.md](day-14.md) |
 | 15 | System Design Masterclass: 45-min framework, Tadka as evidence, mock interview kit, breadth toys | [day-15.md](day-15.md) |
 | 16 | Load testing, cost modeling, Azure cloud deploy, and portfolio capstone | [day-16.md](day-16.md) |
+| 16+ | Capstone proof: the same load test on day-03 → day-16, from 1 user to 1 million | [evolution-1-to-1m.md](evolution-1-to-1m.md) |
 
 > Consolidated demo index (issue → fix → trade-off → captured numbers): instructor pack in `cohort-prep/DEMOS.md`.
 
