@@ -868,3 +868,9 @@ The broker requires SASL/SCRAM-SHA-256, which stops anonymous access to every to
 - **Git Bash prints `exec: "C:/Program Files/Git/opt/kafka/bin/...": no such file or directory`:** Git Bash rewrote the container path. Prefix the command with `MSYS_NO_PATHCONV=1`, or use the PowerShell version.
 
 ➡️ **Next (Day 11):** Extract the **Delivery** service (with real-time location tracking via Redis-geo) and introduce the **API Gateway** (YARP) for edge rate-limiting and reverse proxying.
+
+---
+
+## Measure today (evolution harness)
+
+The evolution harness measures days 3, 5, 6, 7, 9 and 16; today is not one of its checkpoints. It still runs from this branch, so any of the class pairs (Day 5, 6, 7 or 9) can be shown from here: see section 4 of [evolution-1-to-1m.md](evolution-1-to-1m.md).
