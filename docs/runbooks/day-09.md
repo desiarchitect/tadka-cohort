@@ -447,3 +447,25 @@ This is authentication for a teaching stack, not a production security setup. Sa
 - **Reset everything:** the fresh-start block at the top of section 1 does exactly this. Run it any time you want a clean slate, not just at the start of the day.
 
 Next, Day 10: authentication and role-based access across services, the data-privacy and PII thread, and extracting the Delivery service.
+
+---
+
+## Measure today (evolution harness)
+
+Show the class what today bought, with numbers: **Orders survive a dead Payment.** Each run takes about 2 minutes with `-Quick`; the report puts the runs side by side. Stop your own stack first (`docker compose down`): the harness starts its own.
+
+**PowerShell:**
+```powershell
+pwsh evolution/run-checkpoint.ps1 -Day day-07 -Scenario orders -Variant sync-slow -Quick
+pwsh evolution/run-checkpoint.ps1 -Day day-09 -Scenario orders -Variant payment-down -Quick
+node evolution/report.mjs --days day-07,day-09 --scenarios orders
+```
+
+**Bash:**
+```bash
+evolution/run-checkpoint.sh --day day-07 --scenario orders --variant sync-slow --quick
+evolution/run-checkpoint.sh --day day-09 --scenario orders --variant payment-down --quick
+node evolution/report.mjs --days day-07,day-09 --scenarios orders
+```
+
+Then open `evolution/report.md`. What to expect, how it works, and the full overnight ladder: [evolution-1-to-1m.md](evolution-1-to-1m.md) (section 4 for the class demo).
