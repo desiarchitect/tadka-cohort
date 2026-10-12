@@ -323,3 +323,9 @@ curl.exe -s -X POST http://localhost:8080/api/v1/auth/login `
 ```
 
 The response returns `{ "accessToken": "ey...", "expiresInSeconds": 900, "role": "Customer", "refreshToken": "..." }`. You will supply this `accessToken` to k6 on Day 16.
+
+---
+
+## Measure today (evolution harness)
+
+The evolution harness measures days 3, 5, 6, 7, 9 and 16; today is not one of its checkpoints. It still runs from this branch, so any of the class pairs (Day 5, 6, 7 or 9) can be shown from here: see section 4 of [evolution-1-to-1m.md](evolution-1-to-1m.md).
