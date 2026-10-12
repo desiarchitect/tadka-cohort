@@ -1193,3 +1193,9 @@ Consumer-group handover after a killed process (Section 1). Wait, or stop servic
 
 ### 8. PowerShell: text piped to `docker exec -i` arrives with a stray first character
 Windows PowerShell 5.1 prepends a byte-order mark to piped text. Use the `Send-Kafka` helper (Section 3.6), which sends the line from inside the container.
+
+---
+
+## Measure today (evolution harness)
+
+The evolution harness measures days 3, 5, 6, 7, 9 and 16; today is not one of its checkpoints. It still runs from this branch, so any of the class pairs (Day 5, 6, 7 or 9) can be shown from here: see section 4 of [evolution-1-to-1m.md](evolution-1-to-1m.md).
