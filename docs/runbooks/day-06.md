@@ -392,3 +392,27 @@ Beats 4–10 of the break-kit are **homework**. Rate-limit depth is Day 11.
 | `KEYS lock:*` empty | Expected. Read the code; do not fake |
 
 HTTP caching / ETag / gzip: weekday, `day6-caching-compression` source. Next: Week 4 payment brownout.
+
+---
+
+## Measure today (evolution harness)
+
+Show the class what today bought, with numbers: **The cache fixes the hot key, not the query (history is the control).** Each run takes about 2 minutes with `-Quick`; the report puts the runs side by side. Stop your own stack first (`docker compose down`): the harness starts its own.
+
+**PowerShell:**
+```powershell
+pwsh evolution/run-checkpoint.ps1 -Day day-05 -Scenario hotkey -Quick
+pwsh evolution/run-checkpoint.ps1 -Day day-06 -Scenario hotkey -Quick
+pwsh evolution/run-checkpoint.ps1 -Day day-06 -Scenario history -Quick
+node evolution/report.mjs --days day-05,day-06
+```
+
+**Bash:**
+```bash
+evolution/run-checkpoint.sh --day day-05 --scenario hotkey --quick
+evolution/run-checkpoint.sh --day day-06 --scenario hotkey --quick
+evolution/run-checkpoint.sh --day day-06 --scenario history --quick
+node evolution/report.mjs --days day-05,day-06
+```
+
+Then open `evolution/report.md`. What to expect, how it works, and the full overnight ladder: [evolution-1-to-1m.md](evolution-1-to-1m.md) (section 4 for the class demo).
