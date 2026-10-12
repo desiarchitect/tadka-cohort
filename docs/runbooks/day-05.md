@@ -670,3 +670,25 @@ Folder name still says day-03; **taught today**. No `node` → EXPLAIN in step 1
 | `node` not found | Optional toy. Beat 6 EXPLAIN OFFSET is enough. |
 
 Next: Day 6 — Redis cache-aside + SSE. Not tonight.
+
+---
+
+## Measure today (evolution harness)
+
+Show the class what today bought, with numbers: **Indexes + pool + replica move the knee.** Each run takes about 2 minutes with `-Quick`; the report puts the runs side by side. Stop your own stack first (`docker compose down`): the harness starts its own.
+
+**PowerShell:**
+```powershell
+pwsh evolution/run-checkpoint.ps1 -Day day-03 -Scenario history -Quick
+pwsh evolution/run-checkpoint.ps1 -Day day-05 -Scenario history -Quick
+node evolution/report.mjs --days day-03,day-05 --scenarios history
+```
+
+**Bash:**
+```bash
+evolution/run-checkpoint.sh --day day-03 --scenario history --quick
+evolution/run-checkpoint.sh --day day-05 --scenario history --quick
+node evolution/report.mjs --days day-03,day-05 --scenarios history
+```
+
+Then open `evolution/report.md`. What to expect, how it works, and the full overnight ladder: [evolution-1-to-1m.md](evolution-1-to-1m.md) (section 4 for the class demo).
