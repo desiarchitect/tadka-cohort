@@ -817,3 +817,9 @@ dotnet test
 - **A Kafka command run through `docker exec` hangs and prints nothing:** add the credentials flag (`--command-config /etc/kafka/docker/client.properties`, or `--producer.config` / `--consumer.config` for the console tools).
 
 ➡️ Next (Day 12): extract **Restaurant** → the canonical **4 services + gateway**; **zero-downtime migrations (Expand & Contract)**; and **deploy**: Terraform/ECS plus a cloud **ALB / API Gateway** as a black-box (results, not HCL).
+
+---
+
+## Measure today (evolution harness)
+
+The evolution harness measures days 3, 5, 6, 7, 9 and 16; today is not one of its checkpoints. It still runs from this branch, so any of the class pairs (Day 5, 6, 7 or 9) can be shown from here: see section 4 of [evolution-1-to-1m.md](evolution-1-to-1m.md).
