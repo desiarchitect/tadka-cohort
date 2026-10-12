@@ -642,3 +642,9 @@ An environment variable `Payment__Gateway__Behavior` is set in that terminal (it
 
 ### 5. Kafka restarts in a loop after Docker was restarted
 `Log directory /tmp/kafka-logs is already formatted`: you are on an older copy of `docker/kafka-scram-entrypoint.sh`. `git pull` this branch, then `docker compose up -d --force-recreate kafka`.
+
+---
+
+## Measure today (evolution harness)
+
+The evolution harness measures days 3, 5, 6, 7, 9 and 16; today is not one of its checkpoints. It still runs from this branch, so any of the class pairs (Day 5, 6, 7 or 9) can be shown from here: see section 4 of [evolution-1-to-1m.md](evolution-1-to-1m.md).
