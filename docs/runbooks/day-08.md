@@ -256,3 +256,9 @@ Get-ChildItem src\Tadka.Api -Recurse -Filter *.cs |
 You did **not** extract because Day 7 was slow. Today is **blast radius**. The stuck `Created` order is the homework for Kafka.
 
 Next: Week 5 — Kafka + Outbox for **this** order.
+
+---
+
+## Measure today (evolution harness)
+
+The evolution harness measures days 3, 5, 6, 7, 9 and 16; today is not one of its checkpoints. It still runs from this branch, so any of the class pairs (Day 5, 6, 7 or 9) can be shown from here: see section 4 of [evolution-1-to-1m.md](evolution-1-to-1m.md).
