@@ -990,3 +990,9 @@ monolith :5224 · payment :5240 · delivery :5250 · restaurant :5260 · gateway
 - **A service logs `Disconnected: connection closed by peer` and `1/1 brokers are down` repeatedly:** it is connecting to Kafka without credentials. Check `Kafka:SaslUsername` and `Kafka:SaslPassword` in that service's `appsettings.Development.json` (each of the four has its own).
 - **A real-Kafka test in your own test project times out with "Value is null":** the test host inherited the SASL credentials from `appsettings.Development.json`. Blank them in the fixture: `builder.UseSetting("Kafka:SaslUsername", "")`.
 - **PgBouncer `SHOW POOLS` fails with "not allowed":** connect as the `tadka` user (set via `ADMIN_USERS` in `docker-compose.yml`), not `postgres`.
+
+---
+
+## Measure today (evolution harness)
+
+The evolution harness measures days 3, 5, 6, 7, 9 and 16; today is not one of its checkpoints. It still runs from this branch, so any of the class pairs (Day 5, 6, 7 or 9) can be shown from here: see section 4 of [evolution-1-to-1m.md](evolution-1-to-1m.md).

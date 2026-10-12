@@ -1,0 +1,107 @@
+{
+  "_comment": "Per-checkpoint manifest for evolution/run-checkpoint.{ps1,sh}. Each entry says how to bring that branch up so the SAME workload (k6/evolution.js) can hit it. 'variants' are levers that change one thing on the same checkpoint (env per service, services to skip, or the scale-out profile). Rate limiters are raised and admission control/load shedding are pinned off on every checkpoint that has them, so the run measures capacity, not a limiter.",
+  "seed": "evolution/seed/orders-large.sql",
+  "loginBody": { "email": "priya@tadka.test", "password": "Password123!" },
+  "hotKey": "restaurant:a1b2c3d4-0001-4000-8000-000000000001:menu",
+  "checkpoints": {
+    "day-03": {
+      "title": "Baseline monolith: REST API, no indexes, default pool",
+      "adrs": "005-010",
+      "baseUrl": "http://localhost:5224",
+      "auth": false,
+      "waitHealthy": ["tadka-postgres"],
+      "services": [
+        { "name": "api", "project": "src/Tadka.Api", "port": 5224 }
+      ],
+      "variants": {}
+    },
+    "day-05": {
+      "title": "Indexes + tuned connection pool + read replica",
+      "adrs": "014-016",
+      "baseUrl": "http://localhost:5224",
+      "auth": false,
+      "waitHealthy": ["tadka-postgres", "tadka-postgres-replica"],
+      "services": [
+        { "name": "api", "project": "src/Tadka.Api", "port": 5224 }
+      ],
+      "variants": {}
+    },
+    "day-06": {
+      "title": "Redis cache-aside + single-flight stampede lock",
+      "adrs": "018-020",
+      "baseUrl": "http://localhost:5224",
+      "auth": false,
+      "waitHealthy": ["tadka-postgres", "tadka-postgres-replica", "tadka-redis"],
+      "services": [
+        { "name": "api", "project": "src/Tadka.Api", "port": 5224,
+          "env": { "RateLimit__PerMinute": "1000000" } }
+      ],
+      "variants": {}
+    },
+    "day-07": {
+      "title": "Bulkhead + timeout around Payment, async payment (modular monolith)",
+      "adrs": "021-023",
+      "baseUrl": "http://localhost:5224",
+      "auth": false,
+      "waitHealthy": ["tadka-postgres", "tadka-postgres-replica", "tadka-redis"],
+      "services": [
+        { "name": "api", "project": "src/Tadka.Api", "port": 5224,
+          "env": { "RateLimit__PerMinute": "1000000" } }
+      ],
+      "variants": {
+        "sync-unprotected": { "env": { "api": { "Payment__Mode": "Synchronous", "Payment__Gateway__Behavior": "Slow",
+                                                "Payment__TimeoutSeconds": "30", "Payment__MaxConcurrentCharges": "1000" } },
+                              "note": "The naive baseline: payment inside the request, no timeout, no bulkhead; every order waits the full 8s gateway delay." },
+        "sync-slow": { "env": { "api": { "Payment__Mode": "Synchronous", "Payment__Gateway__Behavior": "Slow" } },
+                       "note": "Payment still inside the request, but the 2s timeout and bulkhead of 10 (ADR-021) bound the damage." },
+        "async-slow": { "env": { "api": { "Payment__Mode": "Async", "Payment__Gateway__Behavior": "Slow" } },
+                        "note": "Same slow gateway, charged off the request path (Channel + BackgroundService, ADR-023)." }
+      }
+    },
+    "day-09": {
+      "title": "Payment is its own service, reached through Kafka + transactional outbox + saga",
+      "adrs": "024-029",
+      "baseUrl": "http://localhost:5224",
+      "auth": false,
+      "waitHealthy": ["tadka-postgres", "tadka-postgres-replica", "tadka-redis", "tadka-payment-db", "tadka-kafka"],
+      "services": [
+        { "name": "api", "project": "src/Tadka.Api", "port": 5224,
+          "env": { "RateLimit__PerMinute": "1000000" } },
+        { "name": "payment", "project": "src/Tadka.Payment.Api", "port": 5240 }
+      ],
+      "variants": {
+        "payment-slow": { "env": { "payment": { "Payment__Gateway__Behavior": "Slow" } },
+                          "note": "Slow gateway behind Kafka: the order request never waits for it." },
+        "payment-down": { "skip": ["payment"],
+                          "note": "Payment service not running: orders still return 201, order-placed waits in Kafka." }
+      }
+    },
+    "day-16": {
+      "title": "4 services + YARP gateway, JWT, observability, circuit breaker, scale-out",
+      "adrs": "030-047",
+      "baseUrl": "http://localhost:8080",
+      "auth": true,
+      "waitHealthy": ["tadka-postgres", "tadka-postgres-replica", "tadka-redis", "tadka-payment-db",
+                      "tadka-delivery-db", "tadka-restaurant-db", "tadka-kafka"],
+      "services": [
+        { "name": "api", "project": "src/Tadka.Api", "port": 5224,
+          "env": { "RateLimit__PerMinute": "1000000", "Backpressure__MaxConcurrent": "0", "LoadShed__Enabled": "false" } },
+        { "name": "payment", "project": "src/Tadka.Payment.Api", "port": 5240 },
+        { "name": "delivery", "project": "src/Tadka.Delivery.Api", "port": 5250 },
+        { "name": "restaurant", "project": "src/Tadka.Restaurant.Api", "port": 5260 },
+        { "name": "gateway", "project": "src/Tadka.Gateway", "port": 8080,
+          "env": { "Gateway__RateLimitPerMinute": "1000000" } }
+      ],
+      "variants": {
+        "payment-outage": { "env": { "payment": { "Payment__Gateway__Behavior": "Outage" } },
+                            "note": "Gateway unreachable: the circuit breaker opens and fails fast; orders still 201." },
+        "payment-down": { "skip": ["payment"],
+                          "note": "Payment service not running: orders still 201, messages wait in Kafka." },
+        "replicas1": { "scaleOut": { "baseUrl": "http://localhost:8091", "running": ["api-1"], "stopped": ["api-2", "api-3"] },
+                       "note": "Scale-out profile with ONE monolith replica behind nginx (the control)." },
+        "replicas3": { "scaleOut": { "baseUrl": "http://localhost:8091", "running": ["api-1", "api-2", "api-3"], "stopped": [] },
+                       "note": "Scale-out profile with THREE monolith replicas behind nginx (least_conn)." }
+      }
+    }
+  }
+}
