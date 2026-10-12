@@ -24,7 +24,7 @@
 | Load Testing | Hardened `k6/lib.js`, `k6/average-load.js`, `k6/stress.js`, `k6/spike.js`, `k6/hot-key.js`, and `k6/README.md` |
 | Application code | None (zero code changes; test harness and measurement milestone) |
 | Documentation | New student runbook `docs/runbooks/day-16.md`, updated `docs/architecture.md`, `docs/cost-model.md`, `README.md`, and `docs/runbooks/README.md` |
-| ADR Canon | ADRs 001 through 067 active in repo (66 ADR files) |
-| Tests | 207/207 tests passing across all 5 test projects |
+| ADR Canon | 66 ADR files, numbered 001-067 (no 046) |
+| Tests | Unchanged from Day 15 (5 test projects) |
 
-ADRs through **067**.
+ADRs through **067** (046 unused).

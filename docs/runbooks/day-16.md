@@ -6,7 +6,7 @@ Day 15 organized our architectural evidence for the senior system design intervi
 
 > **The Core Architectural Mindset:** An architect does not guess capacity or cost. An architect measures the breaking point, knows which bottleneck breaks first, and calculates the exact rupee cost of every architectural boundary.
 
-Every command below is provided in both Bash and PowerShell.
+Commands are given in Bash and PowerShell where both make sense. The five service terminals, the `psql` check and the cloud scripts (`scripts/*.ps1`) are PowerShell (`pwsh`). Bash steps use `jq` (`sudo apt install jq` / `brew install jq`) to read the token.
 
 ---
 
@@ -106,6 +106,20 @@ $env:TOKEN = $login.accessToken
 Write-Host "Token: $env:TOKEN"
 ```
 
+k6 needs the token and the customer id to exercise the **order write path**. Without them a run only drives the browse reads and `orders_placed` stays 0. Pass them with `-e` on every `k6 run`:
+
+**Bash:**
+```bash
+export ORDER_ARGS="-e ORDER_TOKEN=$TOKEN -e ORDER_CUSTOMER_ID=c1b2c3d4-0001-4000-8000-000000000001"
+```
+
+**PowerShell:**
+```powershell
+$orderArgs = @("-e", "ORDER_TOKEN=$env:TOKEN", "-e", "ORDER_CUSTOMER_ID=c1b2c3d4-0001-4000-8000-000000000001")
+```
+
+The access token lives 15 minutes (900s), so re-run the login before a long stress or spike run. About 15% of sessions place an order (`ORDER_SHARE`).
+
 Verify the token against the gateway:
 
 **Bash:**
@@ -126,54 +140,76 @@ curl.exe -i http://localhost:8080/api/v1/orders `
 
 Install k6 if not present: `winget install GrafanaLabs.k6`.
 
-| Test Script | Profile | Target SLO / Purpose |
+| Test Script | Profile | Target / Purpose |
 |---|---|---|
-| `k6/smoke.js` | 1 VU, 15 seconds | Sanity check: verify all routes respond without errors |
-| `k6/average-load.js` | 50 VUs, 2 minutes | Dinner rush baseline: verify P95 < 200 ms and P99 < 500 ms |
-| `k6/stress.js` | Ramp 10 to 150 VUs | Find the knee: identify where concurrency causes queuing |
-| `k6/spike.js` | 10 to 200 VUs in 10s | IPL flash-sale burst: measure recovery and error rate |
-| `k6/hot-key.js` | 80% traffic to 1 item | Cache stampede test: evaluate Redis single-flight lock |
+| `k6/smoke.js` | 1 VU, 30 seconds | Sanity check: is the system functional at all? |
+| `k6/average-load.js` | ramp 1 min to 50 VUs, hold 3 min, ramp down 1 min | Dinner rush baseline: the SLO must hold (menu/list p99 < 300 ms, < 1% errors) |
+| `k6/stress.js` | ramp in 5 stages up to 300 VUs (`MAX_VUS`) over 8 min | Find the knee: where p99 explodes and which resource saturates first |
+| `k6/spike.js` | 10 VUs, then 200 VUs in 10 s, hold 1 min, drop, 2 min recovery | IPL flash-sale burst: survival and recovery |
+| `k6/hot-key.js` | up to 80 VUs, 80% of traffic to one menu | Cache stampede test: Redis single-flight lock |
+
+The SLO (menu and list `p(99) < 300 ms`, `browse_errors < 1%`) is asserted by smoke and average-load. Stress and spike use a deliberately relaxed `p(99) < 5000 ms`: there a breached threshold is the finding, not a failure. Every profile also fails if any 429 is seen (`rate_limited`), because that means you measured the rate limiter, not capacity.
 
 ### Test 1: Smoke Test (Sanity)
 
 Run the smoke test to confirm routes and headers function properly:
 
-**Bash / PowerShell:**
+**Bash:**
 ```bash
-k6 run k6/smoke.js
+k6 run $ORDER_ARGS k6/smoke.js
 ```
 
-Expected result: 100% checks pass, 0 rate limits, 0 errors, latency under 50 ms.
+**PowerShell:**
+```powershell
+k6 run @orderArgs k6/smoke.js
+```
+
+Expected result: all checks pass, `rate_limited` 0, `browse_errors` 0%, thresholds green, and `orders_placed` > 0 when the order variables are set (with 1 VU and 15% of sessions ordering, run it long enough to see at least one).
 
 ### Test 2: Average Load Test (Dinner Rush)
 
 Simulates standard peak load (50 concurrent virtual users):
 
-**Bash / PowerShell:**
+**Bash:**
 ```bash
-k6 run k6/average-load.js
+k6 run $ORDER_ARGS k6/average-load.js
 ```
 
-Verify that P95 latency remains well under 200 ms and P99 latency remains under 500 ms.
+**PowerShell:**
+```powershell
+k6 run @orderArgs k6/average-load.js
+```
+
+Verify the thresholds pass: menu and list p99 under 300 ms and under 1% errors.
 
 ### Test 3: Stress Test (Finding the Knee)
 
-Ramps traffic up to 150 VUs to determine where the local system reaches saturation:
+Ramps traffic up to 300 VUs (`-e MAX_VUS=...` to change it) to determine where the local system reaches saturation:
 
-**Bash / PowerShell:**
+**Bash:**
 ```bash
-k6 run k6/stress.js
+k6 run $ORDER_ARGS k6/stress.js
 ```
 
-Observe the knee: at lower concurrency, latency is flat. Once connection pools or CPU saturate, queue wait time grows non-linearly. Note the exact VU count where P99 crosses the 500 ms SLO threshold.
+**PowerShell:**
+```powershell
+k6 run @orderArgs k6/stress.js
+```
+
+Observe the knee: at lower concurrency, latency is flat. Once connection pools or CPU saturate, queue wait time grows non-linearly. Note the VU count where p99 crosses the 300 ms SLO and where errors first appear (the run itself only flags the catastrophic end: p99 > 5 s or > 25% errors). That number and the first resource to saturate are the deliverable.
 
 ### Test 4: Spike Test (Flash Sale)
 
 Simulates sudden traffic surges:
 
-**Bash / PowerShell:**
+**Bash:**
 ```bash
-k6 run k6/spike.js
+k6 run $ORDER_ARGS k6/spike.js
+```
+
+**PowerShell:**
+```powershell
+k6 run @orderArgs k6/spike.js
 ```
 
 Verify that the system absorbs the spike without dropping connections and recovers to normal latency once the burst subsides.
@@ -182,9 +218,14 @@ Verify that the system absorbs the spike without dropping connections and recove
 
 Simulates 80 percent of requests targeting a single popular menu item:
 
-**Bash / PowerShell:**
+**Bash:**
 ```bash
-k6 run k6/hot-key.js
+k6 run $ORDER_ARGS k6/hot-key.js
+```
+
+**PowerShell:**
+```powershell
+k6 run @orderArgs k6/hot-key.js
 ```
 
 Redis cache-aside with the single-flight stampede lock (ADR-019) ensures only one request fetches from PostgreSQL while concurrent requests await the cached result.
@@ -207,11 +248,11 @@ Navigate to `http://localhost:3000` (credentials: `admin` / `admin`).
 
 Navigate to `http://localhost:16686`.
 
-Select service `tadka-gateway` or `tadka-api` and search for recent traces. Click on a `POST /api/v1/orders` trace to observe the distributed span:
+Select service `Tadka.Gateway` or `Tadka.Api` and search for recent traces. Click on a `POST /api/v1/orders` trace to observe the distributed span:
 
 1. Client request hits YARP API Gateway (:8080).
 2. Gateway proxies to Tadka.Api (:5224).
-3. Tadka.Api verifies restaurant price against local menu replica (0 ms network hop).
+3. Tadka.Api prices the order from its local menu replica (no call to the Restaurant service).
 4. Order entity and Outbox message are written in one database transaction.
 5. Outbox relay worker polls and publishes `order-placed` to Kafka.
 6. Tadka.Payment.Api consumes event, processes payment, writes Inbox row, and publishes `payment-results`.
@@ -226,7 +267,7 @@ Inspect active connections during the stress test:
 docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT count(*), state FROM pg_stat_activity WHERE datname='tadka' GROUP BY state;"
 ```
 
-Notice how Npgsql connection pooling keeps active database connections bounded even when k6 concurrency rises to 150 VUs.
+Notice how Npgsql connection pooling keeps active database connections bounded even when k6 concurrency rises toward 300 VUs.
 
 ---
 
@@ -296,7 +337,7 @@ Confirm that the script prints "Resource group ... is GONE" to avoid unexpected 
 
 Use the completed Tadka repository as a senior system design portfolio artifact:
 
-1. Complete Architecture Record: Cite all 66 ADRs (`docs/adrs/001..067`) as documented trade-offs.
+1. Complete Architecture Record: Cite the 66 ADRs (`docs/adrs/001..067`, there is no 046) as documented trade-offs.
 2. Architecture Map: Use `docs/architecture.md` as the canonical reference for the 4-service + gateway design.
 3. Cost Model: Present `docs/cost-model.md` to defend the business economics of monolithic vs distributed architecture.
 4. Working Telemetry: Demonstrate end-to-end trace propagation across HTTP, outbox tables, and Kafka brokers.

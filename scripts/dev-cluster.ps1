@@ -1,6 +1,6 @@
 param()
 
-$root = "D:\work\cohort\wtc\day-16"
+$root = Split-Path -Parent $PSScriptRoot   # repo root (scripts/ is one level down)
 $env:ASPNETCORE_ENVIRONMENT = "Development"
 $env:RateLimit__PerMinute = "100000"
 $env:Gateway__RateLimitPerMinute = "100000"
