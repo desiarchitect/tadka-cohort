@@ -64,27 +64,35 @@ dotnet build Tadka.slnx
 
 **Runnable Verification:**
 
-Submit an order with an explicit `Idempotency-Key`:
+Orders require a JWT (ADR-030), so log in as the seeded customer Priya first, then submit the order from the ready-made body `docs/runbooks/place-order.json` with an explicit `Idempotency-Key`:
 
 **Bash:**
 ```bash
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
 KEY="idem-$(date +%s)"
 curl -i -X POST http://localhost:8080/api/v1/orders \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Idempotency-Key: $KEY" \
-  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":2}]}'
+  --data @docs/runbooks/place-order.json
 ```
 
 **PowerShell:**
 ```powershell
+$token = (curl.exe -s -X POST http://localhost:8080/api/v1/auth/login `
+  -H "Content-Type: application/json" `
+  -d '{\"email\":\"priya@tadka.test\",\"password\":\"Password123!\"}' | ConvertFrom-Json).accessToken
 $key = "idem-" + [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
 curl.exe -i -X POST http://localhost:8080/api/v1/orders `
   -H "Content-Type: application/json" `
+  -H "Authorization: Bearer $token" `
   -H "Idempotency-Key: $key" `
-  -d '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1b2c3d4-0001-4000-8000-000000000001","items":[{"menuItemId":"b1b2c3d4-0001-4000-8000-000000000001","quantity":2}]}'
+  --data "@docs/runbooks/place-order.json"
 ```
 
-First request returns `201 Created`. Replaying the identical command returns `200 OK` with the exact cached response body. No duplicate row or charge occurs.
+Re-run only the last `curl` (same `$KEY` / `$key`) to replay. First request returns `201 Created`. Replaying the identical command returns `200 OK` with the exact cached response body. No duplicate row or charge occurs.
 
 ---
 
@@ -94,14 +102,14 @@ First request returns `201 Created`. Replaying the identical command returns `20
 
 **Runnable Verification:**
 
-1. Stop the Payment service or check lag:
+1. Stop the Payment service (Ctrl+C its `dotnet run` terminal), place an order as in Demo 1, then check consumer lag (it shows lag 1). Restart Payment and re-run the command; lag drains to 0:
 
 **Bash:**
 ```bash
 docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
   --bootstrap-server localhost:9092 \
   --command-config /etc/kafka/docker/client.properties \
-  --describe --group payment-service-group
+  --describe --group tadka-payment
 ```
 
 **PowerShell:**
@@ -109,7 +117,7 @@ docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh \
 docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh `
   --bootstrap-server localhost:9092 `
   --command-config /etc/kafka/docker/client.properties `
-  --describe --group payment-service-group
+  --describe --group tadka-payment
 ```
 
 When messages arrive while Payment is offline, partition lag increments. Once the consumer starts, lag drains to 0 with zero message loss.
@@ -126,8 +134,8 @@ Add and query rider coordinates in Redis:
 
 **Bash / PowerShell:**
 ```bash
-docker exec -i tadka-redis redis-cli GEOADD delivery:riders:geo 77.6412 12.9716 "suresh"
-docker exec -i tadka-redis redis-cli GEOSEARCH delivery:riders:geo FROMLONLAT 77.6400 12.9700 BYRADIUS 5 km WITHDIST
+docker exec -i tadka-redis redis-cli GEOADD delivery:agents 77.6412 12.9716 "suresh"
+docker exec -i tadka-redis redis-cli GEOSEARCH delivery:agents FROMLONLAT 77.6400 12.9700 BYRADIUS 5 km WITHDIST
 ```
 
 Query execution completes in sub-millisecond in-memory time using geohash integer representations.
@@ -140,14 +148,14 @@ Query execution completes in sub-millisecond in-memory time using geohash intege
 
 **Runnable Verification:**
 
-Kill the Restaurant API container or process:
+Stop the Restaurant service's database (the Restaurant API cannot serve menus without it):
 
 **Bash / PowerShell:**
 ```bash
 docker stop tadka-restaurant-db
 ```
 
-Submit an order to the Ordering API (`POST http://localhost:8080/api/v1/orders`). The order succeeds immediately because Ordering prices items from its local replica. Restore the database afterwards:
+Submit an order to the Ordering API (`POST http://localhost:8080/api/v1/orders`). Send the Demo 1 request again (new `Idempotency-Key`). It returns `201`, priced from the local replica (₹598 for 2 × Chicken Biryani), because Ordering never calls Restaurant on the order path. Restore the database afterwards:
 
 **Bash / PowerShell:**
 ```bash
@@ -162,7 +170,7 @@ docker start tadka-restaurant-db
 
 **Runnable Verification:**
 
-Open Jaeger in your browser: `http://localhost:16686`. Search for traces under service `tadka-gateway` or `tadka-ordering`. Inspect a complete 9-span checkout trace showing Gateway, Ordering controller, Outbox publish, Kafka queueing, and Payment consumption on one unified waterfall timeline.
+Open Jaeger in your browser: `http://localhost:16686`. Search for traces under service `Tadka.Gateway` or `Tadka.Api`. Inspect a complete 9-span checkout trace showing Gateway, Ordering controller, Outbox publish, Kafka queueing, and Payment consumption on one unified waterfall timeline.
 
 ---
 
@@ -184,9 +192,17 @@ tadka_payment_circuit_transitions_total
 
 The `toydemo/` directory contains 13 focused runnable demonstrations illustrating system design patterns outside the core OLTP path.
 
-Run the entire inventory smoke test:
+Run the entire inventory smoke test (needs PowerShell 7 `pwsh`/`powershell`, Node 18+, and for the DB toys `docker compose up -d postgres redis kafka`):
 
-**Bash (Git Bash):**
+**Bash (no PowerShell needed):**
+```bash
+for t in search-index:real-db.js olap-cdc:real-db.js object-storage:real-demo.js web-crawler:real-crawl.js crdt-counter:index.js video-hls-cdn:real-demo.js; do
+  d=toydemo/day-15-breadth/${t%%:*}-toy
+  (cd "$d" && { [ "${t%%:*}" = video-hls-cdn ] && node setup-media.js; node "${t##*:}" --mode=fix; }) || echo "FAILED: $t"
+done
+```
+
+**Bash (Git Bash, with PowerShell installed):**
 ```bash
 powershell -ExecutionPolicy Bypass -File ./toydemo/verify-all.ps1 -Run fix
 ```
@@ -281,7 +297,7 @@ k6 version
 
 ### 2. Verify Solution Tests
 
-Ensure all 207 tests pass across the five test projects:
+Ensure all tests pass across the five test projects (Testcontainers needs Docker running; build first, see section 2):
 
 **Bash / PowerShell:**
 ```bash
@@ -306,4 +322,4 @@ curl.exe -s -X POST http://localhost:8080/api/v1/auth/login `
   -d '{"email":"priya@tadka.test","password":"Password123!"}'
 ```
 
-The response returns `{ "accessToken": "ey...", "expiresInSeconds": 3600, "role": "Customer" }`. You will supply this `accessToken` to k6 on Day 16.
+The response returns `{ "accessToken": "ey...", "expiresInSeconds": 900, "role": "Customer", "refreshToken": "..." }`. You will supply this `accessToken` to k6 on Day 16.
