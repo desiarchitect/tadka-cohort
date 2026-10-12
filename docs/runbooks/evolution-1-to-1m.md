@@ -1,6 +1,6 @@
 # Evolution runbook: proving what system design bought, from 1 user to 1 million
 
-**Branch:** run it from `day-16` (or `main`). It checks out the older days by itself; your own checkout is never touched.
+**Branch:** run it from any branch from `day-05` to `day-16`; each carries the same harness. It checks out the days it measures by itself (into `../tadka-evo/`); your own checkout is never touched.
 **Tools:** `evolution/` (runner, manifest, seed, report) + `k6/evolution.js` (the workload).
 
 The capstone question is "did the 16 days actually make Tadka scale?". This runbook answers it with numbers you
@@ -51,7 +51,7 @@ highest step, counted up from the bottom without a gap, where:
 3. the server served at least **95%** of the target rate (it kept up).
 
 That single number per run is what the report compares. If a checkpoint passes every step, the report says
-"none (raise RATES)": rerun it with `-Rates 5,10,25,50,100,200,400,800,1600`.
+"none (raise RATES)": rerun it with `-Rates 5,10,25,50,100,200,400,800,1600`. For a class-length run, see section 4 (`-Quick`).
 
 ---
 
@@ -79,6 +79,7 @@ That single number per run is what the report compares. If a checkpoint passes e
 pwsh evolution/run-ladder.ps1                 # every row of section 1, then builds the report
 pwsh evolution/run-ladder.ps1 -Repeat 3       # three runs per row; the report uses the median
 pwsh evolution/run-ladder.ps1 -Only history   # just one scenario's rows
+pwsh evolution/run-ladder.ps1 -Quick          # every row at class length (~1 hour): a rehearsal, not the numbers to quote
 ```
 
 **Bash:**
@@ -86,6 +87,7 @@ pwsh evolution/run-ladder.ps1 -Only history   # just one scenario's rows
 evolution/run-ladder.sh
 evolution/run-ladder.sh --repeat 3
 evolution/run-ladder.sh --only history
+evolution/run-ladder.sh --quick
 ```
 
 Rows whose result file already exists are skipped, so an interrupted ladder resumes where it stopped (`-Force` /
@@ -138,7 +140,54 @@ Repeats are folded into their median.
 
 ---
 
-## 4. Reading the results
+## 4. Demo it day by day in class
+
+The full ladder is an overnight job. In class you show **one before/after pair**, live, with `-Quick` (`--quick` in
+bash): load steps of 10, 25, 50, 100 and 200 req/s, 20 seconds each, after a 10-second warm-up. That is about **2 minutes
+per run** plus a minute or two of setup. Quick results are labelled `...-quick`, so they never overwrite or mix with
+the overnight results; the report warns if a table ever holds both kinds.
+
+Run these from that day's branch (`git checkout day-05` on Day 5, and so on). Each branch carries the same harness,
+and it can measure any checkpoint, including earlier ones.
+
+| Day | Show | Runs | Then |
+|---|---|---|---|
+| **5** | Indexes + pool + replica | `day-03 history`, `day-05 history` | `node evolution/report.mjs --days day-03,day-05 --scenarios history` |
+| **6** | Cache fixes the hot key, not the query | `day-05 hotkey`, `day-06 hotkey`, `day-06 history` (the control) | `node evolution/report.mjs --days day-05,day-06` |
+| **7** | Brownout → contained → off the request path | `day-07 orders` with `sync-unprotected`, `sync-slow`, `async-slow` | `node evolution/report.mjs --days day-07 --scenarios orders` |
+| **9** | Orders survive a dead Payment | `day-07 orders sync-slow`, `day-09 orders payment-down` | `node evolution/report.mjs --days day-07,day-09 --scenarios orders` |
+| **16** | Scale-out and its database ceiling | `day-16 history` with `replicas1`, `replicas3` | `node evolution/report.mjs --days day-16 --scenarios history` |
+
+Day 16 also presents the full overnight ladder report (section 3).
+
+**Day 5, for example (PowerShell):**
+```powershell
+pwsh evolution/run-checkpoint.ps1 -Day day-03 -Scenario history -Quick
+pwsh evolution/run-checkpoint.ps1 -Day day-05 -Scenario history -Quick
+node evolution/report.mjs --days day-03,day-05 --scenarios history
+```
+
+**Bash:**
+```bash
+evolution/run-checkpoint.sh --day day-03 --scenario history --quick
+evolution/run-checkpoint.sh --day day-05 --scenario history --quick
+node evolution/report.mjs --days day-03,day-05 --scenarios history
+```
+
+Open `evolution/report.md`: the table shows both capacities and the "vs first row" multiple, and the p99 chart shows
+the day-03 curve crossing the 300 ms line long before day-05's.
+
+**Same pattern for the other days:** the run lines for Day 7, for example, are
+`-Day day-07 -Scenario orders -Variant sync-unprotected -Quick`, then `-Variant sync-slow`, then `-Variant async-slow`.
+
+**Rehearse once the evening before.** The first run of each checkpoint is slow: it fetches the branch, builds it, and
+pulls the Docker images. Later runs reuse all of that, so in class you only wait for the run itself.
+
+**One machine, one run at a time, nothing else heavy open.** Quick runs have fewer and shorter steps, so they are
+noisier than the overnight ladder. Use them to show the shape (where the knee moves), and quote the overnight numbers
+when you need exact figures.
+
+## 5. Reading the results
 
 Read each scenario as "which checkpoint moved the knee, and why":
 
@@ -166,7 +215,7 @@ Read each scenario as "which checkpoint moved the knee, and why":
 
 ---
 
-## 5. From capacity to "1 user → 1 million users"
+## 6. From capacity to "1 user → 1 million users"
 
 A laptop cannot generate a million users, and this runbook does not pretend to. What it gives you is a **measured
 capacity per box** at each checkpoint. Turning that into users is a model, and you should present it as one.
@@ -199,12 +248,12 @@ The cost model already shows the shape: about 5× the honest-minimal cost at 1 l
 
 ---
 
-## 6. Share the results
+## 7. Share the results
 
 Commit `evolution/results/*.json`, `evolution/report.md` and `evolution/report/*.svg` to a branch, or send them over.
 They are small JSON files, and the report rebuilds from them on any machine with `node evolution/report.mjs`.
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 | Symptom | Fix |
 |---|---|

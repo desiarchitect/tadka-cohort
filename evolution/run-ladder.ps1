@@ -19,6 +19,7 @@ param(
     [string]$Rates = '',      # passed through to run-checkpoint.ps1 when set
     [int]$StepSeconds = 0,    # passed through when set
     [string]$WorktreeRoot = '', # passed through when set
+    [switch]$Quick,           # passed through: class-length runs (~2 min each)
     [switch]$Force
 )
 $ErrorActionPreference = 'Stop'
@@ -39,7 +40,7 @@ $results = Join-Path $PSScriptRoot 'results'
 
 for ($i = 0; $i -lt $ladder.Count; $i++) {
     $day, $scenario, $variant = $ladder[$i]
-    $label = "$day-$scenario" + $(if ($variant) { "-$variant" } else { '' })
+    $label = "$day-$scenario" + $(if ($variant) { "-$variant" } else { '' }) + $(if ($Quick) { '-quick' } else { '' })
     $probe = if ($Repeat -gt 1) { "$label-r1.json" } else { "$label.json" }
     if (-not $Force -and (Test-Path (Join-Path $results $probe))) { Write-Host "skip $label (result exists; -Force to redo)"; continue }
 
@@ -56,6 +57,7 @@ for ($i = 0; $i -lt $ladder.Count; $i++) {
     if ($Rates) { $argList.Rates = $Rates }
     if ($StepSeconds -gt 0) { $argList.StepSeconds = $StepSeconds }
     if ($WorktreeRoot) { $argList.WorktreeRoot = $WorktreeRoot }
+    if ($Quick) { $argList.Quick = $true }
     if ($reuse) { $argList.ReuseInfra = $true; $argList.SkipBuild = $true }
     if ($keep) { $argList.KeepInfra = $true }
     Write-Host "`n######## [$($i + 1)/$($ladder.Count)] $label" -ForegroundColor Magenta

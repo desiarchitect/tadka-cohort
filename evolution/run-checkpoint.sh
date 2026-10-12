@@ -9,7 +9,7 @@
 set -euo pipefail
 (( BASH_VERSINFO[0] >= 4 )) || { echo "bash 4+ needed (macOS: brew install bash, then run with that bash)" >&2; exit 1; }
 
-DAY='' SCENARIO='' VARIANT='' REPEAT=1 RATES='5,10,25,50,100,200,400' STEP_SECONDS=40
+DAY='' SCENARIO='' VARIANT='' REPEAT=1 RATES='' STEP_SECONDS=0 QUICK=0
 WORKTREE_ROOT='' KEEP_INFRA=0 REUSE_INFRA=0 SKIP_BUILD=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,6 +20,7 @@ while [[ $# -gt 0 ]]; do
     --rates) RATES="$2"; shift 2 ;;
     --step-seconds) STEP_SECONDS="$2"; shift 2 ;;
     --worktree-root) WORKTREE_ROOT="$2"; shift 2 ;;
+    --quick) QUICK=1; shift ;;   # class-length run (~2 min); never compare against a full run
     --keep-infra) KEEP_INFRA=1; shift ;;
     --reuse-infra) REUSE_INFRA=1; shift ;;
     --skip-build) SKIP_BUILD=1; shift ;;
@@ -27,6 +28,11 @@ while [[ $# -gt 0 ]]; do
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
+
+# Full run: 7 steps x 40 s after a 20 s warm-up (~5 min). Quick: 5 steps x 20 s after 10 s (~2 min). Explicit values win.
+if [[ -z "$RATES" ]]; then if [[ $QUICK -eq 1 ]]; then RATES='10,25,50,100,200'; else RATES='5,10,25,50,100,200,400'; fi; fi
+if (( STEP_SECONDS <= 0 )); then if [[ $QUICK -eq 1 ]]; then STEP_SECONDS=20; else STEP_SECONDS=40; fi; fi
+WARMUP_SECONDS=20; [[ $QUICK -eq 1 ]] && WARMUP_SECONDS=10
 
 step() { printf '\n\033[36m== %s\033[0m\n' "$*"; }
 fail() { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
@@ -50,7 +56,7 @@ fi
 SCALE_OUT="$(jq -c '.scaleOut // empty' <<<"$VAR")"
 BASE_URL="$(jq -r 'if .scaleOut then .scaleOut.baseUrl else empty end' <<<"$VAR")"
 [[ -n "$BASE_URL" ]] || BASE_URL="$(jq -r '.baseUrl' <<<"$CP")"
-LABEL_BASE="$DAY-$SCENARIO${VARIANT:+-$VARIANT}"
+LABEL_BASE="$DAY-$SCENARIO${VARIANT:+-$VARIANT}"; [[ $QUICK -eq 1 ]] && LABEL_BASE="$LABEL_BASE-quick"
 RESULTS_DIR="$HARNESS/evolution/results"
 LOG_DIR="$HARNESS/evolution/logs/$LABEL_BASE"
 mkdir -p "$RESULTS_DIR" "$LOG_DIR"
@@ -199,16 +205,18 @@ for (( i = 1; i <= REPEAT; i++ )); do
   fi
   step "k6: $LABEL  (base $BASE_URL, rates $RATES, ${STEP_SECONDS}s/step)"
   K6_ARGS=(run -e "BASE_URL=$BASE_URL" -e "SCENARIO=$SCENARIO" -e "LABEL=$LABEL" -e "OUT_DIR=$RESULTS_DIR"
-           -e "RATES=$RATES" -e "STEP_SECONDS=$STEP_SECONDS")
+           -e "RATES=$RATES" -e "STEP_SECONDS=$STEP_SECONDS" -e "WARMUP_SECONDS=$WARMUP_SECONDS")
   [[ -n "$TOKEN" ]] && K6_ARGS+=(-e "TOKEN=$TOKEN")
   k6 "${K6_ARGS[@]}" "$HARNESS/k6/evolution.js" || [[ -f "$RESULTS_DIR/$LABEL.json" ]] || fail "k6 failed for $LABEL"
 
   jq -n --arg label "$LABEL" --arg day "$DAY" --arg commit "$SHA" --arg scenario "$SCENARIO" --arg variant "$VARIANT" \
         --arg title "$TITLE" --arg adrs "$ADRS" --arg note "$NOTE" --argjson replicas "$REPLICAS" \
+        --argjson quick "$( [[ $QUICK -eq 1 ]] && echo true || echo false )" --arg rates "$RATES" --argjson stepSeconds "$STEP_SECONDS" \
         --arg os "$(uname -sr)" --argjson cores "$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0)" \
         --arg ranAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
         '{label:$label, day:$day, commit:$commit, scenario:$scenario, variant:$variant, title:$title, adrs:$adrs,
-          note:$note, replicas:$replicas, machine:{os:$os, cores:$cores}, ranAt:$ranAt}' \
+          note:$note, replicas:$replicas, quick:$quick, rates:$rates, stepSeconds:$stepSeconds,
+          machine:{os:$os, cores:$cores}, ranAt:$ranAt}' \
     > "$RESULTS_DIR/$LABEL.meta.json"
 done
 

@@ -7,12 +7,13 @@
 set -euo pipefail
 (( BASH_VERSINFO[0] >= 4 )) || { echo "bash 4+ needed (macOS: brew install bash, then run with that bash)" >&2; exit 1; }
 
-REPEAT=1 ONLY='' FORCE=0 PASS=()
+REPEAT=1 ONLY='' FORCE=0 QUICK=0 PASS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repeat) REPEAT="$2"; shift 2 ;;
     --only) ONLY="$2"; shift 2 ;;
     --force) FORCE=1; shift ;;
+    --quick) QUICK=1; PASS+=("$1"); shift ;;                                         # passed through to run-checkpoint.sh
     --rates|--step-seconds|--worktree-root) PASS+=("$1" "$2"); shift 2 ;;   # passed through to run-checkpoint.sh
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -39,7 +40,7 @@ kind() { [[ "$1" == replicas* ]] && echo scale || echo plain; }
 n=${#LADDER[@]}
 for (( i = 0; i < n; i++ )); do
   read -r day scenario variant <<<"${LADDER[$i]}"; [[ "$variant" == - ]] && variant=''
-  label="$day-$scenario${variant:+-$variant}"
+  label="$day-$scenario${variant:+-$variant}"; [[ $QUICK -eq 1 ]] && label="$label-quick"
   probe="$label.json"; (( REPEAT > 1 )) && probe="$label-r1.json"
   if [[ $FORCE -eq 0 && -f "$HERE/results/$probe" ]]; then echo "skip $label (result exists; --force to redo)"; continue; fi
 

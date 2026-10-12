@@ -31,8 +31,9 @@ param(
     [Parameter(Mandatory)] [ValidateSet('browse', 'history', 'hotkey', 'orders')] [string]$Scenario,
     [string]$Variant = '',
     [int]$Repeat = 1,
-    [string]$Rates = '5,10,25,50,100,200,400',
-    [int]$StepSeconds = 40,
+    [string]$Rates = '',
+    [int]$StepSeconds = 0,
+    [switch]$Quick,       # class-length run (~2 min): 10..200 req/s, 20 s steps, 10 s warm-up. Never compare against a full run.
     [string]$WorktreeRoot = '',
     [switch]$KeepInfra,   # leave the containers (and seeded data) up afterwards, e.g. to run another scenario on the same day
     [switch]$ReuseInfra,  # skip the reset/seed, reuse what -KeepInfra left behind (same day only)
@@ -40,7 +41,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Harness = Split-Path -Parent $PSScriptRoot                      # this repo (the day-16 checkout)
+$Harness = Split-Path -Parent $PSScriptRoot                      # the checkout you run from (day-05 ... day-16)
+# Full run: 7 steps x 40 s after a 20 s warm-up (~5 min). Quick: 5 steps x 20 s after 10 s (~2 min). Explicit values win.
+if (-not $Rates) { $Rates = if ($Quick) { '10,25,50,100,200' } else { '5,10,25,50,100,200,400' } }
+if ($StepSeconds -le 0) { $StepSeconds = if ($Quick) { 20 } else { 40 } }
+$WarmupSeconds = if ($Quick) { 10 } else { 20 }
 $Manifest = Get-Content (Join-Path $PSScriptRoot 'checkpoints.json') -Raw | ConvertFrom-Json
 $Project = 'tadka-evo'
 if (-not $WorktreeRoot) { $WorktreeRoot = Join-Path (Split-Path -Parent $Harness) 'tadka-evo' }
@@ -59,7 +64,7 @@ if ($Variant) {
 }
 $scaleOut = if ($var -and $var.scaleOut) { $var.scaleOut } else { $null }
 $baseUrl = if ($scaleOut) { $scaleOut.baseUrl } else { $cp.baseUrl }
-$labelBase = "$Day-$Scenario" + $(if ($Variant) { "-$Variant" } else { '' })
+$labelBase = "$Day-$Scenario" + $(if ($Variant) { "-$Variant" } else { '' }) + $(if ($Quick) { '-quick' } else { '' })
 $resultsDir = Join-Path $Harness 'evolution/results'
 $logDir = Join-Path $Harness "evolution/logs/$labelBase"
 New-Item -ItemType Directory -Force -Path $resultsDir, $logDir | Out-Null
@@ -205,7 +210,7 @@ try {
         }
         Step "k6: $label  (base $baseUrl, rates $Rates, ${StepSeconds}s/step)"
         $k6Args = @('run', '-e', "BASE_URL=$baseUrl", '-e', "SCENARIO=$Scenario", '-e', "LABEL=$label",
-            '-e', "OUT_DIR=$resultsDir", '-e', "RATES=$Rates", '-e', "STEP_SECONDS=$StepSeconds")
+            '-e', "OUT_DIR=$resultsDir", '-e', "RATES=$Rates", '-e', "STEP_SECONDS=$StepSeconds", '-e', "WARMUP_SECONDS=$WarmupSeconds")
         if ($token) { $k6Args += @('-e', "TOKEN=$token") }
         & k6 @k6Args $k6Script
         # k6 exits non-zero only on script errors here (the per-step thresholds never fail).
@@ -215,6 +220,7 @@ try {
             label = $label; day = $Day; commit = $sha; scenario = $Scenario; variant = $Variant
             title = $cp.title; adrs = $cp.adrs; note = $(if ($var) { $var.note } else { '' })
             replicas = $(if ($scaleOut) { $scaleOut.running.Count } else { 1 })
+            quick = [bool]$Quick; rates = $Rates; stepSeconds = $StepSeconds
             machine = [ordered]@{ os = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
                 cores = [Environment]::ProcessorCount }
             ranAt = (Get-Date).ToString('o')
