@@ -494,3 +494,27 @@ Get-ChildItem src\Tadka.Api\Domain\Orders,src\Tadka.Api\Controllers\OrdersContro
 Slow is fixed **today in one process**. You do **not** extract Payment because it was slow. Day 8’s reason is fault / PCI / data.
 
 Next: Day 8 — `Tadka.Payment.Api` `:5240` + `payment-db` `:5434`.
+
+---
+
+## Measure today (evolution harness)
+
+Show the class what today bought, with numbers: **Brownout, then contained, then off the request path.** Each run takes about 2 minutes with `-Quick`; the report puts the runs side by side. Stop your own stack first (`docker compose down`): the harness starts its own.
+
+**PowerShell:**
+```powershell
+pwsh evolution/run-checkpoint.ps1 -Day day-07 -Scenario orders -Variant sync-unprotected -Quick
+pwsh evolution/run-checkpoint.ps1 -Day day-07 -Scenario orders -Variant sync-slow -Quick
+pwsh evolution/run-checkpoint.ps1 -Day day-07 -Scenario orders -Variant async-slow -Quick
+node evolution/report.mjs --days day-07 --scenarios orders
+```
+
+**Bash:**
+```bash
+evolution/run-checkpoint.sh --day day-07 --scenario orders --variant sync-unprotected --quick
+evolution/run-checkpoint.sh --day day-07 --scenario orders --variant sync-slow --quick
+evolution/run-checkpoint.sh --day day-07 --scenario orders --variant async-slow --quick
+node evolution/report.mjs --days day-07 --scenarios orders
+```
+
+Then open `evolution/report.md`. What to expect, how it works, and the full overnight ladder: [evolution-1-to-1m.md](evolution-1-to-1m.md) (section 4 for the class demo).
