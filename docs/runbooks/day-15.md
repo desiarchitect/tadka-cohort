@@ -194,7 +194,15 @@ The `toydemo/` directory contains 13 focused runnable demonstrations illustratin
 
 Run the entire inventory smoke test (needs PowerShell 7 `pwsh`/`powershell`, Node 18+, and for the DB toys `docker compose up -d postgres redis kafka`):
 
-**Bash (Git Bash):**
+**Bash (no PowerShell needed):**
+```bash
+for t in search-index:real-db.js olap-cdc:real-db.js object-storage:real-demo.js web-crawler:real-crawl.js crdt-counter:index.js video-hls-cdn:real-demo.js; do
+  d=toydemo/day-15-breadth/${t%%:*}-toy
+  (cd "$d" && { [ "${t%%:*}" = video-hls-cdn ] && node setup-media.js; node "${t##*:}" --mode=fix; }) || echo "FAILED: $t"
+done
+```
+
+**Bash (Git Bash, with PowerShell installed):**
 ```bash
 powershell -ExecutionPolicy Bypass -File ./toydemo/verify-all.ps1 -Run fix
 ```
