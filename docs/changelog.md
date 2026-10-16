@@ -5,7 +5,7 @@
 ## We learned
 
 - An interview is an ADR performed in 45 minutes: Clarify (5) → Estimate (5) → HLD (10) → Deep Dives (15) → Bottlenecks/Failure (7) → Wrap (3).
-- Map every system design claim to runnable evidence in Tadka: idempotency (Day 4), outbox catch-up (Day 9), geo dispatch (Day 11), local read models (Day 12), distributed tracing (Day 13), resilience / circuit breakers (Day 14).
+- Map every system design claim to runnable evidence in Tadka: idempotency (Day 4), outbox catch-up (Day 9), live location with an atomic rider claim (Day 11), local read models (Day 12), distributed tracing (Day 13), resilience / circuit breakers (Day 14).
 - Breadth topics and patterns: full-text search / inverted indexes, video streaming CDN/HLS, OLAP/CDC rollups, object storage pre-signed URLs, web crawling, and CRDT counters.
 
 ## Architecture
