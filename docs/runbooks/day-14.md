@@ -175,10 +175,16 @@ Do this before Demo 1 and leave it in place. The demos tell you which window to 
 | **Grafana** | [http://localhost:3000](http://localhost:3000) (login `admin` / `admin`), then Dashboards, then the folder **Tadka**, then **Tadka, System Overview (RED + business)** | The payment success and failure rates |
 | **Kafka UI** | [http://localhost:8090](http://localhost:8090) | Consumer lag, in the Buffer-mode demo |
 
-**Log in and load the helpers in the Commands terminal.** First run the login and `$BODY` lines from "PowerShell Status Code Helper & Shared Setup" above. Then paste the helpers for your shell. They save you from typing long one-liners, and each demo calls them by name:
+**Log in and load the helpers in the Commands terminal.** First run the `$BODY` line (and, in PowerShell, the `Get-StatusCode` helper) from "PowerShell Status Code Helper & Shared Setup" above. Then paste the helpers for your shell, and run `Login-Priya` (bash: `login_priya`) once to log in. The helpers save you from typing long one-liners, and each demo calls them by name:
 
 **PowerShell:**
 ```powershell
+# Log in as Priya and store the token in $TOKEN and $H. Run it again whenever a command returns 401 (a login lasts 15 minutes).
+function Login-Priya {
+    $global:TOKEN = (Invoke-RestMethod -Uri http://localhost:8080/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}').accessToken
+    $global:H = @{ Authorization = "Bearer $global:TOKEN" }
+    "logged in as priya@tadka.test (token valid for 15 minutes)"
+}
 # Flip the fake payment gateway between Fast, Slow, Failing and Outage. Takes effect on the NEXT charge, no restart.
 function Set-GatewayBehavior([string]$Value) {
     $f = "src\Tadka.Payment.Api\appsettings.Development.json"
@@ -196,6 +202,10 @@ function Watch-OrderStatus([string]$Id, [int]$Seconds = 10) {
 
 **Bash:**
 ```bash
+login_priya() {   # stores the token in $TOKEN. Run it again whenever a command returns 401 (a login lasts 15 minutes).
+  TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/auth/login -H "Content-Type: application/json" -d '{"email":"priya@tadka.test","password":"Password123!"}' | sed -E 's/.*"accessToken":"([^"]+)".*/\1/')
+  echo "logged in as priya@tadka.test (token valid for 15 minutes)"
+}
 set_gateway() {   # Fast | Slow | Failing | Outage. Takes effect on the NEXT charge, no restart.
   sed -i "s/\"Behavior\": \"[A-Za-z]*\"/\"Behavior\": \"$1\"/" src/Tadka.Payment.Api/appsettings.Development.json
   grep '"Behavior"' src/Tadka.Payment.Api/appsettings.Development.json
@@ -204,6 +214,8 @@ new_order()    { curl -s -X POST http://localhost:8080/api/v1/orders -H "Authori
 order_status() { curl -s "http://localhost:8080/api/v1/orders/$1" -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'; }
 watch_order()  { for i in $(seq 1 "${2:-10}"); do echo "$(date +%T)  $(order_status "$1")"; sleep 1; done; }
 ```
+
+> **Your login lasts 15 minutes.** The access token expires after 15 minutes, and it also stops working whenever the monolith restarts (its signing keys reset). The demos take longer than that. If any command prints `401 Unauthorized`, run `Login-Priya` (bash: `login_priya`) and repeat the command. Nothing else needs to change.
 
 **How to read the Payment terminal.** Every log line is one JSON object, and the part you read is the text after `"@mt":"`. Ignore the rest of the line. Search the window for these words:
 
@@ -270,6 +282,7 @@ The other defensible order puts the breaker **outside** the retry loop. Then the
 **Before you start**
 - [ ] The five services are running (Section 1) and you are logged in on the Commands terminal.
 - [ ] The four browser tabs are open and the helpers are loaded ("Set up your screen once", above).
+- [ ] You logged in within the last 15 minutes. If in doubt, run `Login-Priya` (bash: `login_priya`) now.
 - [ ] Payment has been running for at least 45 seconds (the consumer-group handover from Day 13). The Payment terminal shows `OrderPlacedConsumer subscribed to order-placed`. Orders sent before that just wait.
 
 **The lever.** `FakePaymentGateway` reads `IOptionsMonitor<PaymentOptions>`, so a saved change to `Payment:Gateway:Behavior` in [`appsettings.Development.json`](../../src/Tadka.Payment.Api/appsettings.Development.json) applies to the **next charge, with no restart**. The helper `Set-GatewayBehavior` / `set_gateway` edits that value for you. Do **not** set the environment variable `Payment__Gateway__Behavior` for these demos: it would win over the file and could not be changed while Payment runs.
@@ -322,6 +335,7 @@ $ids | ForEach-Object { Get-OrderStatus $_ }
 ```bash
 for id in $ids; do order_status "$id"; done
 ```
+If this prints `401 Unauthorized`, your 15 minute login has expired: run `Login-Priya` (bash: `login_priya`) and run the check again.
 
 ### Step 4: See the same thing in Jaeger
 1. Open the **Jaeger** tab ([http://localhost:16686](http://localhost:16686)).
@@ -737,7 +751,7 @@ dotnet run --project src/Tadka.Api
 Wait about 30 seconds for it to finish starting.
 
 ### Step 2: Log in again and place an order
-The monolith's signing keys reset on every restart, so the old `$TOKEN` no longer works. In the **Commands terminal** re-run the login lines from "PowerShell Status Code Helper & Shared Setup" (the `$TOKEN` / `TOKEN=` line and, in PowerShell, the `$H` line). Then:
+The monolith's signing keys reset on every restart, so the old token no longer works. In the **Commands terminal** run `Login-Priya` (bash: `login_priya`). Then:
 
 **PowerShell:**
 ```powershell
@@ -783,7 +797,7 @@ dotnet run --project src/Tadka.Api
 unset Backpressure__MaxConcurrent
 dotnet run --project src/Tadka.Api
 ```
-Then log in again in the Commands terminal.
+Then run `Login-Priya` (bash: `login_priya`) again.
 
 ---
 
@@ -806,7 +820,7 @@ export LoadShed__Enabled=true
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
 dotnet run --project src/Tadka.Api
 ```
-Wait about 30 seconds, then log in again in the Commands terminal (see Demo 5, Step 2).
+Wait about 30 seconds, then run `Login-Priya` (bash: `login_priya`) in the Commands terminal.
 
 ### Step 2: Ask for optional and critical things
 **Run:**
@@ -848,7 +862,7 @@ dotnet run --project src/Tadka.Api
 unset LoadShed__Enabled
 dotnet run --project src/Tadka.Api
 ```
-Then log in again in the Commands terminal.
+Then run `Login-Priya` (bash: `login_priya`) again.
 
 ---
 
@@ -856,7 +870,7 @@ Then log in again in the Commands terminal.
 
 **What you're proving:** Ordering has no synchronous dependency on Kafka. The order and the event it must publish are saved in **one database transaction** (the Outbox, [Day 9](../adrs/028-transactional-outbox-inbox.md)); a background relay publishes to Kafka afterwards. So when Kafka is gone the order is still accepted in milliseconds, and the event waits in a table until the broker returns.
 
-**Before you start:** you are logged in (Demo 5 and 6 restart the monolith, so log in again if you ran them), and `Get-StatusCode` from section 1 is defined.
+**Before you start:** you are logged in (run `Login-Priya` / `login_priya` if it has been more than 15 minutes, or if you ran Demo 5 or 6, which restart the monolith), and `Get-StatusCode` from section 1 is defined.
 
 ### Step 1: Stop Kafka
 ```bash
@@ -1031,6 +1045,9 @@ Three usual causes. The services push metrics once a minute, so wait 60 to 90 se
 
 ### 9. The Payment terminal scrolls too fast to read
 Use the search box (Ctrl+Shift+F in Windows Terminal) for `circuit` or `Payment FAILED`, or start Payment through the filter shown in "Set up your screen once".
+
+### 10. Every command returns `401 Unauthorized`
+Your login has expired. The access token lasts **15 minutes**, and it also stops working when the monolith (`Tadka.Api`) is restarted, because its signing keys live in memory. Run `Login-Priya` (bash: `login_priya`) in the Commands terminal and repeat the command. Nothing else needs to change. The helpers read `$TOKEN` and `$H` each time they run, so they pick up the new token by themselves.
 ---
 
 ## Measure today (evolution harness)
