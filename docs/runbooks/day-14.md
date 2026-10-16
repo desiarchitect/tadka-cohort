@@ -4,7 +4,7 @@
 
 Day 13 made the 4-service system observable; Day 14 makes it **survivable** — and measures every failure on the Day-13 dashboards. The Polly resilience pipeline completes the synchronous **Payment → Gateway** integration ([ADR-043](../adrs/043-circuit-breaker-retry-backoff.md)); dependency classification and graceful degradation establish platform survivability policies ([ADR-044](../adrs/044-graceful-degradation-dependency-classification.md)).
 
-> **The Essential Architectural Reframe:** The Ordering → Payment hop is asynchronous Kafka ([Day 9](../adrs/028-transactional-outbox-pattern.md)) — when the Payment service is offline, Kafka simply buffers messages without data loss. The circuit breaker lives exclusively on the one synchronous network call we do not control: **Payment Service → External Payment Gateway (Razorpay/Stripe)**.
+> **The Essential Architectural Reframe:** The Ordering → Payment hop is asynchronous Kafka ([Day 9](../adrs/028-transactional-outbox-inbox.md)) — when the Payment service is offline, Kafka simply buffers messages without data loss. The circuit breaker lives exclusively on the one synchronous network call we do not control: **Payment Service → External Payment Gateway (Razorpay/Stripe)**.
 
 > **Distinguish the Two Failures:** "Payment is down" is ambiguous.
 > 1. **Payment Service Down (Process Crash):** The .NET process is dead. Kafka queues `order-placed`. No circuit breaker is involved; this is handled by container restarts and consumer group offset management.
@@ -151,6 +151,91 @@ $BODY = '{"customerId":"c1b2c3d4-0001-4000-8000-000000000001","restaurantId":"a1
 
 ---
 
+### Set up your screen once (every demo below uses it)
+
+Do this before Demo 1 and leave it in place. The demos tell you which window to type in and which tab to look at, using the names below.
+
+**Windows**
+
+| Name used in this runbook | What it is |
+|---|---|
+| **Restaurant terminal** | Terminal 1 above (`Tadka.Restaurant.Api`) |
+| **Payment terminal** | Terminal 2 above (`Tadka.Payment.Api`). Keep it visible: most of what you must see appears here as log lines. |
+| **Delivery terminal** | Terminal 3 above |
+| **Monolith terminal** | Terminal 4 above (`Tadka.Api`) |
+| **Gateway terminal** | Terminal 5 above |
+| **Commands terminal** | A sixth window, opened at the repository root. Everything marked **Run** is typed here. |
+
+**Browser tabs.** Open these four tabs now and leave them open.
+
+| Tab | Address | What you use it for |
+|---|---|---|
+| **Jaeger** | [http://localhost:16686](http://localhost:16686) | How long each order spent inside Payment (the `ProcessPayment` span) |
+| **Prometheus** | [http://localhost:9090](http://localhost:9090) | The circuit-breaker counters |
+| **Grafana** | [http://localhost:3000](http://localhost:3000) (login `admin` / `admin`), then Dashboards, then the folder **Tadka**, then **Tadka, System Overview (RED + business)** | The payment success and failure rates |
+| **Kafka UI** | [http://localhost:8090](http://localhost:8090) | Consumer lag, in the Buffer-mode demo |
+
+**Log in and load the helpers in the Commands terminal.** First run the login and `$BODY` lines from "PowerShell Status Code Helper & Shared Setup" above. Then paste the helpers for your shell. They save you from typing long one-liners, and each demo calls them by name:
+
+**PowerShell:**
+```powershell
+# Flip the fake payment gateway between Fast, Slow, Failing and Outage. Takes effect on the NEXT charge, no restart.
+function Set-GatewayBehavior([string]$Value) {
+    $f = "src\Tadka.Payment.Api\appsettings.Development.json"
+    (Get-Content $f -Raw) -replace '"Behavior": "[A-Za-z]*"', ('"Behavior": "' + $Value + '"') | Set-Content $f -NoNewline
+    Select-String '"Behavior"' $f | ForEach-Object { "gateway Behavior is now: " + $_.Line.Trim() }
+}
+# Place one order through the gateway and return its id.
+function New-Order { (Invoke-RestMethod -Uri http://localhost:8080/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY).id }
+function Get-OrderStatus([string]$Id) { (Invoke-RestMethod -Uri "http://localhost:8080/api/v1/orders/$Id" -Headers $H).status }
+# Print the order's status once a second, with the time, so you can watch it change.
+function Watch-OrderStatus([string]$Id, [int]$Seconds = 10) {
+    1..$Seconds | ForEach-Object { "{0:HH:mm:ss}  {1}" -f (Get-Date), (Get-OrderStatus $Id); Start-Sleep -Seconds 1 }
+}
+```
+
+**Bash:**
+```bash
+set_gateway() {   # Fast | Slow | Failing | Outage. Takes effect on the NEXT charge, no restart.
+  sed -i "s/\"Behavior\": \"[A-Za-z]*\"/\"Behavior\": \"$1\"/" src/Tadka.Payment.Api/appsettings.Development.json
+  grep '"Behavior"' src/Tadka.Payment.Api/appsettings.Development.json
+}
+new_order()    { curl -s -X POST http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" | sed -E 's/^\{"id":"([^"]+)".*/\1/'; }
+order_status() { curl -s "http://localhost:8080/api/v1/orders/$1" -H "Authorization: Bearer $TOKEN" | sed -E 's/.*"status":"([^"]+)".*/\1/'; }
+watch_order()  { for i in $(seq 1 "${2:-10}"); do echo "$(date +%T)  $(order_status "$1")"; sleep 1; done; }
+```
+
+**How to read the Payment terminal.** Every log line is one JSON object, and the part you read is the text after `"@mt":"`. Ignore the rest of the line. Search the window for these words:
+
+| Search for | It means |
+|---|---|
+| `Payment COMPLETED` | the charge succeeded |
+| `Payment FAILED` | the charge failed; the `Reason` on the same line says why |
+| `circuit OPENED` | the breaker tripped and will fail every call fast |
+| `circuit HALF-OPEN` | the break time is over and one call is being let through as a probe |
+| `circuit CLOSED` | the probe succeeded and normal service resumed |
+| `BUFFERED` and `buffered` | Buffer mode is holding the order for later (Demo 1b) |
+| `SLOW` | the fake gateway is deliberately taking 8 seconds (Demo 4) |
+
+The symbols in front of some of these lines may print as odd characters in a Windows console. Ignore them; the words are what matter. Windows Terminal has a search box on **Ctrl+Shift+F**.
+
+**Optional: show only those lines.** If the Payment terminal is too busy, stop Payment (**Ctrl+C**) and start it again through a filter. The variables you set before `dotnet run` are unchanged. Use this in place of the plain `dotnet run --project src/Tadka.Payment.Api` line:
+
+**PowerShell:**
+```powershell
+dotnet run --project src/Tadka.Payment.Api 2>&1 | Select-String -Pattern 'circuit|Payment (COMPLETED|FAILED|BUFFERED)|buffered|SLOW'
+```
+
+**Bash:**
+```bash
+dotnet run --project src/Tadka.Payment.Api 2>&1 | grep -i --line-buffered -E 'circuit|Payment (COMPLETED|FAILED|BUFFERED)|buffered|SLOW'
+```
+If nothing appears when you expect lines, stop it and use the plain `dotnet run` instead.
+
+> **If you launched the five services exactly as shown above, Payment is already running with the OpenTelemetry variable and a 15 second circuit break. You do not restart it for Demo 1.** Restarting resets the breaker to closed, which would hide the recovery you want to watch.
+
+---
+
 ## 2. Architecture: The 4-Layer Polly Resilience Pipeline
 
 In [`src/Tadka.Payment.Api/Resilience/PaymentResiliencePipeline.cs`](../../src/Tadka.Payment.Api/Resilience/PaymentResiliencePipeline.cs), every charge operation passes through four concentric layers:
@@ -176,61 +261,77 @@ The other defensible order puts the breaker **outside** the retry loop. Then the
 
 ---
 
-## 3. Demo 1: Circuit Breaker Lifecycle (Open → Half-Open → Recover)
+## 3. Demo 1: Circuit Breaker Lifecycle (Open, Half-Open, Recover)
 
 **What you're proving:** When an external payment gateway suffers an outage, the system automatically stops hammering the failing vendor, fails fast in milliseconds to protect system threads, tests for recovery via a canary probe, and auto-heals when the gateway recovers.
 
-### The lever: flip the gateway while Payment keeps running
-`FakePaymentGateway` reads `IOptionsMonitor<PaymentOptions>`, so a saved change to `Payment:Gateway:Behavior` in [`appsettings.Development.json`](../../src/Tadka.Payment.Api/appsettings.Development.json) applies to the **next charge, with no restart**. That matters: restarting Payment resets the circuit breaker to closed, which would hide the recovery path we want to watch. (An environment variable `Payment__Gateway__Behavior` would win over the file and cannot be changed while the process runs, so do **not** set it for this demo.)
+**In one line:** make the gateway fail, send six orders and watch the breaker open; wait 15 seconds and send one more order to watch it probe (half-open); then fix the gateway and send one more order to watch it close.
 
-Start Payment once, **without** a Behavior variable, with the 15 second break, then wait about 45 seconds (the consumer-group handover from Day 13):
+**Before you start**
+- [ ] The five services are running (Section 1) and you are logged in on the Commands terminal.
+- [ ] The four browser tabs are open and the helpers are loaded ("Set up your screen once", above).
+- [ ] Payment has been running for at least 45 seconds (the consumer-group handover from Day 13). The Payment terminal shows `OrderPlacedConsumer subscribed to order-placed`. Orders sent before that just wait.
 
-**Bash:**
-```bash
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
-export Payment__CircuitBreakSeconds=15
-dotnet run --project src/Tadka.Payment.Api
-```
+**The lever.** `FakePaymentGateway` reads `IOptionsMonitor<PaymentOptions>`, so a saved change to `Payment:Gateway:Behavior` in [`appsettings.Development.json`](../../src/Tadka.Payment.Api/appsettings.Development.json) applies to the **next charge, with no restart**. The helper `Set-GatewayBehavior` / `set_gateway` edits that value for you. Do **not** set the environment variable `Payment__Gateway__Behavior` for these demos: it would win over the file and could not be changed while Payment runs.
 
-**PowerShell:**
-```powershell
-$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
-$env:Payment__CircuitBreakSeconds = "15"
-dotnet run --project src/Tadka.Payment.Api
-```
-
-In another terminal at the repository root, flip the gateway to `Outage` (the one-liners change whatever value is there to the new one):
-
-**Bash:**
-```bash
-sed -i 's/"Behavior": "[A-Za-z]*"/"Behavior": "Outage"/' src/Tadka.Payment.Api/appsettings.Development.json
-```
+### Step 1: Make the gateway fail
+**Run** (Commands terminal):
 
 **PowerShell:**
 ```powershell
-$f = "src\Tadka.Payment.Api\appsettings.Development.json"
-(Get-Content $f -Raw) -replace '"Behavior": "[A-Za-z]*"','"Behavior": "Outage"' | Set-Content $f -NoNewline
+Set-GatewayBehavior Outage
 ```
-When you are completely finished, undo the edit with `git checkout -- src/Tadka.Payment.Api/appsettings.Development.json`.
-
-### Step 1: Trip the breaker with a burst of orders
 **Bash:**
 ```bash
-for i in 1 2 3 4 5 6; do curl -s -X POST http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY" > /dev/null; done
+set_gateway Outage
 ```
+**You should see:** `"Behavior": "Outage"`. Nothing else happens yet.
+
+### Step 2: Send six orders
+**Run** (Commands terminal). This keeps the six order ids so you can check them in Step 3:
 
 **PowerShell:**
 ```powershell
-1..6 | ForEach-Object { Invoke-RestMethod -Uri http://localhost:8080/api/v1/orders -Method Post -Headers $H -ContentType "application/json" -Body $BODY | Out-Null }
+$ids = 1..6 | ForEach-Object { New-Order }
 ```
+**Bash:**
+```bash
+ids=$(for i in 1 2 3 4 5 6; do new_order; done)
+```
+**You should see:** the command finishes at once with no error. The order is accepted immediately; the charge happens afterwards, through Kafka. The action is in the **Payment terminal**.
 
-### Step 2: Read the Payment log
+### Step 3: Read the Payment terminal (within about 5 seconds)
+**Look at:** the Payment terminal. Search for `Payment FAILED` and `circuit`. **You should see, in this order:**
 ```json
 {"@mt":"Payment FAILED for order {OrderId}: {Reason}","Reason":"PaymentGatewayUnavailableException: Gateway unavailable / 5xx (simulated outage)."}
 {"@mt":"Payment circuit OPENED for ~{Break}s: gateway looks down; failing fast.","@l":"Error","Break":15}
 {"@mt":"Payment FAILED for order {OrderId}: {Reason}","Reason":"BrokenCircuitException: The circuit is now open and is not allowing calls."}
 ```
-**Captured live (ProcessPayment span of each order in Jaeger, service `Tadka.Payment.Api`):**
+What each line means:
+- **`PaymentGatewayUnavailableException`**: Payment really called the gateway (up to 3 attempts with a jittered back-off) and the gateway failed every time.
+- **`circuit OPENED ... "Break":15`**: five failed attempts inside the 30 second window opened the breaker. It will now refuse every call for 15 seconds.
+- **`BrokenCircuitException`**: the later orders never reached the gateway at all. They were refused in milliseconds.
+
+**Then check the orders.** Default `Compensate` mode cancels a failed order, so all six should read `Cancelled` within a few seconds:
+
+**PowerShell:**
+```powershell
+$ids | ForEach-Object { Get-OrderStatus $_ }
+```
+**Bash:**
+```bash
+for id in $ids; do order_status "$id"; done
+```
+
+### Step 4: See the same thing in Jaeger
+1. Open the **Jaeger** tab ([http://localhost:16686](http://localhost:16686)).
+2. In **Service** choose `Tadka.Payment.Api`. In **Operation** choose `ProcessPayment`. Set **Lookback** to *Last 15 Minutes*. Click **Find Traces**.
+3. **You should see six traces**, one per order, newest at the top.
+4. Click one trace. In the timeline find the row named **`ProcessPayment`** (service `Tadka.Payment.Api`). The time at the right end of that row is how long Payment spent on the charge. That is the number in the table below. It is **not** the total at the top of the page, because the page total also includes the trip through Kafka and the other services.
+5. Click the `ProcessPayment` row to open its details. Under **Tags** you should see `order.id`, `payment.amount`, `payment.status = failed`, and an error marker.
+6. Open the oldest of the six traces first and work toward the newest.
+
+**Captured live (the `ProcessPayment` span of each order, service `Tadka.Payment.Api`):**
 
 | Order | Took | Why it failed |
 |---|---|---|
@@ -238,19 +339,61 @@ for i in 1 2 3 4 5 6; do curl -s -X POST http://localhost:8080/api/v1/orders -H 
 | 2 | **882 ms** | two attempts; the 5th failed attempt of the burst opened the circuit; the 3rd attempt got `BrokenCircuitException` and was not retried |
 | 3 to 6 | **8 to 11 ms** each | `BrokenCircuitException`: no network call, no retry loop |
 
-That is the whole point of the breaker: order 1 cost 1.5 seconds of resources, orders 3 to 6 cost 10 milliseconds each.
+The three attempts of order 1 are inside that one span, so Jaeger shows one bar, not three. That is the whole point of the breaker: order 1 cost 1.5 seconds of resources, orders 3 to 6 cost 10 milliseconds each.
 
-### Step 3: Half-open, the probe, and the second trip
-After the 15 second break the next call is let through as a probe. While the gateway is still `Outage`, the probe fails and the circuit re-opens for another 15 seconds. **Captured live:**
+### Step 5: See HALF-OPEN (it needs one more order)
+You will not see `HALF-OPEN` after the burst, however long you wait. The breaker only moves to half-open when a **new call arrives after the 15 second break has passed**. So you have to send that call:
+
+1. In the Payment terminal find the last `circuit OPENED` line and note its time (the `@t` value at the start of the line).
+2. Wait at least **15 seconds** (the `Break` value in that line). Count to 20 to be safe.
+3. **Run** one more order:
+
+**PowerShell:**
+```powershell
+New-Order | Out-Null
+```
+**Bash:**
+```bash
+new_order > /dev/null
+```
+4. **Look at the Payment terminal.** Within a second or two you should see `circuit HALF-OPEN`, then (the gateway is still in `Outage`) `circuit OPENED` again for another 15 seconds, then a `Payment FAILED` line for that order ending in `BrokenCircuitException`. The second line is the probe failing: the breaker re-opened as soon as the probe failed, so the order's remaining attempt was refused.
+
+**Captured live:**
 ```
 16:36:17.159  Payment circuit OPENED for ~15s
 16:36:53.533  Payment circuit HALF-OPEN: probing the gateway with one request
 16:36:53.749  Payment circuit OPENED for ~15s        <- the probe failed (216 ms later)
 16:36:53.951  Payment FAILED ... BrokenCircuitException   <- the order behind it fails fast
 ```
+Notice the 36 second gap between the first `OPENED` and `HALF-OPEN`: the circuit sat open until an order arrived. If you only see `BrokenCircuitException` lines and no `HALF-OPEN`, you sent the order before the 15 seconds had passed. Wait and send another.
 
-### Step 4: Recovery without a restart
-Flip the gateway back (`"Behavior": "Fast"`, same one-liners with `Fast`), wait for the break to elapse, and place an order. **Captured live:**
+### Step 6: Recover without a restart
+1. **Run** (Commands terminal):
+
+**PowerShell:**
+```powershell
+Set-GatewayBehavior Fast
+```
+**Bash:**
+```bash
+set_gateway Fast
+```
+2. Wait at least 15 seconds after the **second** `circuit OPENED` line.
+3. **Run** one order and watch it:
+
+**PowerShell:**
+```powershell
+$ID = New-Order
+Watch-OrderStatus $ID 15
+```
+**Bash:**
+```bash
+ID=$(new_order)
+watch_order "$ID" 15
+```
+4. **You should see** in the Payment terminal `circuit HALF-OPEN`, then `circuit CLOSED`, then `Payment COMPLETED`. In the Commands terminal the order goes from `Created` to `Confirmed` within a few seconds.
+
+**Captured live:**
 ```
 16:37:15.905  Payment circuit HALF-OPEN: probing the gateway with one request
 16:37:16.116  Payment circuit CLOSED: gateway healthy again.
@@ -258,16 +401,43 @@ Flip the gateway back (`"Behavior": "Fast"`, same one-liners with `Fast`), wait 
 ```
 The probe was the real customer order. It succeeded, the breaker closed, and the next order was `Confirmed` as normal.
 
-### Prometheus metric verification
-In Prometheus ([http://localhost:9090](http://localhost:9090)) (the series appear after the 60 second metric export):
+### Step 7: Check the counters in Prometheus
+1. Wait **60 to 90 seconds**. The services push metrics once a minute.
+2. Open the **Prometheus** tab ([http://localhost:9090](http://localhost:9090)).
+3. Type this into the box at the top and click **Execute**, then open the **Table** tab:
 ```promql
 sum by (state) (tadka_payment_circuit_transitions_total)
 ```
-**Captured:** `open` 3, `half_open` 2, `closed` 1 (the counts include an earlier Payment instance's first trip).
+4. **You should see** three rows: `{state="open"}`, `{state="half_open"}` and `{state="closed"}`. For exactly Steps 1 to 6 the counts are **open 2, half_open 2, closed 1** (the burst opened it, the failed probe re-opened it, then one half-open and one close on recovery). If you ran the demo in the last few minutes the numbers include those earlier trips. Click the **Graph** tab to see the counts step up.
 
-> **Critical Teaching Contrast: Decline vs. Outage:**
-> If you flip the gateway to `Failing` (insufficient funds / card declined), the circuit breaker **does not trip**. A business rejection is an expected domain outcome, not an infrastructure failure. Conflating declines with outages is an anti-pattern.
-> **Captured live:** six orders with the gateway declining each took 209 to 223 ms (a single attempt: no retry), and the Payment log had **zero** circuit lines.
+**Captured live:** `open` 3, `half_open` 2, `closed` 1 (the counts included an earlier Payment instance's first trip).
+
+### Step 8 (optional): The same story in Grafana
+Open the **Grafana** tab, then the dashboard **Tadka, System Overview (RED + business)**. Set the time range (top right) to *Last 15 minutes*. In the panel **Payment results by status** the `failed` line rises during Steps 2 to 5 and `success` appears after Step 6. Both lag by about a minute.
+
+### Demo 1a: A decline must not trip the breaker
+**What you're proving:** a card decline is a business answer, not an outage. It must never open the breaker. The breaker should be closed now (end of Step 6).
+
+1. **Run:** `Set-GatewayBehavior Failing` (bash: `set_gateway Failing`).
+2. **Run** six orders as in Step 2: `$ids = 1..6 | ForEach-Object { New-Order }` (bash: `ids=$(for i in 1 2 3 4 5 6; do new_order; done)`).
+3. **Look at the Payment terminal.** You should see six `Payment FAILED` lines whose reason is a decline, and **no line containing `circuit`**.
+4. **Look at Jaeger** (Find Traces again): each `ProcessPayment` span takes about 0.2 seconds, because there is a single attempt and no retry.
+5. **Look at Prometheus:** run the Step 7 query again after a minute. The counts have not changed.
+
+**Captured live:** six orders with the gateway declining each took 209 to 223 ms (a single attempt: no retry), and the Payment log had **zero** circuit lines.
+
+> **Critical teaching contrast: Decline vs. Outage.** `Failing` (insufficient funds, card declined) never trips the breaker. Conflating declines with outages is an anti-pattern.
+
+**Reset after Demo 1:**
+```powershell
+Set-GatewayBehavior Fast
+git checkout -- src/Tadka.Payment.Api/appsettings.Development.json
+```
+```bash
+set_gateway Fast
+git checkout -- src/Tadka.Payment.Api/appsettings.Development.json
+```
+(The second line restores the file exactly as committed. Keep `Behavior` at `Fast` between demos while you are still working, and run `git checkout` once when you are completely finished.)
 
 ---
 
@@ -280,50 +450,117 @@ When a payment gateway is temporarily unreachable, how should the platform handl
 | **`Compensate`** (Default) | Records `payment.status = failed`; triggers saga compensating rollback. | Order is cancelled immediately. Customer must re-order. | Consumer offsets committed. Queue stays flat. |
 | **`Buffer`** (ADR-043) | Deletes pending row; seeks back Kafka offset; pauses consumer. | Order remains `Created`. Automatically confirms when gateway recovers. | Consumer group lag increases during outage. |
 
-### Step 1: Compensate mode (default)
-Payment as started in Demo 1 (`Payment__OnGatewayUnavailable` unset means `Compensate`), gateway flipped to `Outage`. Place an order. It is `Cancelled` within a second or two, with `cancelledAt` filled, and the customer has to order again. **Captured live (Demo 1):** orders 1 to 6 all ended `failed`, the saga cancelled them.
+**Before you start:** the gateway is at `Fast` and the breaker is closed (end of Demo 1). Payment runs in the default `Compensate` mode.
 
-### Step 2: Buffer mode
-Restart Payment with the lever, keeping Behavior out of the environment, wait about 45 seconds, then flip the gateway to `Outage`:
-
-**Bash:**
-```bash
-export Payment__CircuitBreakSeconds=15
-export Payment__OnGatewayUnavailable=Buffer
-dotnet run --project src/Tadka.Payment.Api
-```
+### Step 1: Compensate mode (the default)
+1. **Run** (Commands terminal):
 
 **PowerShell:**
 ```powershell
+Set-GatewayBehavior Outage
+$ID = New-Order
+Watch-OrderStatus $ID 15
+```
+**Bash:**
+```bash
+set_gateway Outage
+ID=$(new_order)
+watch_order "$ID" 15
+```
+2. **You should see** the status print `Created` and then `Cancelled` within a second or two. The customer would have to order again.
+3. **Look at the Payment terminal:** a `Payment FAILED` line with the gateway reason.
+4. **Look at Jaeger** (Service `Tadka.Payment.Api`, Operation `ProcessPayment`, Find Traces): the newest trace's `ProcessPayment` span has `payment.status = failed`.
+5. Count the payment rows for the order. One failed row exists in this mode:
+
+**PowerShell:**
+```powershell
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -t -c "select count(*) from payment.payments where \`"OrderId\`"='$ID';"
+```
+**Bash:**
+```bash
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -t -c "select count(*) from payment.payments where \"OrderId\"='$ID';"
+```
+**Captured live (Demo 1):** orders 1 to 6 all ended `failed`, the saga cancelled them.
+
+### Step 2: Buffer mode
+1. In the **Payment terminal** press **Ctrl+C**, then start Payment with the Buffer lever and the OpenTelemetry variable. Keep `Behavior` out of the environment:
+
+**PowerShell:**
+```powershell
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
 $env:Payment__CircuitBreakSeconds = "15"
 $env:Payment__OnGatewayUnavailable = "Buffer"
 dotnet run --project src/Tadka.Payment.Api
 ```
-
-Place one order, then look at it, at the payment rows, and at the Kafka consumer lag a few times:
-
 **Bash:**
 ```bash
-curl -s http://localhost:8080/api/v1/orders/<order-id> -H "Authorization: Bearer $TOKEN" | grep -o '"status":"[^"]*"\|"cancelledAt":[^,]*'
-docker exec tadka-payment-db psql -U tadka -d tadka_payment -t -c "select count(*) from payment.payments where \"OrderId\"='<order-id>';"
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+export Payment__CircuitBreakSeconds=15
+export Payment__OnGatewayUnavailable=Buffer
+dotnet run --project src/Tadka.Payment.Api
 ```
+2. Wait about **45 seconds** for the consumer-group handover. The gateway is still at `Outage` from Step 1.
+3. **Run** (Commands terminal) one order and watch it for 20 seconds:
 
 **PowerShell:**
 ```powershell
-$o = Invoke-RestMethod -Uri "http://localhost:8080/api/v1/orders/<order-id>" -Headers $H
-"status: " + $o.status + "  cancelledAt: " + $o.cancelledAt
-docker exec tadka-payment-db psql -U tadka -d tadka_payment -t -c "select count(*) from payment.payments where \`"OrderId\`"='<order-id>';"
-docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
+$ID = New-Order
+Watch-OrderStatus $ID 20
 ```
-
-**Captured live (outage lasted about 45 seconds):** `status: Created`, `cancelledAt` empty, **0** payment rows for the order, consumer lag **1** on `order-placed`. The Payment log:
+**Bash:**
+```bash
+ID=$(new_order)
+watch_order "$ID" 20
+```
+4. **You should see** the status stay at **`Created`** for the whole 20 seconds. It is not cancelled.
+5. **Look at the Payment terminal.** These lines appear, and the second one repeats about every 15 seconds:
 ```
 Payment BUFFERED for order ...: gateway unavailable, will retry later (Buffer mode).
 order-placed at ... buffered: gateway unavailable, seeking back and pausing ~15s.      (repeated every 15 s)
 Payment circuit HALF-OPEN: probing ...  ->  Payment circuit OPENED ...                 (while still down)
 ```
-Now flip the gateway back to `Fast`. **Captured live:** the next retry came 3 seconds later, the circuit went HALF-OPEN then CLOSED, `Payment COMPLETED`, and the order read `Confirmed` 6 seconds after the flip. Lag went 1 to 0. The customer never had to re-order.
+6. **Check the database.** There should be **no** payment row for the order (Buffer mode deletes the pending row before it retries):
+
+**PowerShell:**
+```powershell
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -t -c "select count(*) from payment.payments where \`"OrderId\`"='$ID';"
+```
+**Bash:**
+```bash
+docker exec tadka-payment-db psql -U tadka -d tadka_payment -t -c "select count(*) from payment.payments where \"OrderId\"='$ID';"
+```
+7. **Check Kafka.** Either open the **Kafka UI** tab ([http://localhost:8090](http://localhost:8090)), choose **Consumers** in the left menu and open the group `tadka-payment` (the lag on `order-placed` is 1), or run:
+```bash
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
+```
+```powershell
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
+```
+Look at the `LAG` column.
+
+**Captured live (outage lasted about 45 seconds):** `status: Created`, `cancelledAt` empty, **0** payment rows for the order, consumer lag **1** on `order-placed`.
+
+### Step 3: Recover and watch the buffered order complete
+1. **Run:** `Set-GatewayBehavior Fast` (bash: `set_gateway Fast`).
+2. **Run:** `Watch-OrderStatus $ID 25` (bash: `watch_order "$ID" 25`).
+3. **You should see** the status change from `Created` to **`Confirmed`** within about 20 seconds, with no new order from the customer.
+4. **Look at the Payment terminal:** `circuit HALF-OPEN`, `circuit CLOSED`, `Payment COMPLETED`. In the Kafka UI (or the command above) the lag falls from 1 to 0.
+
+**Captured live:** the next retry came 3 seconds later, the circuit went HALF-OPEN then CLOSED, `Payment COMPLETED`, and the order read `Confirmed` 6 seconds after the flip. Lag went 1 to 0. The customer never had to re-order.
+
+### Reset
+In the Payment terminal press **Ctrl+C**, clear the Buffer lever, and start Payment normally (Compensate mode):
+
+**PowerShell:**
+```powershell
+$env:Payment__OnGatewayUnavailable = $null
+dotnet run --project src/Tadka.Payment.Api
+```
+**Bash:**
+```bash
+unset Payment__OnGatewayUnavailable
+dotnet run --project src/Tadka.Payment.Api
+```
 
 ### Why there is no "ghost row"
 [`PaymentService.ChargeAsync`](../../src/Tadka.Payment.Api/PaymentService.cs) saves a `Pending` row before it calls the gateway. In Buffer mode, when the failure is "gateway unavailable" it deletes that row before throwing, so the redelivered message is not mistaken for a payment already in progress:
@@ -344,28 +581,42 @@ if (options.CurrentValue.OnGatewayUnavailable == GatewayUnavailableMode.Buffer &
 
 **What you're proving:** Redis is classified as a **Performance Dependency**, not a Core Dependency. The entire checkout and restaurant browsing experience must survive a total Redis crash without returning 500 errors to customers.
 
-### Baseline (Redis up)
-Read the menu through the gateway, three times, and time each call:
+### Step 1: Baseline (Redis up)
+**Run** (Commands terminal) the menu read three times and time each call:
 
 **Bash:**
 ```bash
 for i in 1 2 3; do curl -s -o /dev/null -w "http=%{http_code} time=%{time_total}s\n" http://localhost:8080/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu; done
 ```
-
 **PowerShell:**
 ```powershell
 1..3 | ForEach-Object { $t = Measure-Command { $m = Invoke-RestMethod -Uri "http://localhost:8080/api/v1/restaurants/a1b2c3d4-0001-4000-8000-000000000001/menu" }; "items=" + $m.Count + "  time=" + [int]$t.TotalMilliseconds + " ms" }
 ```
-**Captured live:** 6 items; the first (cache cold) 185 to 347 ms, then **5 to 8 ms** from Redis.
+**You should see:** 6 items each time; the first call (cache cold) slower, the next two **5 to 8 ms** from Redis. **Captured live:** first 185 to 347 ms, then 5 to 8 ms.
 
-### Induce chaos: stop Redis
+### Step 2: Stop Redis
 ```bash
 docker compose stop redis
 ```
 ```powershell
 docker compose stop redis
 ```
-Run the same three calls again. **Captured live:** every call still returns **200 OK with 6 items**, in **0.56 to 0.86 seconds** each (fall-through to Postgres plus one 500 ms Redis timeout). Start Redis again (`docker compose start redis`) and the calls drop back to 4 to 20 ms.
+
+### Step 3: Read the menu again, three times
+Run the same three-call command as in Step 1.
+
+**You should see:** every call still returns **200 with 6 items**, but each now takes about **0.56 to 0.86 seconds** (the lookup falls through to Postgres, after one 500 ms wait for Redis). **No call fails.**
+
+**Look at the Restaurant terminal.** You should see a warning like `Redis unavailable for key restaurant:...:menu; falling back to the database.` Customers see nothing; only the logs notice.
+
+### Step 4: Start Redis again
+```bash
+docker compose start redis
+```
+```powershell
+docker compose start redis
+```
+Run the three calls once more. **You should see** them drop back to about 4 to 20 ms.
 
 #### How this is implemented
 The menu cache lives with the Restaurant service ([`Tadka.Restaurant.Api/Caching/CacheService.cs`](../../src/Tadka.Restaurant.Api/Caching/CacheService.cs)):
@@ -385,7 +636,9 @@ catch (RedisException ex)
 
 **What you're proving:** when a hot cache key is missing, thousands of concurrent requests can miss together and overwhelm PostgreSQL (cache stampede). In [`CacheService.cs`](../../src/Tadka.Restaurant.Api/Caching/CacheService.cs) the first caller takes a Redis lock (`SET lock:<key> <token> NX PX 5000`), reads the database and fills the cache; the others wait about 80 ms at a time and read the refreshed key.
 
-Delete the key, reset the table's statistics, fire 30 simultaneous requests, then count how often the table was read:
+**Before you start:** Redis is running (Demo 2 Step 4).
+
+**Run** (Commands terminal). The commands delete the cached menu, reset the table's statistics, fire 30 simultaneous requests, then count how often the table was read:
 
 **Bash:**
 ```bash
@@ -396,7 +649,6 @@ for i in $(seq 1 30); do curl -s -o /dev/null http://localhost:8080/api/v1/resta
 sleep 3
 docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -t -A -c "select coalesce(seq_scan,0)+coalesce(idx_scan,0) from pg_stat_user_tables where relname='menu_items';"
 ```
-
 **PowerShell:**
 ```powershell
 docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -q -c "select pg_stat_reset();"
@@ -406,7 +658,7 @@ $jobs = 1..30 | ForEach-Object { Start-Job { (Invoke-WebRequest -UseBasicParsing
 Start-Sleep -Seconds 3
 docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -t -A -c "select coalesce(seq_scan,0)+coalesce(idx_scan,0) from pg_stat_user_tables where relname='menu_items';"
 ```
-**Captured live:** all 30 requests returned `200`, and `menu_items` was read **exactly 1 time** with the bash loop (1 or 2 with the PowerShell jobs, which start a little staggered). Without the lock it would be up to 30.
+**You should see two things:** (1) all 30 requests returned `200` (PowerShell prints `200 x 30`); (2) the last command prints a single number, the number of times the `menu_items` table was read. **Captured live:** exactly **1** with the bash loop (1 or 2 with the PowerShell jobs, which start a little staggered). Without the lock it would be up to 30.
 
 ---
 
@@ -414,7 +666,23 @@ docker exec tadka-restaurant-db psql -U tadka -d tadka_restaurant -t -A -c "sele
 
 **What you're proving:** a slow dependency is far more dangerous than a dead one. A dead gateway fails in milliseconds; a slow one holds threads, pool connections and memory for as long as you let it.
 
-With Payment running (no Behavior variable) and the circuit break at 15 seconds, flip the gateway to `Slow` (8 seconds per call) with the same one-liners as Demo 1 (`"Behavior": "Slow"`). Place one order, wait for it to finish, then place a second one.
+**Before you start:** Payment is running in the default mode, the gateway is at `Fast`, the breaker is closed.
+
+### Step 1: Make the gateway slow
+**Run:** `Set-GatewayBehavior Slow` (bash: `set_gateway Slow`). Each charge now takes 8 seconds.
+
+### Step 2: Place one order and watch the attempts
+**Run:**
+
+**PowerShell:**
+```powershell
+$ID = New-Order
+```
+**Bash:**
+```bash
+ID=$(new_order)
+```
+**Look at the Payment terminal for the next 10 seconds.** You should see `FakeGateway SLOW: charging order ... will take ~8s` **three times**, about 2.3 seconds apart (each attempt is cut off after 2 seconds, plus a jittered back-off), and then `Payment FAILED ... TimeoutRejectedException`.
 
 **Captured live:**
 ```
@@ -423,7 +691,12 @@ FakeGateway SLOW: ...                                16:41:34.579   attempt 2  (
 FakeGateway SLOW: ...                                16:41:36.678   attempt 3
 Payment FAILED ... TimeoutRejectedException          16:41:38.688   total 6,632 ms for ONE order
 ```
-The second order made two attempts (4.5 s), the **fifth** failed attempt of the series opened the circuit, and its third attempt failed instantly with `BrokenCircuitException`. So a slow gateway trips the breaker too, but only after enough attempts have been wasted, which is why `Slow` costs far more than `Outage` (Demo 1: 1.5 s for the first order).
+
+### Step 3: Confirm the 6.6 seconds in Jaeger
+Open the **Jaeger** tab: Service `Tadka.Payment.Api`, Operation `ProcessPayment`, Lookback *Last 15 Minutes*, **Find Traces**, open the newest trace. The `ProcessPayment` row is about **6.6 seconds** long.
+
+### Step 4: Place a second order
+**Run** `New-Order | Out-Null` (bash: `new_order > /dev/null`) and watch the Payment terminal. **You should see** two attempts (about 4.5 seconds), then `circuit OPENED`, and the third attempt failing instantly with `BrokenCircuitException`. The **fifth** failed attempt of the series opens the breaker, so a slow gateway trips it too, but only after enough attempts have been wasted. That is why `Slow` costs far more than `Outage`.
 
 Compare the three failure shapes for one order, all measured:
 
@@ -435,20 +708,19 @@ Compare the three failure shapes for one order, all measured:
 
 Put the worst case (6.6 s) into the latency budget, not just the per-attempt timeout.
 
+### Reset (close the breaker again)
+1. **Run:** `Set-GatewayBehavior Fast` (bash: `set_gateway Fast`).
+2. Wait 15 seconds, then place one order: `New-Order | Out-Null` (bash: `new_order > /dev/null`).
+3. **You should see** `circuit HALF-OPEN` then `circuit CLOSED` in the Payment terminal.
+
 ---
 
 ## 7b. Demo 5: Backpressure (admission control, ADR-059)
 
 **What you're proving:** past a concurrency limit it is better to answer "busy, retry shortly" at once than to queue every request until everything is slow.
 
-Restart the monolith with a limit of 2 concurrent requests:
-
-**Bash:**
-```bash
-export Backpressure__MaxConcurrent=2
-export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
-dotnet run --project src/Tadka.Api
-```
+### Step 1: Restart the monolith with a limit of 2 concurrent requests
+In the **Monolith terminal** press **Ctrl+C**, then:
 
 **PowerShell:**
 ```powershell
@@ -456,7 +728,28 @@ $env:Backpressure__MaxConcurrent = "2"
 $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
 dotnet run --project src/Tadka.Api
 ```
-Log in again (the monolith's keys reset on restart), place an order, and hold **two** live-tracking streams open on it (a stream is a long request, so it keeps its slot), then make a third request:
+**Bash:**
+```bash
+export Backpressure__MaxConcurrent=2
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+dotnet run --project src/Tadka.Api
+```
+Wait about 30 seconds for it to finish starting.
+
+### Step 2: Log in again and place an order
+The monolith's signing keys reset on every restart, so the old `$TOKEN` no longer works. In the **Commands terminal** re-run the login lines from "PowerShell Status Code Helper & Shared Setup" (the `$TOKEN` / `TOKEN=` line and, in PowerShell, the `$H` line). Then:
+
+**PowerShell:**
+```powershell
+$ID = New-Order
+```
+**Bash:**
+```bash
+ID=$(new_order)
+```
+
+### Step 3: Hold two live-tracking streams open, then make a third request
+A stream is a long request, so it keeps its slot. **Run:**
 
 **Bash:**
 ```bash
@@ -464,14 +757,33 @@ for i in 1 2; do (curl -sN --max-time 12 http://localhost:8080/api/v1/orders/$ID
 sleep 3
 curl -s -D - http://localhost:8080/api/v1/orders/$ID -H "Authorization: Bearer $TOKEN"
 ```
-
 **PowerShell:**
 ```powershell
 1..2 | ForEach-Object { Start-Job { param($u, $t) curl.exe -sN --max-time 12 $u -H "Authorization: Bearer $t" > $null } -ArgumentList "http://localhost:8080/api/v1/orders/$ID/events", $TOKEN | Out-Null }
 Start-Sleep -Seconds 3
 Get-StatusCode -Uri "http://localhost:8080/api/v1/orders/$ID" -Headers $H
 ```
-**Captured live:** `429`, header `Retry-After: 1`, body `{"title":"Server Busy","status":429,"detail":"Admission control: max concurrent requests is 2. Retry shortly."}`. The gateway's `/health` stayed `200`, and once the streams closed the same request returned `200`. Code: [`BackpressureMiddleware`](../../src/Tadka.Api/Middleware/BackpressureMiddleware.cs) (`SemaphoreSlim.WaitAsync(0)`: never waits, never queues). Pinned by `OverloadProtectionTests`.
+**You should see:** the third request is refused with **`429`**. In bash the headers show `Retry-After: 1` and a body `{"title":"Server Busy","status":429,"detail":"Admission control: max concurrent requests is 2. Retry shortly."}`. PowerShell prints just `429`.
+
+### Step 4: Check it recovers
+Wait 15 seconds for the streams to close, then repeat only the last request. **You should see `200`.** Also check `http://localhost:8080/health`: it stayed `200` throughout.
+
+Code: [`BackpressureMiddleware`](../../src/Tadka.Api/Middleware/BackpressureMiddleware.cs) (`SemaphoreSlim.WaitAsync(0)`: never waits, never queues). Pinned by `OverloadProtectionTests`.
+
+### Reset
+In the Monolith terminal press **Ctrl+C**, clear the lever and restart:
+
+**PowerShell:**
+```powershell
+$env:Backpressure__MaxConcurrent = $null
+dotnet run --project src/Tadka.Api
+```
+**Bash:**
+```bash
+unset Backpressure__MaxConcurrent
+dotnet run --project src/Tadka.Api
+```
+Then log in again in the Commands terminal.
 
 ---
 
@@ -479,62 +791,127 @@ Get-StatusCode -Uri "http://localhost:8080/api/v1/orders/$ID" -Headers $H
 
 **What you're proving:** under pressure, drop the optional work first so ordering and payment keep their capacity.
 
-Restart the monolith with `LoadShed__Enabled=true`, log in, then:
+### Step 1: Restart the monolith with shedding on
+In the **Monolith terminal** press **Ctrl+C**, then:
+
+**PowerShell:**
+```powershell
+$env:LoadShed__Enabled = "true"
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
+dotnet run --project src/Tadka.Api
+```
+**Bash:**
+```bash
+export LoadShed__Enabled=true
+export OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"
+dotnet run --project src/Tadka.Api
+```
+Wait about 30 seconds, then log in again in the Commands terminal (see Demo 5, Step 2).
+
+### Step 2: Ask for optional and critical things
+**Run:**
 
 **Bash:**
 ```bash
 for p in /api/v1/orders/history /api/v1/orders/00000000-0000-0000-0000-000000000001/invoice /api/v1/coupons/WELCOME10 /health; do curl -s -o /dev/null -w "GET $p -> %{http_code}\n" http://localhost:8080$p -H "Authorization: Bearer $TOKEN"; done
 curl -s -o /dev/null -w "POST /api/v1/orders -> %{http_code}\n" -X POST http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d "$BODY"
 ```
-
 **PowerShell:**
 ```powershell
 foreach ($p in "/api/v1/orders/history","/api/v1/orders/00000000-0000-0000-0000-000000000001/invoice","/api/v1/coupons/WELCOME10","/health") { "GET $p -> " + (Get-StatusCode -Uri "http://localhost:8080$p" -Headers $H) }
 "POST /api/v1/orders -> " + (Get-StatusCode -Uri http://localhost:8080/api/v1/orders -Method Post -Headers $H -Body $BODY)
 ```
-**Captured live:** history `503`, invoice `503`, coupons `503` (each with `Retry-After: 5` and the body "Load shedding active: this non-critical path is temporarily unavailable. Ordering and payment still work."), `/health` `200`, `POST /orders` `201`. Code: [`LoadSheddingMiddleware`](../../src/Tadka.Api/Middleware/LoadSheddingMiddleware.cs). The explicit sheddable list (`/history`, `/invoice`, `/demo`) is checked **before** the critical prefixes, because history and invoice live under `/api/v1/orders`, a critical prefix. Everything else under `/api` that is not critical (auth, orders, payments, deliveries) is also shed.
+**You should see:**
+
+| Request | Result |
+|---|---|
+| `GET /api/v1/orders/history` | **503** |
+| `GET .../invoice` | **503** |
+| `GET /api/v1/coupons/WELCOME10` | **503** |
+| `GET /health` | **200** |
+| `POST /api/v1/orders` | **201** |
+
+**Captured live:** each `503` carries `Retry-After: 5` and the body "Load shedding active: this non-critical path is temporarily unavailable. Ordering and payment still work." Code: [`LoadSheddingMiddleware`](../../src/Tadka.Api/Middleware/LoadSheddingMiddleware.cs). The explicit sheddable list (`/history`, `/invoice`, `/demo`) is checked **before** the critical prefixes, because history and invoice live under `/api/v1/orders`, a critical prefix. Everything else under `/api` that is not critical (auth, orders, payments, deliveries) is also shed.
 
 Backpressure vs shedding in one line: backpressure says "I am full, come back" to **everyone**; shedding says "I am choosing to refuse **this** kind of work".
+
+### Reset
+In the Monolith terminal press **Ctrl+C**, clear the lever and restart:
+
+**PowerShell:**
+```powershell
+$env:LoadShed__Enabled = $null
+dotnet run --project src/Tadka.Api
+```
+**Bash:**
+```bash
+unset LoadShed__Enabled
+dotnet run --project src/Tadka.Api
+```
+Then log in again in the Commands terminal.
 
 ---
 
 ## 7d. Demo 7: Kafka down (the Outbox buffers the order)
 
-**What you're proving:** Ordering has no synchronous dependency on Kafka. The order and the event it must publish are saved in **one database transaction** (the Outbox, [Day 9](../adrs/028-transactional-outbox-pattern.md)); a background relay publishes to Kafka afterwards. So when Kafka is gone the order is still accepted in milliseconds, and the event waits in a table until the broker returns.
+**What you're proving:** Ordering has no synchronous dependency on Kafka. The order and the event it must publish are saved in **one database transaction** (the Outbox, [Day 9](../adrs/028-transactional-outbox-inbox.md)); a background relay publishes to Kafka afterwards. So when Kafka is gone the order is still accepted in milliseconds, and the event waits in a table until the broker returns.
 
-Stop Kafka, place three orders (timing each), and count the events still waiting in the Outbox table. Use the `$TOKEN`, `$BODY` and `Get-StatusCode` from section 1 (log in again if you restarted the monolith):
+**Before you start:** you are logged in (Demo 5 and 6 restart the monolith, so log in again if you ran them), and `Get-StatusCode` from section 1 is defined.
+
+### Step 1: Stop Kafka
+```bash
+docker compose stop kafka
+```
+```powershell
+docker compose stop kafka
+```
+
+### Step 2: Place three orders and time them
+**Run:**
 
 **Bash:**
 ```bash
-docker compose stop kafka
 for i in 1 2 3; do curl -s -o /dev/null -w "%{http_code} in %{time_total}s\n" \
   -X POST http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" -d "$BODY"; done
-docker exec tadka-postgres psql -U tadka -d tadka -t -A \
-  -c "select count(*) from ordering.outbox_messages where \"ProcessedAt\" is null;"
 ```
-
 **PowerShell:**
 ```powershell
-docker compose stop kafka
 1..3 | ForEach-Object { $t = Measure-Command { $c = Get-StatusCode `
   -Uri http://localhost:8080/api/v1/orders -Method Post -Headers $H -Body $BODY }
   "$c in " + [int]$t.TotalMilliseconds + " ms" }
-docker exec tadka-postgres psql -U tadka -d tadka -t -A `
-  -c "select count(*) from ordering.outbox_messages where \`"ProcessedAt\`" is null;"
 ```
-**Captured live:** each `POST /orders` returned `201` in about **12 to 60 ms**, the orders stayed `Created`, and the unsent Outbox count was **3** (it grows by one per order). Then bring the broker back:
+**You should see:** three lines, each `201` and well under a tenth of a second. **Captured live:** about **12 to 60 ms** each. The orders are accepted even though Kafka is down.
+
+### Step 3: Count the events waiting in the Outbox
+**Run:**
 
 **Bash:**
 ```bash
-docker compose start kafka
+docker exec tadka-postgres psql -U tadka -d tadka -t -A \
+  -c "select count(*) from ordering.outbox_messages where \"ProcessedAt\" is null;"
 ```
-
 **PowerShell:**
 ```powershell
-docker compose start kafka
+docker exec tadka-postgres psql -U tadka -d tadka -t -A `
+  -c "select count(*) from ordering.outbox_messages where \`"ProcessedAt\`" is null;"
 ```
-**Captured live:** once the broker is back, the relay drained the backlog (0 unsent rows) within seconds. In this lab the broker keeps nothing on disk, so after a broker restart re-create the topics (the topic loop in section 1) and restart the five services, then place one fresh order to prove the whole chain is healthy again. The point of the demo is the first half: while Kafka was away, every order was accepted and its event was safe in the Outbox.
+**You should see** a number that grows by one for every order you placed: **3** after three orders. Place one more order and run the count again to watch it become 4. The orders themselves read `Created`.
+
+### Step 4: Bring Kafka back and watch the backlog drain
+1. **Run:**
+```bash
+docker compose start kafka
+until docker inspect tadka-kafka --format "{{.State.Health.Status}}" | grep -q healthy; do sleep 3; done
+```
+```powershell
+docker compose start kafka
+do { Start-Sleep -Seconds 3 } until ((docker inspect tadka-kafka --format "{{.State.Health.Status}}") -eq "healthy")
+```
+2. **Run the Step 3 count again, every few seconds.** **You should see** it fall to **0** within seconds: the relay publishes the waiting events. **Captured live:** 0 unsent rows within seconds of the broker returning.
+3. In this lab the broker keeps nothing on disk, so after a broker restart re-create the topics (the topic loop in section 1), and restart the five services if orders stop flowing. Then place one fresh order and watch it reach `Confirmed` (`Watch-OrderStatus` / `watch_order`) to prove the whole chain is healthy again.
+
+The point of the demo is the first half: while Kafka was away, every order was accepted and its event was safe in the Outbox.
 
 ---
 
@@ -615,9 +992,9 @@ Monolith 115, Payment 35, Delivery 23, Restaurant 19, Gateway 15. It includes th
 
 - [ ] All 13 Docker containers running healthy (`docker compose --profile observability ps`).
 - [ ] Five services running with `$env:OTEL_EXPORTER_OTLP_ENDPOINT="http://localhost:4317"`.
-- [ ] Tripped circuit breaker under `Payment__Gateway__Behavior=Outage` and verified fail-fast log output in milliseconds.
-- [ ] Verified the half-open probe (failed once, then succeeded) and recovery by flipping the gateway to `Fast` **without restarting Payment**.
-- [ ] Demonstrated Buffer mode (`Payment:OnGatewayUnavailable=Buffer`): verified pending row deletion and consumer seek-back.
+- [ ] Flipped the gateway to `Outage` (`Set-GatewayBehavior Outage`), sent six orders, and saw `circuit OPENED` and `BrokenCircuitException` in the Payment terminal, and in Jaeger the `ProcessPayment` spans of about 1.5 s, 0.9 s and then about 10 ms (Demo 1, Steps 1 to 4).
+- [ ] Waited 15 seconds and sent one more order: saw `circuit HALF-OPEN` then `circuit OPENED` again (the probe failed). Flipped to `Fast`, waited 15 seconds, sent one order: saw `HALF-OPEN`, `CLOSED`, `Payment COMPLETED` **without restarting Payment**. Prometheus showed open 2, half_open 2, closed 1 (Demo 1, Steps 5 to 7).
+- [ ] Demonstrated Buffer mode (`Payment__OnGatewayUnavailable=Buffer`): the order stayed `Created`, 0 payment rows, Kafka lag 1 in the Kafka UI, then `Confirmed` after the flip to `Fast` (Demo 1b).
 - [ ] Simulated Redis outage (`docker compose stop redis`) and verified 200 OK cache fall-through.
 - [ ] Slow gateway: one order took about 6.6 s (3 attempts of 2 s), and the breaker opened on the second order (Demo 4).
 - [ ] Backpressure returned `429` with `Retry-After: 1`, and load shedding returned `503` for history, invoice and coupons while `POST /orders` stayed `201` (Demos 5 and 6).
@@ -629,7 +1006,7 @@ Monolith 115, Payment 35, Delivery 23, Restaurant 19, Gateway 15. It includes th
 ## 14. Troubleshooting
 
 ### 1. Circuit breaker does not trip when testing failures
-Verify that you are using `Payment__Gateway__Behavior=Outage`, not `Failing`. `Failing` simulates a card decline, which is a business response and intentionally does not increment the failure ratio. Also ensure at least 5 calls are placed within the 30-second sampling window.
+Run `Set-GatewayBehavior Outage` (bash: `set_gateway Outage`) and check the line it prints says `"Behavior": "Outage"`, not `Failing`. `Failing` simulates a card decline, which is a business response and intentionally does not increment the failure ratio. Also ensure at least 5 calls are placed within the 30-second sampling window (six orders are enough). If the line is right but nothing changes, an environment variable `Payment__Gateway__Behavior` is set in the Payment terminal and overrides the file (see 4 below).
 
 ### 2. Orders stay in `Created` in Buffer mode
 That is Buffer mode doing its job while the gateway is down. To resume, flip the gateway back to `Fast` in `appsettings.Development.json` (no restart). If you started Payment with a `Payment__Gateway__Behavior` environment variable, the file edit is ignored (the variable wins): unset it and restart Payment once.
@@ -642,3 +1019,15 @@ An environment variable `Payment__Gateway__Behavior` is set in that terminal (it
 
 ### 5. Kafka restarts in a loop after Docker was restarted
 `Log directory /tmp/kafka-logs is already formatted`: you are on an older copy of `docker/kafka-scram-entrypoint.sh`. `git pull` this branch, then `docker compose up -d --force-recreate kafka`.
+
+### 6. I never see `circuit HALF-OPEN`
+It is printed only when a **new order arrives after the break time has passed**. After the burst the circuit just sits open. Wait at least 15 seconds after the last `circuit OPENED` line (the `Break` value on that line) and send one more order (Demo 1, Step 5). If you send it earlier you only get `BrokenCircuitException`.
+
+### 7. Jaeger has no `Tadka.Payment.Api` service, or no `ProcessPayment` traces
+Payment was started without `OTEL_EXPORTER_OTLP_ENDPOINT`, so it sends nothing. Stop it (Ctrl+C), set the variable (section 1) and start it again. Then send an order and refresh the Jaeger page; set **Lookback** to *Last 15 Minutes* so older traces are not hidden.
+
+### 8. Prometheus returns nothing for `tadka_payment_circuit_transitions_total`
+Three usual causes. The services push metrics once a minute, so wait 60 to 90 seconds after the transitions. The series does not exist until the breaker has changed state at least once. And Payment must have been started with `OTEL_EXPORTER_OTLP_ENDPOINT`. Type just `tadka_payment` in the query box and the suggestion list shows which payment metrics exist.
+
+### 9. The Payment terminal scrolls too fast to read
+Use the search box (Ctrl+Shift+F in Windows Terminal) for `circuit` or `Payment FAILED`, or start Payment through the filter shown in "Set up your screen once".
