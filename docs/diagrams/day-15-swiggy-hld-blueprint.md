@@ -68,7 +68,7 @@ flowchart TB
 | Order service | Ordering monolith slice | 3–4 |
 | Kafka backbone | Outbox + Saga | 9 / ADR-027–029 |
 | Payment + Razorpay | Payment + Polly breaker | 8, 14 / ADR-024, 043 |
-| Dispatch + location | Delivery + Redis-GEO | 11 / ADR-033–034 |
+| Dispatch + location | Delivery (atomic rider claim) + Redis-GEO (latest position) | 11 / ADR-033–034 |
 | Live tracking | SSE + Redis pub/sub | 6 / ADR-020 |
 | Search (ES) | `GET /restaurants` + replica | drill / option-space |
 | CDN + S3 | not built in Tadka | drill — static offload |
@@ -98,9 +98,11 @@ sequenceDiagram
     P-->>K: payment-results
     K->>O: confirm
     O->>K: order-confirmed
-    K->>D: assign rider (GEOSEARCH)
+    K->>D: assign rider (atomic claim)
     D-->>U: push / SSE tracking
 ```
+
+In Tadka the claim step picks the first available rider and takes it with `UPDATE ... WHERE Status = 'Available'` ([`DeliveryService.cs`](../../src/Tadka.Delivery.Api/DeliveryService.cs)). At Swiggy scale a `GEOSEARCH` shortlist (nearest eligible riders) goes in front of that same claim.
 
 ---
 
