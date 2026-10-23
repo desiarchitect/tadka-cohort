@@ -96,6 +96,8 @@ $env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://localhost:4317"
 dotnet run --project src/Tadka.Gateway
 ```
 
+**Shortcut: one command instead of five terminals (PowerShell).** After `dotnet build Tadka.slnx`, run `./scripts/dev-cluster.ps1` from the repository root. It sets both rate limits to `100000` and the OpenTelemetry endpoint, then starts the Gateway (8080), Tadka.Api (5224), Payment (5240), Delivery (5250) and Restaurant (5260) from the built DLLs, each in its own window. It waits in that window: press **Ctrl+C** there to stop all five. It does not rebuild, so rebuild after any code change. Verified: all five ports listen and the gateway answers `GET /api/v1/restaurants` with 200 about 30 seconds after the start.
+
 ---
 
 ## 2. Authentication: Obtaining Priya's Token
@@ -345,6 +347,38 @@ Redis cache-aside with the single-flight stampede lock (ADR-019) ensures only on
 
 ---
 
+### What each script does
+
+**The k6 folder** (`k6/`). The five tests above, plus the shared code and three extra fixtures:
+
+| File | What it does | Used by |
+|---|---|---|
+| `lib.js` | The shared customer session (list, menu, think, maybe order), the SLO thresholds, and the custom counters (`browse_errors`, `menu_latency`, `orders_placed`, `rate_limited`, `cdn_hit`). It also sends the `X-Azure-FDID` header when you pass `-e FDID=...` (cloud, behind Front Door) | smoke, average-load, stress, spike |
+| `smoke.js` | 1 user, 30 s: is anything broken? | Test 1 |
+| `average-load.js` | 50 users, 5 min: does the SLO hold on a normal busy evening? | Test 2 |
+| `stress.js` | Climbs to 300 users in 8 min (`MAX_VUS`): where is the knee? | Test 3 |
+| `spike.js` | 10 to 200 users in 10 s, then back: survive and recover? | Test 4 |
+| `hot-key.js` | 80 users, 80% of requests to one menu: does the cache lock stop a stampede? | Test 5 |
+| `dinner-rush.js` | The Week 2 break-kit fixture. Same idea as average-load but it calls the **monolith directly** on port 5224 with up to 150 users, before the gateway existed. Orders need `-e ORDER_CUSTOMER_ID=... -e ORDER_TOKEN=...`. Start the monolith with `RateLimit__PerMinute=100000` first | the Week 2 break kit |
+| `polling-vs-sse.js` | The Day 6 comparison: many users **polling** `GET /orders/{id}` once a second versus one open **SSE** stream each. The number to read is the request count: polling grows with users times seconds, SSE grows with users only. Needs `-e ORDER_ID=... -e ORDER_TOKEN=...` (the token of that order's owner) | Day 6 |
+| `evolution.js` | One workload that runs unchanged on every checkpoint branch (`day-03` to `day-16`) so only the architecture changes. It is an **open model**: it sets requests per second in steps, whatever the latency, and reports p50, p95, p99, errors and achieved rate per step. Scenarios: `browse`, `history`, `hotkey`, `orders`. You normally do not run it by hand | the evolution harness below |
+| `README.md` | The same list for people who open the folder | everyone |
+
+**The other scripts Day 16 uses.**
+
+| File | What it does |
+|---|---|
+| `scripts/dev-cluster.ps1` | Starts the five services with the load-test settings (see section 1). Ctrl+C stops them |
+| `evolution/run-ladder.ps1` (`.sh`) | Runs the whole evolution ladder, one checkpoint after another, then builds the report |
+| `evolution/run-checkpoint.ps1` (`.sh`) | Runs one scenario on one checkpoint: makes a worktree of that branch, resets Docker, builds, starts that day's services with the limiters raised, seeds the same 200,000 orders, logs in, runs `k6/evolution.js`, writes a result file, stops the services |
+| `evolution/report.mjs` | Turns the result files into `evolution/report.md` with before and after tables and charts |
+| `evolution/checkpoints.json` | For each checkpoint: how to bring it up, its port, whether it needs a token, the levers to change one thing |
+| `evolution/seed/orders-large.sql` | The 200,000-order data set every checkpoint is loaded with |
+| `scripts/cloud-up.ps1` | Builds the whole system on Azure Container Apps for one session (section 6) |
+| `scripts/cloud-check.ps1` | Tests the deployed system end to end. `-FreeRiders` frees the three seeded riders, `-Burst` and `-AutoscaleOnly` run a k6 burst against the cloud gateway |
+| `scripts/cloud-down.ps1` | Deletes everything that `cloud-up` made and confirms the resource group is gone |
+| `scripts/cloud-common.ps1` | Shared helpers for the three cloud scripts. You never run it |
+
 ### What a laptop run looks like
 
 Measured on a developer laptop with the five services started with `dotnet run` (as in section 1), the Docker stack from section 1, and the rate limits raised. Use these as a rehearsal check: your numbers will differ, but they should look like this and `rate_limited` must be 0.
@@ -496,7 +530,118 @@ Confirm that the script prints "Resource group ... is GONE" to avoid unexpected 
 
 ---
 
-## 7. Portfolio Capstone Checklist
+## 7. How Load Tests Run in Real Production
+
+What you ran above is the rehearsal: one laptop, one tool, a closed model. In a company the same test looks different. This section describes common practice. The Tadka repository does not contain a CI load-test job today, so the YAML below is an example, not a file you can run.
+
+### 7.1 Where the load comes from
+
+Never from a developer laptop. A load generator is a separate machine or container that sits in the same cloud region as the target, in a different network, and has enough CPU to be sure the **generator** is not the bottleneck. When k6 uses a full CPU core, you are measuring k6.
+
+| Way to run it | How | When |
+|---|---|---|
+| One big VM or container | `k6 run` or `jmeter -n` on a dedicated machine | Up to a few thousand users |
+| k6 on Kubernetes | The k6 operator splits one script across many pods (a `TestRun` with a `parallelism` value) | Tens of thousands of users, you already run Kubernetes |
+| Managed cloud service | Grafana Cloud k6, Azure Load Testing (JMeter, and k6 and Locust scripts), the "Distributed Load Testing on AWS" solution, BlazeMeter, Gatling Enterprise | You want load from several regions without running the machines. Check each product's current docs for the script types it supports |
+| Distributed JMeter | One controller plus several worker machines | Existing JMeter estate |
+
+### 7.2 What it runs against
+
+| Target | Used for | Care needed |
+|---|---|---|
+| A performance environment sized like production (same instance types, same database size, 200,000 or more orders) | Most tests. Stress and spike go here | Keeping it close to production costs money. A small test environment gives answers that do not transfer |
+| Production, off peak, with synthetic accounts | Final check before a big event, and the only way to test the real edge (CDN, WAF, DNS) | Needs a kill switch, tagged test traffic and clean-up. Payments and SMS must hit sandbox or fake providers, never real ones (Tadka's fake payment gateway is exactly this) |
+| Production, replayed or mirrored traffic | Checking a new version against real request shapes | Needs a gateway that can mirror requests |
+
+Tag every test request with a header, for example `X-Load-Test: true`, so traces and logs can be filtered and test orders can be left out of business reports.
+
+### 7.3 When it runs
+
+| Stage | Test | How often | What happens on failure |
+|---|---|---|---|
+| Every deploy to staging | Smoke (30 s) | Every pipeline run | The pipeline stops. A k6 threshold that fails makes `k6 run` exit with a non-zero code |
+| Every release candidate or night | Average load (5 to 15 min) | Nightly or per release | The release is blocked until the SLO holds again |
+| Before a big event (IPL final, Big Billion Days, New Year's Eve) and after big architecture changes | Stress and spike | Scheduled, with notice to the on-call team | Findings become capacity work: more replicas, more partitions, a bigger pool |
+| Quarterly | Soak (a normal load for 4 to 12 hours) | Scheduled | Finds slow leaks: memory, connections, disk, queue growth |
+
+Example of a deploy step (not in this repo):
+
+```yaml
+- name: Smoke test staging
+  run: k6 run -e BASE_URL=${{ vars.STAGING_URL }} -e ORDER_TOKEN=${{ secrets.LOADTEST_TOKEN }} -e ORDER_CUSTOMER_ID=${{ vars.LOADTEST_CUSTOMER_ID }} k6/smoke.js
+```
+
+Put a stop rule inside the script so a bad run ends itself instead of hurting a shared environment:
+
+```javascript
+thresholds: {
+  http_req_failed: [{ threshold: 'rate<0.05', abortOnFail: true, delayAbortEval: '30s' }],
+}
+```
+
+### 7.4 Where the results go
+
+A terminal summary is for rehearsals. In production the metrics go to the same Grafana that shows the service metrics, so you see the load and the effect on one screen:
+
+- k6 can write to Prometheus (`k6 run -o experimental-prometheus-rw ...`), InfluxDB or Grafana Cloud.
+- JMeter uses a Backend Listener to InfluxDB, and a report folder made with `jmeter -n -t plan.jmx -l results.jtl -e -o report/`.
+- Look at more than HTTP latency. For Tadka the gate is also **Payment consumer lag** and database connections after the test, because (as the stress test showed) the queue saturates before p99 moves.
+
+### 7.5 Open model versus closed model
+
+The tests you ran use a **closed model**: a fixed number of users who each wait for a reply and then think. If the server slows down, those users send fewer requests, so the test eases off exactly when the system is struggling. Real customers do not wait for each other: they arrive at their own rate. Production load tests therefore often use an **open model**, which fixes the arrival rate (requests per second) whatever the latency:
+
+```javascript
+scenarios: {
+  orders: {
+    executor: 'ramping-arrival-rate',
+    startRate: 10, timeUnit: '1s', preAllocatedVUs: 200, maxVUs: 2000,
+    stages: [{ target: 100, duration: '3m' }, { target: 300, duration: '3m' }],
+  },
+}
+```
+
+`k6/evolution.js` already works this way. In JMeter the equivalent is the Throughput Shaping Timer or the Concurrency Thread Group plugin.
+
+### 7.6 Safety checklist
+
+1. Tell the on-call team and the platform team before the test, and agree a stop word.
+2. Allow-list the load generators in the WAF and the rate limiter, or exempt the test header. This is the 429 trap from section 1, in production form.
+3. Read your cloud provider's load testing policy, and tell the account team before very large tests.
+4. Use test accounts and test data, and clean them up afterwards.
+5. Set an abort threshold and a budget cap.
+6. Write down the result, the date and the version that was tested. A number with no version is not evidence.
+
+### 7.7 k6, JMeter, Gatling, Locust
+
+| | k6 | JMeter | Gatling | Locust |
+|---|---|---|---|---|
+| Test is written in | JavaScript | A GUI that saves XML (`.jmx`) | Scala, Java or Kotlin | Python |
+| Lives well in git and code review | Yes | Poorly: the XML diffs are hard to read | Yes | Yes |
+| Resource use per virtual user | Low | High (one thread per user) | Low | Medium |
+| Protocols | HTTP, WebSocket, gRPC, browser | Very wide: JDBC, JMS, FTP, SOAP, LDAP and more | HTTP, WebSocket, JMS | Anything you can write in Python |
+| Pass or fail in a pipeline | Built in (thresholds set the exit code) | Needs plugins or a wrapper | Built in (assertions) | You write it |
+| Typical reason to pick it | Developer-owned tests, CI gates | A QA team with an existing JMeter estate, or non-HTTP protocols | JVM shops that want good reports | Python teams, custom user behaviour |
+
+A JMeter plan is built in the GUI but **run headless**. The GUI is only for authoring:
+
+**Bash or PowerShell:**
+```bash
+jmeter -n -t tadka-plan.jmx -l results.jtl -e -o report/
+jmeter -n -t tadka-plan.jmx -R worker1,worker2 -l results.jtl   # distributed: run on two worker machines
+```
+
+### 7.8 What this would look like for Tadka
+
+1. A staging environment built with the same Terraform as `cloud-up`, at production size.
+2. A pipeline that runs `smoke.js` after every deploy and `average-load.js` nightly, and fails on a red threshold.
+3. Stress and spike scheduled before a big sale, run from a k6 operator or a managed service in the same region, with a fake payment gateway.
+4. Results in Grafana, with Payment consumer lag next to p99.
+5. The numbers written down per release, so a new version can be compared with the last.
+
+---
+
+## 8. Portfolio Capstone Checklist
 
 Use the completed Tadka repository as a senior system design portfolio artifact:
 

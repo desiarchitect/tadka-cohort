@@ -14,8 +14,11 @@ The suite drives the **canonical "4 services + gateway"** system through the YAR
 | [`spike.js`](spike.js) | quiet → instant flood → drop → recover | Does it survive a sudden surge and recover? | p99 returns to baseline (the breaker opens only if you also start a Payment outage, see Day 14) |
 | [`dinner-rush.js`](dinner-rush.js) | Week-2 concurrency profile (monolith-direct `:5224`) | Does concurrency break naive code? | the Week-2 break-kit before/after |
 | [`hot-key.js`](hot-key.js) | sustained VUs, **~80%** traffic to Meghana menu | Does a celebrity restaurant melt one cache key or DB? | menu p99 spike; pair with stampede toy + single-flight |
+| [`polling-vs-sse.js`](polling-vs-sse.js) | N users polling `GET /orders/{id}` once a second vs N open SSE streams (needs `-e ORDER_ID` and `-e ORDER_TOKEN`) | What does polling cost compared with a push stream? | total request count: polling grows with users x seconds, SSE with users only |
+| [`evolution.js`](evolution.js) | **open model**: requests per second in steps (scenarios `browse`, `history`, `hotkey`, `orders`), same workload on every checkpoint branch | What did each day's change buy? | capacity per checkpoint; normally run by `evolution/run-checkpoint.ps1` |
+| [`lib.js`](lib.js) | not a test: the shared session, SLO thresholds and counters | | |
 
-> `dinner-rush.js` is the original **Week-2 break-kit** fixture and deliberately targets the monolith directly (`:5224`). Keep it as-is; the four Day-16 profiles target the gateway (`:8080`).
+> `dinner-rush.js` is the original **Week-2 break-kit** fixture and deliberately targets the monolith directly (`:5224`). Its order step needs `-e ORDER_CUSTOMER_ID` and `-e ORDER_TOKEN` (orders need a JWT since Day 10), and the monolith must run with `RateLimit__PerMinute=100000`. The Day-16 profiles target the gateway (`:8080`). The runbook [`docs/runbooks/day-16.md`](../docs/runbooks/day-16.md) describes every script in detail.
 
 ---
 

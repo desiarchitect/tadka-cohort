@@ -1,16 +1,18 @@
-// Tadka — Dinner-Rush Load Profile (Week 2 Break Kit)
+// Tadka: Dinner-Rush Load Profile (Week 2 Break Kit)
 //
 // This profile ramps *concurrency*, not just request rate. At 1 lakh/day the
-// total volume is tiny — what breaks the monolith during the 7-10pm rush is
+// total volume is tiny, what breaks the monolith during the 7-10pm rush is
 // many users hitting the hot read paths (restaurant list + menu) at once while
 // a few unindexed queries hold connections open.
 //
 // Usage:
 //   k6 run k6/dinner-rush.js
 //   k6 run -e BASE_URL=http://localhost:5224 -e PEAK_VUS=200 k6/dinner-rush.js
+//   # to include order writes (JWT needed since Day 10): add -e ORDER_CUSTOMER_ID=<id> -e ORDER_TOKEN=<jwt>
+//   # It targets the monolith directly, so start it with RateLimit__PerMinute=100000 (or you measure the limiter).
 //
-// Read the before/after p99 and the pool-timeout error rate. That comparison —
-// not the code — is the deliverable.
+// Read the before/after p99 and the pool-timeout error rate. That comparison,
+// not the code, is the deliverable.
 
 import http from 'k6/http';
 import { check, sleep } from 'k6';
@@ -53,14 +55,14 @@ export default function () {
   // 85% of dinner-rush traffic is browsing; ~15% actually place an order.
   const roll = Math.random();
 
-  // 1) List restaurants (paginated) — every session starts here.
+  // 1) List restaurants (paginated), every session starts here.
   const listRes = http.get(`${BASE_URL}/api/v1/restaurants?page=1&pageSize=10`, {
     tags: { name: 'list' },
   });
   browseErrors.add(listRes.status !== 200);
   check(listRes, { 'list 200': (r) => r.status === 200 });
 
-  // 2) Open a restaurant's menu — the hot read the cohort caches on Day 6 (Redis).
+  // 2) Open a restaurant's menu, the hot read the cohort caches on Day 6 (Redis).
   const restaurantId = pick(RESTAURANT_IDS);
   const menuRes = http.get(`${BASE_URL}/api/v1/restaurants/${restaurantId}/menu`, {
     tags: { name: 'menu' },
@@ -69,7 +71,7 @@ export default function () {
   menuLatency.add(menuRes.timings.duration);
   check(menuRes, { 'menu 200': (r) => r.status === 200 });
 
-  // Think time — a real customer reads the menu before ordering.
+  // Think time, a real customer reads the menu before ordering.
   sleep(Math.random() * 2 + 1);
 
   if (roll < 0.15) {
@@ -77,7 +79,7 @@ export default function () {
     //    the write path; otherwise this block is skipped (see Break Kit doc).
     const customerId = __ENV.ORDER_CUSTOMER_ID;
     if (customerId) {
-      // Order against Meghana specifically — its menu item id below must belong to the
+      // Order against Meghana specifically, its menu item id below must belong to the
       // restaurant we order from (server-side pricing rejects an item not on the menu → 422).
       const payload = JSON.stringify({
         customerId,
@@ -93,7 +95,10 @@ export default function () {
         },
       });
       const orderRes = http.post(`${BASE_URL}/api/v1/orders`, payload, {
-        headers: { 'Content-Type': 'application/json' },
+        headers: Object.assign(
+          { 'Content-Type': 'application/json' },
+          __ENV.ORDER_TOKEN ? { Authorization: `Bearer ${__ENV.ORDER_TOKEN}` } : {},
+        ),
         tags: { name: 'order' },
       });
       check(orderRes, { 'order 201': (r) => r.status === 201 });
