@@ -11,7 +11,7 @@ The suite drives the **canonical "4 services + gateway"** system through the YAR
 | [`smoke.js`](smoke.js) | 1 VU, 30s | Is it functional at all? (sanity, not load) | All green = go |
 | [`average-load.js`](average-load.js) | ramp → ~50 VUs → hold → down | Does the SLO hold under everyday traffic? | menu/list p99 < 300ms |
 | [`stress.js`](stress.js) | climb until it breaks | **Where is the breaking point?** | the knee + first resource to saturate |
-| [`spike.js`](spike.js) | quiet → instant flood → drop → recover | Does it survive a sudden surge and recover? | circuit breaker OPEN; p99 returns to baseline |
+| [`spike.js`](spike.js) | quiet → instant flood → drop → recover | Does it survive a sudden surge and recover? | p99 returns to baseline (the breaker opens only if you also start a Payment outage, see Day 14) |
 | [`dinner-rush.js`](dinner-rush.js) | Week-2 concurrency profile (monolith-direct `:5224`) | Does concurrency break naive code? | the Week-2 break-kit before/after |
 | [`hot-key.js`](hot-key.js) | sustained VUs, **~80%** traffic to Meghana menu | Does a celebrity restaurant melt one cache key or DB? | menu p99 spike; pair with stampede toy + single-flight |
 
@@ -183,9 +183,8 @@ k6 run -e ORDER_CUSTOMER_ID=c1b2c3d4-0001-4000-8000-000000000001 -e ORDER_TOKEN=
 
 **PowerShell:**
 ```powershell
-$res = curl.exe -s -X POST http://localhost:8080/api/v1/auth/login `
-  -H 'Content-Type: application/json' `
-  -d '{"email":"priya@tadka.test","password":"Password123!"}' | ConvertFrom-Json
+# Invoke-RestMethod, not curl.exe -d: Windows PowerShell 5.1 strips the quotes from the JSON body when it is passed to curl.exe.
+$res = Invoke-RestMethod -Uri http://localhost:8080/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}'
 
 $env:ORDER_CUSTOMER_ID = "c1b2c3d4-0001-4000-8000-000000000001"
 $env:ORDER_TOKEN = $res.accessToken

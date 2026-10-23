@@ -6,7 +6,7 @@ Day 15 organized our architectural evidence for the senior system design intervi
 
 > **The Core Architectural Mindset:** An architect does not guess capacity or cost. An architect measures the breaking point, knows which bottleneck breaks first, and calculates the exact rupee cost of every architectural boundary.
 
-Commands are given in Bash and PowerShell where both make sense. The five service terminals, the `psql` check and the cloud scripts (`scripts/*.ps1`) are PowerShell (`pwsh`). Bash steps use `jq` (`sudo apt install jq` / `brew install jq`) to read the token.
+Commands are given in Bash and PowerShell where both make sense. Every PowerShell command here runs in Windows PowerShell 5.1 (the one that ships with Windows) and in PowerShell 7. The one exception is the evolution harness in section 4, which needs PowerShell 7 (`pwsh`). Bash steps use `jq` (`sudo apt install jq` / `brew install jq`) to read the token.
 
 ---
 
@@ -99,9 +99,8 @@ export TOKEN
 
 **PowerShell:**
 ```powershell
-$login = curl.exe -s -X POST http://localhost:8080/api/v1/auth/login `
-  -H "Content-Type: application/json" `
-  -d '{"email":"priya@tadka.test","password":"Password123!"}' | ConvertFrom-Json
+# Invoke-RestMethod, not curl.exe -d: Windows PowerShell 5.1 strips the quotes from a JSON string passed to curl.exe.
+$login = Invoke-RestMethod -Uri http://localhost:8080/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}'
 $env:TOKEN = $login.accessToken
 Write-Host "Token: $env:TOKEN"
 ```
@@ -118,7 +117,7 @@ export ORDER_ARGS="-e ORDER_TOKEN=$TOKEN -e ORDER_CUSTOMER_ID=c1b2c3d4-0001-4000
 $orderArgs = @("-e", "ORDER_TOKEN=$env:TOKEN", "-e", "ORDER_CUSTOMER_ID=c1b2c3d4-0001-4000-8000-000000000001")
 ```
 
-The access token lives 15 minutes (900s), so re-run the login before a long stress or spike run. About 15% of sessions place an order (`ORDER_SHARE`).
+The access token lives 15 minutes (900s). A stress run takes 8 minutes and a spike run about 4, so **re-run the login before each of them**, then rebuild `$orderArgs` / `ORDER_ARGS` so they carry the new token. An expired token does not fail the run: every order request returns 401, `orders_placed` stays 0 and the browse numbers still look fine. About 15% of sessions place an order (`ORDER_SHARE`).
 
 Verify the token against the gateway:
 
@@ -164,7 +163,7 @@ k6 run $ORDER_ARGS k6/smoke.js
 k6 run @orderArgs k6/smoke.js
 ```
 
-Expected result: all checks pass, `rate_limited` 0, `browse_errors` 0%, thresholds green, and `orders_placed` > 0 when the order variables are set (with 1 VU and 15% of sessions ordering, run it long enough to see at least one).
+Expected result: all checks pass (30 of 30 in a 30 second run), `rate_limited` 0, `browse_errors` 0%, thresholds green. Smoke runs only about 15 sessions and 15% of them order, so `orders_placed` is often 0 here. That is normal. The next test places hundreds.
 
 ### Test 2: Average Load Test (Dinner Rush)
 
@@ -184,7 +183,7 @@ Verify the thresholds pass: menu and list p99 under 300 ms and under 1% errors.
 
 ### Test 3: Stress Test (Finding the Knee)
 
-Ramps traffic up to 300 VUs (`-e MAX_VUS=...` to change it) to determine where the local system reaches saturation:
+Ramps traffic up to 300 VUs (`-e MAX_VUS=...` to change it) and watches for the knee:
 
 **Bash:**
 ```bash
@@ -197,6 +196,8 @@ k6 run @orderArgs k6/stress.js
 ```
 
 Observe the knee: at lower concurrency, latency is flat. Once connection pools or CPU saturate, queue wait time grows non-linearly. Note the VU count where p99 crosses the 300 ms SLO and where errors first appear (the run itself only flags the catastrophic end: p99 > 5 s or > 25% errors). That number and the first resource to saturate are the deliverable.
+
+**On a laptop, 300 VUs does not reach the knee.** Each VU thinks for 1 to 3 seconds between requests, so 300 VUs is only about 150 requests per second. See "What a laptop run looks like" below: latency stayed flat the whole way and nothing failed. That is a real result (the system has large headroom over the design load of about 1.2 orders per second, 25 at burst), but it is not a knee. To look for the knee, raise the ceiling, for example `-e MAX_VUS=1500`, and watch k6 itself: once k6 uses a full CPU core, the machine you are measuring has become the bottleneck, not Tadka. We have not measured where Tadka breaks on a laptop, so find your own number before class and write it down.
 
 ### Test 4: Spike Test (Flash Sale)
 
@@ -214,6 +215,8 @@ k6 run @orderArgs k6/spike.js
 
 Verify that the system absorbs the spike without dropping connections and recovers to normal latency once the burst subsides.
 
+This profile does **not** open the Payment circuit breaker by itself. The breaker sits on the call from Payment to the payment gateway, and the fake gateway answers fast, so a flood of customers never trips it. To see it open during a spike, run the Payment outage from [Day 14, Demo 1](day-14.md) while the spike is running. Without that, expect `tadka_payment_circuit_transitions_total` to stay empty.
+
 ### Test 5: Hot-Key Test (Meghana Biryani Stampede)
 
 Simulates 80 percent of requests targeting a single popular menu item:
@@ -229,6 +232,20 @@ k6 run @orderArgs k6/hot-key.js
 ```
 
 Redis cache-aside with the single-flight stampede lock (ADR-019) ensures only one request fetches from PostgreSQL while concurrent requests await the cached result.
+
+### What a laptop run looks like
+
+Measured on a developer laptop with the five services started with `dotnet run` (as in section 1), the Docker stack from section 1, and the rate limits raised. Use these as a rehearsal check: your numbers will differ, but they should look like this and `rate_limited` must be 0.
+
+| Test | Load | Requests per second | Menu p99 | Errors | Orders placed |
+|---|---|---|---|---|---|
+| Smoke | 1 VU, 30 s | about 1 | p95 60 ms (first calls are cold) | 0 | usually 0 |
+| Average load | 50 VUs, 5 min | about 43 | 6.6 ms | 0 | 875 |
+| Stress | up to 300 VUs, 8 min | about 150 | 5.5 ms | 0 | 5,008 |
+| Spike | 200 VUs, 4 min 20 s | about 64 | 5.3 ms | 0 | 1,170 |
+| Hot key | 80 VUs, 4 min | about 166 | 5.1 ms (hot menu) | 0 | none |
+
+The list endpoint p99 in the average run was 10.6 ms. All thresholds passed and `rate_limited` was 0 in every run.
 
 ---
 
@@ -248,7 +265,7 @@ Navigate to `http://localhost:3000` (credentials: `admin` / `admin`).
 
 Navigate to `http://localhost:16686`.
 
-Select service `Tadka.Gateway` or `Tadka.Api` and search for recent traces. Click on a `POST /api/v1/orders` trace to observe the distributed span:
+The gateway names its spans after the route pattern, so there is no operation called `POST /api/v1/orders`. The easiest way to find an order trace is to select service `Tadka.Payment.Api`, operation `ProcessPayment`, and click Find Traces. Every row there is one order, and a full order trace has about 13 spans across `Tadka.Gateway`, `Tadka.Api`, `Tadka.Payment.Api`, `Tadka.Delivery.Api` and `Tadka.Restaurant.Api`. (If you search `Tadka.Gateway` instead, the newest traces during a k6 run are browse reads with 3 spans: pick the operation `POST /api/v1/{**remainder}` to get order writes.) Click a trace to observe the distributed span:
 
 1. Client request hits YARP API Gateway (:8080).
 2. Gateway proxies to Tadka.Api (:5224).
@@ -275,8 +292,11 @@ Notice how Npgsql connection pooling keeps active database connections bounded e
 
 The tests above measure the finished system. To show what each day *bought*, run the same workload against six checkpoints (`day-03`, `day-05`, `day-06`, `day-07`, `day-09`, `day-16`) on the same 200k-order data set. Each checkpoint gets the pressure that day was built for: a big table, a hot key, a slow or dead Payment, more traffic than one replica can take.
 
+It needs **PowerShell 7** (`winget install Microsoft.PowerShell`, then run `pwsh`; Windows PowerShell 5.1 is not supported) and it starts its own copies of the stack, so **stop your own Tadka services and containers first**. Add `-Quick` for a class-length rehearsal (about 2 minutes per checkpoint, not numbers to quote).
+
 ```powershell
 pwsh evolution/run-ladder.ps1        # about 2.5 hours; then open evolution/report.md
+pwsh evolution/run-ladder.ps1 -Quick # rehearsal
 ```
 
 The full method, the expected results and the "1 user → 1 million users" model are in [evolution-1-to-1m.md](evolution-1-to-1m.md).

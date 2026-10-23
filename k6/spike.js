@@ -5,9 +5,10 @@
 // drops just as fast. This profile: quiet -> INSTANT spike -> hold -> drop ->
 // recovery window. Two things to watch, both on the Day-13/14 dashboards:
 //
-//   1) SURVIVAL: does the Day-14 circuit breaker trip on Payment->gateway and
-//      fail fast (ms) instead of hanging? (Grafana panel
-//      `tadka.payment.circuit_transitions{state}`: does it go OPEN?)
+//   1) SURVIVAL: do reads keep answering in milliseconds and do orders keep returning 201?
+//      This profile alone does NOT open the Payment circuit breaker (the fake gateway
+//      answers fast). To see `tadka.payment.circuit_transitions{state}` go OPEN, start
+//      the Day-14 Payment outage while the spike runs.
 //   2) RECOVERY: after the spike drops, does p99 come back to baseline? If it
 //      stays degraded, you have a leak: connection pool not released, Kafka
 //      consumer lag that never drains, Redis memory not freed, threads stuck in
