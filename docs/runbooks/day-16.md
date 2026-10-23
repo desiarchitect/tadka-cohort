@@ -36,6 +36,22 @@ Build the entire solution:
 dotnet build Tadka.slnx
 ```
 
+Pre-create the eight Kafka topics this branch uses (the broker uses SASL, so the CLI needs the client config). Each has one partition, which matters in section 3:
+
+**Bash:**
+```bash
+for t in order-placed payment-results order-confirmed delivery-assigned refund-requested payment-refunded menu-updated restaurant-response; do
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+done
+```
+
+**PowerShell:**
+```powershell
+foreach ($t in "order-placed","payment-results","order-confirmed","delivery-assigned","refund-requested","payment-refunded","menu-updated","restaurant-response") {
+  docker exec tadka-kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --create --if-not-exists --topic $t --partitions 1 --replication-factor 1
+}
+```
+
 ### Critical Environment Setting for Local Load Testing
 
 In local environments, all virtual users originate from `127.0.0.1`. The production default rate limit is 120 requests per minute per IP. Under k6 load testing, sharing that single loopback address would immediately trigger false 429 Too Many Requests errors.
@@ -197,7 +213,9 @@ k6 run @orderArgs k6/stress.js
 
 Observe the knee: at lower concurrency, latency is flat. Once connection pools or CPU saturate, queue wait time grows non-linearly. Note the VU count where p99 crosses the 300 ms SLO and where errors first appear (the run itself only flags the catastrophic end: p99 > 5 s or > 25% errors). That number and the first resource to saturate are the deliverable.
 
-**On a laptop, 300 VUs does not reach the knee.** Each VU thinks for 1 to 3 seconds between requests, so 300 VUs is only about 150 requests per second. See "What a laptop run looks like" below: latency stayed flat the whole way and nothing failed. That is a real result (the system has large headroom over the design load of about 1.2 orders per second, 25 at burst), but it is not a knee. To look for the knee, raise the ceiling, for example `-e MAX_VUS=1500`, and watch k6 itself: once k6 uses a full CPU core, the machine you are measuring has become the bottleneck, not Tadka. We have not measured where Tadka breaks on a laptop, so find your own number before class and write it down.
+**On a laptop, 300 VUs does not reach the knee.** Each VU thinks for 1 to 3 seconds between requests, so 300 VUs is only about 150 requests per second. See "What a laptop run looks like" below: latency stayed flat the whole way and nothing failed. That is a real result for the HTTP path (large headroom over the design load of about 1.2 orders per second, 25 at burst), but it is not the knee. **The knee is somewhere else: in the queue.** `POST /orders` returns `201` as soon as the order and its outbox row are saved, so HTTP latency stays flat even when payments fall behind. Payment works through `order-placed` one message at a time (one partition, one consumer, about 200 ms per fake charge), which is about **4 orders per second**. Send orders faster than that and the consumer group `tadka-payment` builds a lag, and new orders stay `Created` until Payment catches up. After the average, stress and spike runs back to back the lag was over 1,000 messages, and at 4 orders per second it took several minutes to drain. Watch it while the test runs (Surface 4 below). That lag, not p99, is the first thing to saturate here, and it is the argument for more partitions and more Payment consumers.
+
+To push the HTTP side too, raise the ceiling, for example `-e MAX_VUS=1500`, and watch k6 itself: once k6 uses a full CPU core, the machine you are measuring has become the bottleneck, not Tadka. We have not measured where the HTTP path breaks on a laptop, so find your own number before class and write it down.
 
 ### Test 4: Spike Test (Flash Sale)
 
@@ -247,6 +265,8 @@ Measured on a developer laptop with the five services started with `dotnet run` 
 
 The list endpoint p99 in the average run was 10.6 ms. All thresholds passed and `rate_limited` was 0 in every run.
 
+"Orders placed" counts `201` responses, not confirmed orders. Payment confirmed only about 4.4 orders per second, so after the runs above the `tadka-payment` lag was over 1,000 and the newest orders were still `Created`. Check the lag (Surface 4) before you start the next test, and let it drain, or the next run starts with a backlog.
+
 ---
 
 ## 4. Observability Under Load
@@ -285,6 +305,23 @@ docker exec tadka-postgres psql -U tadka -d tadka -c "SELECT count(*), state FRO
 ```
 
 Notice how Npgsql connection pooling keeps active database connections bounded even when k6 concurrency rises toward 300 VUs.
+
+### Surface 4: Kafka consumer lag (where the saga saturates first)
+
+Open [http://localhost:8090](http://localhost:8090) (Kafka UI), then Consumers, then `tadka-payment`. Or read it from the CLI:
+
+**Bash:**
+```bash
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
+```
+
+**PowerShell:**
+```powershell
+$env:MSYS_NO_PATHCONV = "1"   # only needed in Git Bash
+docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 --command-config /etc/kafka/docker/client.properties --describe --group tadka-payment
+```
+
+The `LAG` column on `order-placed` is the number of orders waiting for a charge. Near 0 means Payment keeps up. A number that keeps climbing during the test means orders are arriving faster than Payment can charge them. Reading an order's status then shows `Created` instead of `Confirmed`.
 
 ---
 
