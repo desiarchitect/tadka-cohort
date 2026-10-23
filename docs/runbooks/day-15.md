@@ -425,9 +425,8 @@ curl -s -X POST http://localhost:8080/api/v1/auth/login \
 
 **PowerShell:**
 ```powershell
-curl.exe -s -X POST http://localhost:8080/api/v1/auth/login `
-  -H "Content-Type: application/json" `
-  -d '{"email":"priya@tadka.test","password":"Password123!"}'
+# Invoke-RestMethod, not curl.exe -d: Windows PowerShell 5.1 strips the quotes from a JSON string passed to curl.exe.
+Invoke-RestMethod -Uri http://localhost:8080/api/v1/auth/login -Method Post -ContentType "application/json" -Body '{"email":"priya@tadka.test","password":"Password123!"}'
 ```
 
 The response returns `{ "accessToken": "ey...", "expiresInSeconds": 900, "role": "Customer", "refreshToken": "..." }`. You will supply this `accessToken` to k6 on Day 16.
