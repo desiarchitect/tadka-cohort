@@ -1,10 +1,10 @@
 {
   "uid": "tadka-system-overview",
   "title": "Tadka — System Overview (RED + business)",
-  "tags": ["tadka", "day-13"],
+  "tags": ["tadka", "day-13", "day-16"],
   "timezone": "browser",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "time": { "from": "now-15m", "to": "now" },
   "panels": [
@@ -102,6 +102,125 @@
           "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
           "expr": "prometheus_tsdb_head_series",
           "legendFormat": "active series"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "P99 latency (s) per service, SLO line at 300 ms",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "description": "The number the SLO is written in (menu and list p99 under 300 ms). The red line is the SLO. One slow request in a hundred is what a customer remembers, so p99 matters more than the average.",
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "thresholdsStyle": { "mode": "line" } }, "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.3 } ] } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "histogram_quantile(0.99, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket[1m])))",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Active HTTP requests per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "description": "Requests being served right now. When a service starts to saturate, this rises before latency does.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum by (service_name) (http_server_active_requests)",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Orders waiting for payment (approximate)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "description": "Orders accepted by the API minus payment results (completed plus failed). This is the Payment queue backlog, and the real knee in the Day 16 stress test: the API answers 201 immediately, but Payment charges about 4 orders per second. Approximate: both counters restart from zero when a service restarts, and old series stay visible for about 5 minutes after a restart.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "clamp_min(sum(tadka_orders_placed_total) - sum(tadka_payment_result_total), 0)",
+          "legendFormat": "orders placed but not yet paid or failed"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "title": "Payment circuit breaker transitions (last 5 min)",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "description": "How often the breaker moved to open, half_open or closed. An empty panel means it never opened. The Day 16 load tests leave it empty, because the fake gateway answers fast. Start the Day 14 Payment outage during a spike to see it move.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum by (state) (increase(tadka_payment_circuit_transitions_total[5m]))",
+          "legendFormat": "{{state}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "title": "CPU cores used per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 40 },
+      "description": "CPU seconds used per second, so 1.0 is one full core. On a laptop, k6 and Docker share these cores: when the machine is full, you are measuring the laptop.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum by (service_name) (rate(dotnet_process_cpu_time_seconds_total[1m]))",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "title": "Thread-pool queue length per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 40 },
+      "description": "Work waiting for a free .NET thread. Anything that stays above zero is a service that cannot keep up.",
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum by (service_name) (dotnet_thread_pool_queue_length_total)",
+          "legendFormat": "{{service_name}}"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "title": "Memory working set per service",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 40 },
+      "description": "Memory in use. A line that keeps climbing after the load stops is a leak.",
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "tadka-prometheus" },
+          "expr": "sum by (service_name) (dotnet_process_memory_working_set_bytes)",
+          "legendFormat": "{{service_name}}"
         }
       ]
     }

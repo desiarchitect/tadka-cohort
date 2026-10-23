@@ -232,8 +232,8 @@ If anything is red, **stop here** and fix it before running another test:
 **What you do.**
 
 1. Log in again if more than 15 minutes have passed since section 2, and rebuild `$orderArgs` / `ORDER_ARGS`.
-2. Open the Grafana RED dashboard before you press enter, so you see the line start to rise.
-3. Run the test, and watch Rate, Errors and Duration while the 3 minute hold runs.
+2. Open the Grafana dashboard (Surface 1) before you press enter, so you see the lines start to rise.
+3. Run the test, and watch the request rate, the 5xx tile and the P99 tile (against its red SLO line) while the 3 minute hold runs.
 4. When it ends, check that all thresholds are `✓` and write down the menu p99 and the requests per second.
 5. Check the Payment queue (section 4, Surface 4). It should be close to 0 before the next test.
 
@@ -259,7 +259,7 @@ If a threshold shows `✗`, read which one. A `menu p99` above 300 ms with the c
 
 1. Log in again just before you start, because the run takes 8 minutes and the token lives 15. Rebuild `$orderArgs` / `ORDER_ARGS`.
 2. Write down the Payment lag before you start (it should be near 0).
-3. Run the test. At each stage boundary (about 1, 3, 5 and 7 minutes) look at three places: the Grafana Duration panel, the Kafka lag (Surface 4), and the Postgres connections (Surface 3).
+3. Run the test. At each stage boundary (about 1, 3, 5 and 7 minutes) look at three places: the P99 and Orders waiting for payment tiles in Grafana, the Kafka lag (Surface 4), and the Postgres connections (Surface 3).
 4. Note two numbers: the VU count where menu p99 first crossed 300 ms (on a laptop, usually never), and the lag at the end of the run.
 5. Wait for the lag to drain before the next test. At about 4 orders per second, 1,000 waiting orders take about 4 minutes.
 
@@ -290,7 +290,7 @@ To push the HTTP side too, raise the ceiling, for example `-e MAX_VUS=1500`, and
 **What you do.**
 
 1. Log in again, because the test takes about 4 minutes and a fresh token avoids a surprise 401. Rebuild `$orderArgs` / `ORDER_ARGS`.
-2. Run the test and watch the Grafana Rate and Duration panels at three moments: just before the spike, at the top of the flood, and during the last 2 minutes.
+2. Run the test and watch the request rate, P99 and Orders waiting tiles at three moments: just before the spike, at the top of the flood, and during the last 2 minutes.
 3. After the drop, compare latency with the calm minute at the start. They should match. If they do not, write down what is still high, and check Surface 3 (database connections) and Surface 4 (queue lag).
 4. Optional, to see the circuit breaker open: during the flood, start the Payment outage from [Day 14, Demo 1](day-14.md), then restore it afterwards.
 
@@ -329,7 +329,7 @@ This profile does **not** open the Payment circuit breaker by itself. The breake
    ```
 
    It prints `1` if the key existed (the menu key has a 60 second TTL, so it is often already gone, and `0` is fine).
-2. Start the run right away. Watch the first seconds on the Grafana Duration panel, and the hot-menu latency in the k6 progress.
+2. Start the run right away. Watch the first seconds on the P99 tile, and the hot-menu latency in the k6 progress.
 3. Afterwards, check the key is back with a countdown: `docker exec tadka-redis redis-cli TTL restaurant:a1b2c3d4-0001-4000-8000-000000000001:menu` prints a number up to 60.
 4. Optional: repeat with `-e HOT_SHARE=0.95 -e PEAK_VUS=100` to make the hot key hotter.
 
@@ -401,13 +401,38 @@ The list endpoint p99 in the average run was 10.6 ms. All thresholds passed and 
 
 While load tests execute, observe system health across three telemetry surfaces:
 
-### Surface 1: Grafana RED Metrics
+### Surface 1: The Grafana dashboard
 
-Navigate to `http://localhost:3000` (credentials: `admin` / `admin`).
+Open `http://localhost:3000` (login `admin` / `admin`), then Dashboards, the folder **Tadka**, then **Tadka, System Overview (RED + business)**. It refreshes every 5 seconds and shows the last 15 minutes. Keep it on a second screen during every test.
 
-1. Rate: Monitor total requests per second across gateway and services.
-2. Errors: Ensure HTTP 5xx rate stays at 0 percent.
-3. Duration: Watch P50, P95, and P99 latency percentiles in real time.
+The top half is the classic RED view (**R**ate, **E**rrors, **D**uration) plus the business numbers. The bottom half was added for Day 16 and answers the question "what is saturating?".
+
+**Top half**
+
+| Tile | What it shows |
+|---|---|
+| Request rate per service | Requests per second at the gateway and at each service |
+| Error rate (5xx) per service | Server errors per second. Must stay at 0 |
+| P95 latency per service | 95 out of 100 requests were faster than this |
+| Orders placed (rate/min) | Orders accepted by the API per minute |
+| Payment results by status | Charges completed or failed per second |
+| Metric series count | How many time series Prometheus holds (the cardinality watch from Day 13) |
+
+**Day 16 tiles (bottom half)**
+
+| Tile | What it shows | What good looks like | When it moves |
+|---|---|---|---|
+| P99 latency per service, SLO line at 300 ms | 99 out of 100 requests were faster than this, with the SLO drawn as a red line | Under the red line | A line above 300 ms is an SLO breach. Click the service to see which one |
+| Active HTTP requests | Requests being served right now | Single digits | Rises before latency does, so it is the earliest warning |
+| Orders waiting for payment (approximate) | Orders accepted minus payment results, which is the Payment backlog | Near 0 | Climbs when orders arrive faster than Payment can charge. **This is the knee of the Day 16 stress test.** It is approximate: both counters restart from zero when a service restarts |
+| Payment circuit breaker transitions | How often the breaker moved to open, half_open or closed in the last 5 minutes | Empty | Empty is correct in the load tests. It only moves during the Day 14 outage |
+| CPU cores used per service | CPU seconds per second (1.0 is one full core) | Well below the number of cores in your laptop | If the machine is full, you are measuring the laptop, not Tadka |
+| Thread-pool queue length | Work waiting for a free .NET thread | 0 | A value that stays above 0 means that service cannot keep up |
+| Memory working set | Memory used per service | Flat | A line that keeps climbing after the load stops is a leak |
+
+In the runs behind this runbook the P99 line stayed under the 300 ms line (the highest one-minute value across all services was 247 ms), active requests peaked at 4, the thread-pool queue stayed at 0, the busiest service used about 0.4 of a core, and the busiest service held about 370 MB. The breaker tile stayed empty. The backlog tile climbed into the thousands. That is the picture to point at: **every tile except one is calm while one tile climbs.**
+
+Not on the dashboard yet, because they need extra containers (a Kafka exporter, a Postgres exporter, a Redis exporter): the consumer lag per Kafka group, database connections, and the Redis cache hit ratio. Until then, use Surface 3 (connections) and Surface 4 (lag) from the command line.
 
 ### Surface 2: Jaeger Distributed Traces
 
@@ -450,6 +475,22 @@ docker exec tadka-kafka /opt/kafka/bin/kafka-consumer-groups.sh --bootstrap-serv
 ```
 
 The `LAG` column on `order-placed` is the number of orders waiting for a charge. Near 0 means Payment keeps up. A number that keeps climbing during the test means orders are arriving faster than Payment can charge them. Reading an order's status then shows `Created` instead of `Confirmed`.
+
+---
+
+### The demo talk track: what to say while the tests run
+
+1. **Say the story before the stress test starts.** "The API will stay fast. The queue behind it will not." Then let the room watch the Orders waiting tile climb while every other tile stays calm.
+2. **Why p99 and not the average.** An average hides the one request in a hundred that a customer remembers. Our promise is written in p99, so that is the tile with the red line.
+3. **What a 201 means.** The order was saved and an outbox row was written. Payment, confirmation and a rider happen later. A fast API response is not a finished order.
+4. **Do the capacity arithmetic out loud.** Payment charges about 4.4 orders per second. The design load is about 1.2 orders per second on average and about 25 per second at burst. A one minute burst at 25 per second leaves about 1,200 orders waiting ((25 minus 4.4) times 60). With normal traffic still arriving at 1.2 per second, clearing that takes about 6 minutes. Every order in that backlog sits in `Created` for those minutes.
+5. **Closed versus open load.** Our users wait for a reply and then think, so the test eases off when the server slows. Real customers do not wait for each other. Section 7.5 shows the open model.
+6. **Name the saturated resource.** Use the USE questions for each resource: how **u**sed is it (CPU tile), is work **s**aturated (thread-pool queue, backlog tile), are there **e**rrors (5xx tile). Here only the backlog answers yes.
+7. **Close with the decision.** The finding is a decision, not a graph: Payment needs more partitions and more consumers before the next big sale. See the optional fix below.
+
+**Reset between tests.** Before each test, wait until the Orders waiting tile (or the `tadka-payment` lag in Surface 4) is back near 0, or the next test starts with the last one's backlog. The three seeded riders also stay busy after the first few undelivered orders, so Delivery stops assigning riders and most load-test orders never reach `Delivered`. That does not change the k6 numbers, but do not promise students that every order is delivered. We inferred this from the missing `delivery-assigned` topic and have not checked the Delivery database directly.
+
+**Optional: fix it and measure again.** This is the natural last step, and **we have not tried it yet, so rehearse it before class**. The idea: give `order-placed` more partitions (for example 4), run more than one Payment instance on different ports so the consumer group spreads the partitions across them, then repeat the stress test. If the fake gateway delay is what limits a single consumer, the backlog should drain several times faster. Whatever happens, write the new numbers next to the old ones. That before and after pair is the deliverable.
 
 ---
 
