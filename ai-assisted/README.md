@@ -25,7 +25,7 @@ Levels 1 and 2 are *AI-assisted*. Levels 3 and 4 are *AI-native*. The higher you
 ai-assisted/
 ├── README.md, CHEATSHEET.md
 ├── install.ps1                       Copies the kit into the repository root (never overwrites)
-├── architect-toolset/                What an architect should know: THE_ARCHITECTS_TOOLSET.md (documents, diagrams, tools, AI), plus field manual, ADR index, patterns, diagrams, cheatsheet
+├── architect-toolset/                What an architect should know: THE_ARCHITECTS_TOOLSET.md (documents, diagrams, tools, AI), TADKA_DIAGRAM_GALLERY.md (19 diagram types), plus field manual, ADR index, patterns, cheatsheet
 ├── shared/AGENTS.md                  THE rulebook. Read by every tool.
 ├── claude-code/
 │   ├── CLAUDE.md                     One line imports AGENTS.md, plus Claude specifics
