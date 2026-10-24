@@ -1,0 +1,14 @@
+---
+description: Tadka architecture boundaries. Always on.
+alwaysApply: true
+---
+
+Read `AGENTS.md` at the repository root first. It is the shared rulebook for every AI tool here. The points below are the ones that must never be forgotten.
+
+- Four services plus a gateway, each with its own database. No project reference between services.
+- No foreign key or navigation property across schemas (ADR-008). Cross-domain links are plain `Guid` ids.
+- Orders never references Payment (ADR-022, ADR-024). Services talk through Kafka and the transactional outbox (ADR-028).
+- Orders prices from the local read model `ordering.menu_replica`, never by calling Restaurant (ADR-037).
+- A payment decline is final: never retried, never counted by the circuit breaker (ADR-043).
+- Keep every `// (ADR-NNN)` comment. A new decision needs an ADR first (next number 068).
+- Before you finish: `dotnet build Tadka.slnx` and the tests of the project you changed. Show the output.

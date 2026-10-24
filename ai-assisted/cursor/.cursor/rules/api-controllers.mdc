@@ -1,0 +1,13 @@
+---
+description: How HTTP endpoints are written in Tadka (routes, status codes, errors, auth)
+globs: src/Tadka.Api/Controllers/**/*.cs,src/Tadka.Restaurant.Api/Controllers/**/*.cs
+alwaysApply: false
+---
+
+- Inherit `ControllerBase`, add `[ApiController]`, write the full route: `[Route("api/v1/orders")]`.
+- Return `ActionResult<T>`. Use `CreatedAtAction` for 201.
+- 400 malformed, 401 or 403 auth, 404 missing, 422 a business rule said no, 409 you lost a race.
+- Errors are RFC 7807: call `Problem(detail: ..., statusCode: ..., title: ...)`. Never leak stack traces.
+- Every non-public action has `[Authorize]`. Check ownership in the service. Role checks need `MapInboundClaims = false`.
+- Orders, menus and restaurants have no `PUT` or `DELETE`: use `PATCH` and a state change (cancel, deactivate) so history is never lost. The server calculates prices.
+- Payment and Delivery use minimal endpoints in `Program.cs`; copy the style of the file you are in.

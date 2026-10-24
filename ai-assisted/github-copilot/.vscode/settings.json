@@ -1,0 +1,8 @@
+{
+  "chat.useAgentsMdFile": true,
+  "dotnet.defaultSolution": "Tadka.slnx",
+  "files.exclude": {
+    "**/bin": true,
+    "**/obj": true
+  }
+}

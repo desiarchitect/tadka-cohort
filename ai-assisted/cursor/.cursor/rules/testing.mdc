@@ -1,0 +1,13 @@
+---
+description: How tests are written and named in Tadka
+globs: tests/**/*.cs
+alwaysApply: false
+---
+
+- xUnit, FluentAssertions, NSubstitute (never Moq, and only at an external boundary).
+- Test names are readable snake case sentences, for example `Cancel_from_Created_succeeds_with_reason`.
+- Integration tests use the existing fixtures (`TadkaApiFactory`, `RestaurantApiFactory`, `PaymentApiFactory`, `DeliveryApiFactory`). They start the database. Do not start your own container.
+- Reuse `TestAuthHandler` and its `X-Test-*` headers for auth.
+- Assert the response **and** the state (the row, or the `outbox_messages` row).
+- Never weaken `tests/Tadka.Api.Tests/Architecture/BoundaryTests.cs` to make a change pass.
+- Run your test with `dotnet test tests/<project> --filter "FullyQualifiedName~<Class>"`, then the whole project.

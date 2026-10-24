@@ -1,0 +1,12 @@
+---
+description: EF Core entity configuration, schemas, value objects and concurrency in Tadka
+globs: src/**/Data/**/*.cs
+alwaysApply: false
+---
+
+- Fluent API only: one `IEntityTypeConfiguration<T>` per entity in `Configurations/`. No data annotations on domain classes.
+- Name the schema: `builder.ToTable("users", "identity")`. Never `HasOne` or `HasMany` toward another schema (ADR-008).
+- Value objects are owned types: `builder.OwnsOne(...)`.
+- Optimistic concurrency: `builder.Property<uint>("xmin").HasColumnName("xmin").HasColumnType("xid").IsRowVersion();` (ADR-012). A lost race is a 409.
+- Read-only queries use `AsNoTracking()`. Reads right after a write stay on the primary (ADR-016).
+- Migrations are per service, each in its own `Migrations/` folder. Never edit an applied migration.
