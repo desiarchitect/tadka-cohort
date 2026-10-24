@@ -199,7 +199,7 @@ A diagram answers **one question** for **one audience**. If a diagram tries to a
 - **Level 3 (components):** the parts inside one container.
 - **Level 4 (code):** classes. Draw it only when someone asks, and generate it.
 
-Tadka's real C4 views are in `docs/diagrams/` and in `ai-assisted/architect-toolset/DIAGRAMS.md`.
+Tadka's real C4 views are in `docs/diagrams/` and in [DIAGRAMS.md](DIAGRAMS.md). For **one real Tadka example of every diagram type in this table**, open the [Tadka Diagram Gallery](TADKA_DIAGRAM_GALLERY.md).
 
 ### 3.3 Rules of a good diagram
 

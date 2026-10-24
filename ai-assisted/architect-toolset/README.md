@@ -392,6 +392,7 @@ On a laptop, with the five services running and k6 as the load generator (detail
 | [THE_ARCHITECTS_TOOLSET.md](THE_ARCHITECTS_TOOLSET.md) | **Start here for the whole job**: every document, diagram, technique, tool and skill an architect uses, with AI engineering |
 | [ADR_INDEX.md](ADR_INDEX.md) | Every decision, 001 to 067, with the day and a one-line reason |
 | [PATTERNS_CATALOG.md](PATTERNS_CATALOG.md) | 25 core patterns plus the hardening patterns, each with intent, mechanics and the trap |
+| [TADKA_DIAGRAM_GALLERY.md](TADKA_DIAGRAM_GALLERY.md) | **19 diagrams, one of every kind** (context, containers, components, classes, deployment, sequence, flowchart, state, ER, data flow, context map, event storming, network, dependencies, trace, latency, roadmap, decision tree, Wardley-style) |
 | [DIAGRAMS.md](DIAGRAMS.md) | Seven Mermaid diagrams: the system, the saga, the outbox, resilience, read models, tracing, containers |
 | [SYSTEM_DESIGN_CHEATSHEET.md](SYSTEM_DESIGN_CHEATSHEET.md) | Latency numbers, capacity math, the 45-minute interview plan, decision trees, Tadka's own numbers |
 | [../README.md](../README.md) | Working with AI coding tools on Tadka |
