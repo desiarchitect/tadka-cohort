@@ -25,7 +25,7 @@ Levels 1 and 2 are *AI-assisted*. Levels 3 and 4 are *AI-native*. The higher you
 ai-assisted/
 ├── README.md, CHEATSHEET.md
 ├── install.ps1                       Copies the kit into the repository root (never overwrites)
-├── architect-toolset/                A reference for the final class: field manual, ADR index (001 to 067), patterns, diagrams, cheatsheet
+├── architect-toolset/                What an architect should know: THE_ARCHITECTS_TOOLSET.md (documents, diagrams, tools, AI), plus field manual, ADR index, patterns, diagrams, cheatsheet
 ├── shared/AGENTS.md                  THE rulebook. Read by every tool.
 ├── claude-code/
 │   ├── CLAUDE.md                     One line imports AGENTS.md, plus Claude specifics
@@ -106,6 +106,6 @@ These tools change fast. This kit was checked against the vendor documentation i
 
 ## 8. Start here
 
-For the whole picture of what an architect should know, with Tadka as the worked example, open the [architect toolset](architect-toolset/README.md).
+For the whole picture of what an architect should know (documents, diagrams, techniques, tools and AI engineering), open [The Architect's Toolset](architect-toolset/THE_ARCHITECTS_TOOLSET.md). The rest of that folder is the Tadka field manual.
 
 Do the [five exercises](comparisons-and-workflows/student-exercises.md). Read the [matrix](comparisons-and-workflows/context-engineering-matrix.md) when you want to compare tools, and [one rulebook for every tool](comparisons-and-workflows/single-source-of-truth.md) when your team starts using more than one.

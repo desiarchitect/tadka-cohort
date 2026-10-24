@@ -389,6 +389,7 @@ On a laptop, with the five services running and k6 as the load generator (detail
 
 | File | Use it for |
 | :--- | :--- |
+| [THE_ARCHITECTS_TOOLSET.md](THE_ARCHITECTS_TOOLSET.md) | **Start here for the whole job**: every document, diagram, technique, tool and skill an architect uses, with AI engineering |
 | [ADR_INDEX.md](ADR_INDEX.md) | Every decision, 001 to 067, with the day and a one-line reason |
 | [PATTERNS_CATALOG.md](PATTERNS_CATALOG.md) | 25 core patterns plus the hardening patterns, each with intent, mechanics and the trap |
 | [DIAGRAMS.md](DIAGRAMS.md) | Seven Mermaid diagrams: the system, the saga, the outbox, resilience, read models, tracing, containers |
