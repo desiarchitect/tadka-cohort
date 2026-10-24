@@ -112,10 +112,9 @@ flowchart LR
     Breaker --> Timeout["4. Timeout<br/>(2.0s per attempt)"]
     Timeout --> Gateway["External Gateway / HTTP Endpoint"]
 
-    classDef normal fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
-    classDef warning fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
-    classDef danger fill:#ffebee,stroke:#d32f2f,stroke-width:2px;
-
+    classDef normal fill:#e1f5fe,stroke:#0288d1,stroke-width:2px,color:#1a1a1a;
+    classDef warning fill:#fff3e0,stroke:#f57c00,stroke-width:2px,color:#1a1a1a;
+    classDef danger fill:#ffebee,stroke:#d32f2f,stroke-width:2px,color:#1a1a1a;
     class Request,Timeout normal;
     class Bulkhead,Retry warning;
     class Breaker danger;
@@ -144,9 +143,8 @@ flowchart TD
         OrderAPI -->|Persist Order with Price ₹349| OrderDB[("ordering.orders")]
     end
 
-    classDef domain1 fill:#e8f5e9,stroke:#388e3c,stroke-width:2px;
-    classDef domain2 fill:#ede7f6,stroke:#512da8,stroke-width:2px;
-
+    classDef domain1 fill:#e8f5e9,stroke:#388e3c,stroke-width:2px,color:#1a1a1a;
+    classDef domain2 fill:#ede7f6,stroke:#512da8,stroke-width:2px,color:#1a1a1a;
     class RestaurantDomain domain1;
     class OrderingDomain domain2;
 ```

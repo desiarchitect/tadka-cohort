@@ -52,9 +52,9 @@ flowchart TB
     tadka -->|"traces and metrics, OTLP"| obs
     admin -->|"dashboards"| obs
 
-    classDef person fill:#eceff1,stroke:#455a64;
-    classDef system fill:#bbdefb,stroke:#1565c0,stroke-width:3px;
-    classDef ext fill:#e1bee7,stroke:#6a1b9a;
+    classDef person fill:#eceff1,stroke:#455a64,color:#1a1a1a;
+    classDef system fill:#bbdefb,stroke:#1565c0,stroke-width:3px,color:#1a1a1a;
+    classDef ext fill:#e1bee7,stroke:#6a1b9a,color:#1a1a1a;
     class customer,owner,rider,admin person;
     class tadka system;
     class pay,obs ext;
@@ -131,10 +131,10 @@ flowchart TB
     otel --> jaeger
     otel --> prom --> graf
 
-    classDef svc fill:#bbdefb,stroke:#1565c0;
-    classDef db fill:#c8e6c9,stroke:#2e7d32;
-    classDef cache fill:#ffcdd2,stroke:#c62828;
-    classDef bus fill:#ffe0b2,stroke:#ef6c00;
+    classDef svc fill:#bbdefb,stroke:#1565c0,color:#1a1a1a;
+    classDef db fill:#c8e6c9,stroke:#2e7d32,color:#1a1a1a;
+    classDef cache fill:#ffcdd2,stroke:#c62828,color:#1a1a1a;
+    classDef bus fill:#ffe0b2,stroke:#ef6c00,color:#1a1a1a;
     class api,rest,pay,del,gw svc;
     class pg,pgr,pgrest,pgpay,pgdel db;
     class redis cache;
@@ -196,8 +196,8 @@ flowchart TB
     relay --> kafka{{"Kafka"}}
     kafka --> cons
 
-    classDef core fill:#bbdefb,stroke:#1565c0;
-    classDef infraC fill:#fff9c4,stroke:#f9a825;
+    classDef core fill:#bbdefb,stroke:#1565c0,color:#1a1a1a;
+    classDef infraC fill:#fff9c4,stroke:#f9a825,color:#1a1a1a;
     class ctrl,auth,factory,order,sm,pricing,events core;
     class db,relay,cons,saga,track,cache,sec,rl infraC;
 ```
@@ -353,8 +353,8 @@ flowchart TB
     otel --> appi
     appi --> logs
 
-    classDef pub fill:#ffe0b2,stroke:#ef6c00;
-    classDef priv fill:#c8e6c9,stroke:#2e7d32;
+    classDef pub fill:#ffe0b2,stroke:#ef6c00,color:#1a1a1a;
+    classDef priv fill:#c8e6c9,stroke:#2e7d32,color:#1a1a1a;
     class fd,gw pub;
     class pgm,pgh priv;
 ```
@@ -435,9 +435,9 @@ flowchart TD
     comp --> pub
     rej --> unav
 
-    classDef good fill:#c8e6c9,stroke:#2e7d32;
-    classDef bad fill:#ffcdd2,stroke:#c62828;
-    classDef warn fill:#fff9c4,stroke:#f9a825;
+    classDef good fill:#c8e6c9,stroke:#2e7d32,color:#1a1a1a;
+    classDef bad fill:#ffcdd2,stroke:#c62828,color:#1a1a1a;
+    classDef warn fill:#fff9c4,stroke:#f9a825,color:#1a1a1a;
     class ok good;
     class dec,comp,fast,rej bad;
     class buf warn;
@@ -606,8 +606,8 @@ flowchart LR
     place --> logs
     auth --> logs
 
-    classDef ext fill:#e1bee7,stroke:#6a1b9a;
-    classDef store fill:#c8e6c9,stroke:#2e7d32;
+    classDef ext fill:#e1bee7,stroke:#6a1b9a,color:#1a1a1a;
+    classDef store fill:#c8e6c9,stroke:#2e7d32,color:#1a1a1a;
     class cust,pp ext;
     class users,orders,pays,bus store;
 ```
@@ -639,7 +639,7 @@ flowchart LR
     pay == "payment-refunded" ==> del
     o1 --- i1
 
-    classDef ctx fill:#e3f2fd,stroke:#1565c0;
+    classDef ctx fill:#e3f2fd,stroke:#1565c0,color:#1a1a1a;
     class rest,pay,del ctx;
 ```
 
@@ -667,10 +667,10 @@ flowchart LR
     a3["Restaurant owner"]:::actor --> c3["Change menu price"]:::cmd --> e11["MenuUpdated<br/>(menu-updated)"]:::event
     e11 --> p7["When a menu changes,<br/>update the local prices"]:::policy
 
-    classDef event fill:#ffcc80,stroke:#e65100;
-    classDef cmd fill:#90caf9,stroke:#1565c0;
-    classDef actor fill:#fff59d,stroke:#f9a825;
-    classDef policy fill:#ce93d8,stroke:#6a1b9a;
+    classDef event fill:#ffcc80,stroke:#e65100,color:#1a1a1a;
+    classDef cmd fill:#90caf9,stroke:#1565c0,color:#1a1a1a;
+    classDef actor fill:#fff59d,stroke:#f9a825,color:#1a1a1a;
+    classDef policy fill:#ce93d8,stroke:#6a1b9a,color:#1a1a1a;
 ```
 
 **What to notice:** the event names match real Kafka topics, so the board and the code tell the same story. A real event storming session is done with sticky notes and the business people, and the result looks like this before anyone draws a service boundary.
@@ -704,8 +704,8 @@ flowchart TB
     gwx --> inner
     inner --> pgs
 
-    classDef pubc fill:#ffe0b2,stroke:#ef6c00;
-    classDef privc fill:#c8e6c9,stroke:#2e7d32;
+    classDef pubc fill:#ffe0b2,stroke:#ef6c00,color:#1a1a1a;
+    classDef privc fill:#c8e6c9,stroke:#2e7d32,color:#1a1a1a;
     class fd,gwx pubc;
     class inner,pgs privc;
 ```
@@ -873,8 +873,8 @@ flowchart TD
     del --> after
     rest --> after
 
-    classDef stay fill:#c8e6c9,stroke:#2e7d32;
-    classDef go fill:#bbdefb,stroke:#1565c0;
+    classDef stay fill:#c8e6c9,stroke:#2e7d32,color:#1a1a1a;
+    classDef go fill:#bbdefb,stroke:#1565c0,color:#1a1a1a;
     class stay stay;
     class pay,del,rest go;
 ```
